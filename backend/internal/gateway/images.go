@@ -322,7 +322,7 @@ func buildAPIKeyImagesEditMultipartBodyWithRequest(body []byte, contentType stri
 		mimeType, data, err := readImageRefBytes(ref, maxEditInputImageBytes)
 		if err != nil {
 			_ = mw.Close()
-			return nil, "", err
+			return nil, "", nil, err
 		}
 		if i == 0 {
 			if cfg, _, cfgErr := image.DecodeConfig(bytes.NewReader(data)); cfgErr == nil {
@@ -340,13 +340,13 @@ func buildAPIKeyImagesEditMultipartBodyWithRequest(body []byte, contentType stri
 		mimeType, data, err := readImageRefBytes(req.Mask, 0)
 		if err != nil {
 			_ = mw.Close()
-			return nil, "", err
+			return nil, "", nil, err
 		}
 		if firstImageWidth > 0 && firstImageHeight > 0 {
 			data, mimeType, err = resizeMaskToImageSize(data, mimeType, firstImageWidth, firstImageHeight)
 			if err != nil {
 				_ = mw.Close()
-				return nil, "", err
+				return nil, "", nil, err
 			}
 		}
 		if err := writeMultipartImageBytes(mw, "mask", "mask", mimeType, data); err != nil {
