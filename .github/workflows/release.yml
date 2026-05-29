@@ -92,11 +92,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          rm -rf dist
-          mkdir -p dist
-          gh run download "${GITHUB_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --dir dist
-          find dist -mindepth 2 -type f -exec mv -t dist {} +
-          find dist -mindepth 1 -type d -empty -delete
+          rm -rf artifacts dist
+          mkdir -p artifacts dist
+          gh run download "${GITHUB_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --dir artifacts
+          find artifacts -type f -exec mv -t dist {} +
+          rm -rf artifacts
 
       - name: List artifacts
         run: ls -la dist/
