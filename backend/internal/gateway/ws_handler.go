@@ -2,8 +2,10 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -114,32 +116,45 @@ func (g *OpenAIGateway) handleWSWithAPIKey(ctx context.Context, clientConn sdk.W
 // bridgeWebSocket 双向桥接客户端和上游的 WebSocket 消息
 func bridgeWebSocket(ctx context.Context, clientConn sdk.WebSocketConn, upstreamConn *websocket.Conn) error {
 	errCh := make(chan error, 2)
+	var wg sync.WaitGroup
+	var closeOnce sync.Once
+
+	closeBoth := func() {
+		closeOnce.Do(func() {
+			_ = clientConn.Close(websocket.CloseNormalClosure, "bridge closed")
+			_ = upstreamConn.Close()
+		})
+	}
 
 	// 客户端 → 上游
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		for {
 			msgType, data, err := clientConn.ReadMessage()
 			if err != nil {
-				errCh <- fmt.Errorf("读取客户端消息: %w", err)
+				errCh <- &webSocketBridgeError{op: "读取客户端消息", err: err}
 				return
 			}
 			wsType := websocket.TextMessage
 			if msgType == sdk.WSMessageBinary {
 				wsType = websocket.BinaryMessage
 			}
-			if err := upstreamConn.WriteMessage(wsType, data); err != nil {
-				errCh <- fmt.Errorf("写入上游消息: %w", err)
+			if err := writeWebSocketMessage(upstreamConn, wsType, data); err != nil {
+				errCh <- &webSocketBridgeError{op: "写入上游消息", err: err}
 				return
 			}
 		}
 	}()
 
 	// 上游 → 客户端
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		for {
 			wsType, data, err := upstreamConn.ReadMessage()
 			if err != nil {
-				errCh <- fmt.Errorf("读取上游消息: %w", err)
+				errCh <- &webSocketBridgeError{op: "读取上游消息", err: err}
 				return
 			}
 			msgType := sdk.WSMessageText
@@ -147,7 +162,7 @@ func bridgeWebSocket(ctx context.Context, clientConn sdk.WebSocketConn, upstream
 				msgType = sdk.WSMessageBinary
 			}
 			if err := clientConn.WriteMessage(msgType, data); err != nil {
-				errCh <- fmt.Errorf("写入客户端消息: %w", err)
+				errCh <- &webSocketBridgeError{op: "写入客户端消息", err: err}
 				return
 			}
 		}
@@ -156,11 +171,36 @@ func bridgeWebSocket(ctx context.Context, clientConn sdk.WebSocketConn, upstream
 	// 等待任一方向结束或 context 取消
 	select {
 	case <-ctx.Done():
+		closeBoth()
+		wg.Wait()
 		return ctx.Err()
 	case err := <-errCh:
-		if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+		closeBoth()
+		wg.Wait()
+		if isNormalWebSocketBridgeClose(err) {
 			return nil
 		}
 		return err
 	}
+}
+
+type webSocketBridgeError struct {
+	op  string
+	err error
+}
+
+func (e *webSocketBridgeError) Error() string {
+	return fmt.Sprintf("%s: %v", e.op, e.err)
+}
+
+func (e *webSocketBridgeError) Unwrap() error {
+	return e.err
+}
+
+func isNormalWebSocketBridgeClose(err error) bool {
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) {
+		return closeErr.Code == websocket.CloseNormalClosure || closeErr.Code == websocket.CloseGoingAway
+	}
+	return false
 }

@@ -6,7 +6,6 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -24,6 +23,8 @@ const (
 	ChatGPTSSEURL = "https://chatgpt.com/backend-api/codex/responses"
 	// WSBetaHeader WebSocket 协议的 OpenAI-Beta 头（仅 WS 模式需要）
 	WSBetaHeader = "responses_websockets=2026-02-06"
+
+	webSocketWriteTimeout = 30 * time.Second
 )
 
 // WSConfig WebSocket 连接配置
@@ -183,7 +184,7 @@ func formatWebSocketDialError(resp *http.Response, err error) error {
 		// 尝试读取上游响应体中的错误详情
 		upstreamMsg := ""
 		if resp.Body != nil {
-			if body, readErr := io.ReadAll(resp.Body); readErr == nil && len(body) > 0 {
+			if body, readErr := readLimitedErrorBody(resp.Body); readErr == nil && len(body) > 0 {
 				// 尝试提取 JSON 中的 error.message
 				if msg := gjson.GetBytes(body, "error.message").String(); msg != "" {
 					upstreamMsg = msg
@@ -213,6 +214,20 @@ func formatWebSocketDialError(resp *http.Response, err error) error {
 		return fmt.Errorf("WebSocket 握手失败 (HTTP %d): %w", resp.StatusCode, err)
 	}
 	return fmt.Errorf("WebSocket 连接失败: %w", err)
+}
+
+func writeWebSocketJSON(conn *websocket.Conn, v any) error {
+	if err := conn.SetWriteDeadline(time.Now().Add(webSocketWriteTimeout)); err != nil {
+		return err
+	}
+	return conn.WriteJSON(v)
+}
+
+func writeWebSocketMessage(conn *websocket.Conn, messageType int, data []byte) error {
+	if err := conn.SetWriteDeadline(time.Now().Add(webSocketWriteTimeout)); err != nil {
+		return err
+	}
+	return conn.WriteMessage(messageType, data)
 }
 
 func cloneHTTPHeader(headers http.Header) http.Header {

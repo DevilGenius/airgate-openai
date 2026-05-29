@@ -31,12 +31,20 @@ type Result struct {
 //	→ chat-requirements → f/conversation/prepare → f/conversation SSE
 //	→ 轮询 async-status（fallback: mapping）→ 下载
 //
-// ctx 当前仅用于取消已启动的轮询循环；底层 HTTP 请求没有 wire up ctx，
-// 后续若要支持精确超时需要重构 newReq 为 newReqWithCtx。
+// ctx 会贯穿本次生成的 HTTP 请求、轮询等待和下载流程。
 //
 // 失败时返回 partial result：已经成功下载的图片会在 Result.Images 里，
 // error 指明哪一步失败。
 func (c *Client) GenerateImage(ctx context.Context, prompt string, images []ImageInput) (*Result, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	prevCtx := c.ctx
+	c.ctx = ctx
+	defer func() {
+		c.ctx = prevCtx
+	}()
+
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return nil, fmt.Errorf("prompt 为空")
@@ -52,7 +60,9 @@ func (c *Client) GenerateImage(ctx context.Context, prompt string, images []Imag
 		} else {
 			c.bootstrapped = true
 		}
-		time.Sleep(500 * time.Millisecond)
+		if err := sleepContext(ctx, 500*time.Millisecond); err != nil {
+			return nil, err
+		}
 	}
 
 	// Step 0.5: conversation/init 槽位
@@ -118,7 +128,7 @@ func (c *Client) GenerateImage(ctx context.Context, prompt string, images []Imag
 	case hasFileService(sr.ImageRefs):
 		imageRefs = filterFileService(sr.ImageRefs)
 	case sr.ConversationID != "":
-		refs, perr := c.pollForImages(sr.ConversationID, imagePollAttempts("gpt-image-2"))
+		refs, perr := c.pollForImages(ctx, sr.ConversationID, imagePollAttempts("gpt-image-2"))
 		if perr != nil {
 			return nil, fmt.Errorf("轮询失败: %w", perr)
 		}

@@ -54,6 +54,8 @@ const sanitizedImageSSEErrorMessage = "请求暂时无法完成，请稍后重�
 // 历史变量名保留，但实际对外提示保持统一的重试文案，不再暗示用户压缩图片。
 const imageTooLargeSSEErrorMessage = sanitizedImageSSEErrorMessage
 
+var imageDownloadHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
 // maxEditInputImageBytes 图生图（/images/edits）参考图单张上限。
 // API Key 和 Web Reverse 路径在转发前把超限图片压缩到此阈值以内，
 // 避免多张大图导致上游超时或拒绝。
@@ -436,12 +438,11 @@ func readImageRefBytes(ref string, shrinkLimit int) (string, []byte, error) {
 }
 
 func downloadImageBytes(ref string) ([]byte, string, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ref, nil)
 	if err != nil {
 		return nil, "", fmt.Errorf("构建图片下载请求失败: %w", err)
 	}
-	resp, err := client.Do(req)
+	resp, err := imageDownloadHTTPClient.Do(req)
 	if err != nil {
 		return nil, "", fmt.Errorf("下载图片失败: %w", err)
 	}
@@ -1584,7 +1585,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 		}
 	}
 
-	if err := conn.WriteJSON(json.RawMessage(createMsg)); err != nil {
+	if err := writeWebSocketJSON(conn, json.RawMessage(createMsg)); err != nil {
 		reason := fmt.Sprintf("发送 WebSocket 消息失败: %v", err)
 		return transientOutcome(reason), fmt.Errorf("%s", reason)
 	}
@@ -2236,6 +2237,17 @@ const (
 	asyncImagePollMaxAttempts  = 60
 )
 
+func waitAsyncImagePoll(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 // isAsyncImageTaskResponse 检测上游响应是否为异步任务模式（返回 task_id 而非图片数据）。
 func isAsyncImageTaskResponse(body []byte) (taskID string, ok bool) {
 	tid := gjson.GetBytes(body, "data.0.task_id").String()
@@ -2267,10 +2279,8 @@ func (g *OpenAIGateway) pollAsyncImageTask(
 
 	logger.Debug("images_async_task_poll_start", "task_id", taskID)
 
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-time.After(asyncImagePollInitialDelay):
+	if err := waitAsyncImagePoll(ctx, asyncImagePollInitialDelay); err != nil {
+		return nil, err
 	}
 
 	for attempt := range asyncImagePollMaxAttempts {
@@ -2290,14 +2300,12 @@ func (g *OpenAIGateway) pollAsyncImageTask(
 		if err != nil {
 			logger.Warn("images_async_task_poll_error",
 				"task_id", taskID, "attempt", attempt, sdk.LogFieldError, err)
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(asyncImagePollInterval):
+			if err := waitAsyncImagePoll(ctx, asyncImagePollInterval); err != nil {
+				return nil, err
 			}
 			continue
 		}
-		body, _ := io.ReadAll(pollResp.Body)
+		body, _ := readLimitedErrorBody(pollResp.Body)
 		_ = pollResp.Body.Close()
 
 		status := gjson.GetBytes(body, "data.status").String()
@@ -2318,10 +2326,8 @@ func (g *OpenAIGateway) pollAsyncImageTask(
 			return nil, fmt.Errorf("异步图片任务失败: %s", reason)
 		}
 
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(asyncImagePollInterval):
+		if err := waitAsyncImagePoll(ctx, asyncImagePollInterval); err != nil {
+			return nil, err
 		}
 	}
 	return nil, fmt.Errorf("异步图片任务 %s 超时", taskID)

@@ -42,7 +42,7 @@ func (c *Client) getChatRequirements() (*ChatRequirementsResult, error) {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
-		b, _ := io.ReadAll(resp.Body)
+		b, _ := readLimitedErrorBody(resp.Body)
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, b)
 	}
 

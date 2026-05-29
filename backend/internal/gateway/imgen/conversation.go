@@ -118,7 +118,7 @@ func (c *Client) prepareConversation(prompt, chatToken, proofToken, convID, pare
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
-		b, _ := io.ReadAll(resp.Body)
+		b, _ := readLimitedErrorBody(resp.Body)
 		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, b)
 	}
 
@@ -264,7 +264,7 @@ func (c *Client) streamConversation(prompt, chatToken, conduitToken, proofToken,
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
-		b, _ := io.ReadAll(resp.Body)
+		b, _ := readLimitedErrorBody(resp.Body)
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, b)
 	}
 

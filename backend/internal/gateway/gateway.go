@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -426,7 +425,7 @@ func (g *OpenAIGateway) probeAPIKeyUsage(ctx context.Context, accountID int64, c
 	}
 	// 401/403 标记为凭证错误
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := readLimitedErrorBody(resp.Body)
 		g.logger.Warn("probe_apikey_credential_error",
 			sdk.LogFieldAccountID, accountID,
 			sdk.LogFieldStatus, resp.StatusCode,
@@ -478,7 +477,7 @@ func (g *OpenAIGateway) probeOAuthUsage(ctx context.Context, accountID int64, cr
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := readLimitedErrorBody(resp.Body)
 		g.logger.Warn("probe_oauth_non_2xx",
 			sdk.LogFieldAccountID, accountID,
 			sdk.LogFieldStatus, resp.StatusCode,

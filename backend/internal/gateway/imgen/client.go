@@ -1,6 +1,7 @@
 package imgen
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -28,6 +29,7 @@ type Client struct {
 	deviceID     string
 	sessionID    string
 	bootstrapped bool
+	ctx          context.Context
 }
 
 // NewClient 构造一个 Client。proxyURL 可为 nil（直连）。
@@ -44,6 +46,16 @@ func NewClient(accessToken string, proxyURL *url.URL) *Client {
 		accessToken: accessToken,
 		deviceID:    uuid.New().String(),
 		sessionID:   uuid.New().String(),
+	}
+}
+
+// Close closes idle connections held by this non-concurrent client.
+func (c *Client) Close() {
+	if c == nil || c.http == nil || c.http.Transport == nil {
+		return
+	}
+	if closer, ok := c.http.Transport.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
 	}
 }
 
@@ -64,7 +76,7 @@ func (c *Client) doNoRedirect(req *http.Request) (*http.Response, error) {
 // _cfuvid / oai-chat-web-route）。不做这一步，后续 /backend-api/* 会被直接
 // 302 到 Turnstile 挑战页。
 func (c *Client) Bootstrap() error {
-	req, err := http.NewRequest("GET", BaseURL+"/", nil)
+	req, err := http.NewRequestWithContext(c.requestContext(), "GET", BaseURL+"/", nil)
 	if err != nil {
 		return err
 	}
@@ -131,7 +143,7 @@ func (c *Client) setCommonHeaders(req *http.Request) {
 }
 
 func (c *Client) newReq(method, path string, body io.Reader) (*http.Request, error) {
-	req, err := http.NewRequest(method, BaseURL+path, body)
+	req, err := http.NewRequestWithContext(c.requestContext(), method, BaseURL+path, body)
 	if err != nil {
 		return nil, err
 	}
@@ -142,4 +154,42 @@ func (c *Client) newReq(method, path string, body io.Reader) (*http.Request, err
 		req.Header.Set("Content-Type", "application/json")
 	}
 	return req, nil
+}
+
+func (c *Client) requestContext() context.Context {
+	if c != nil && c.ctx != nil {
+		return c.ctx
+	}
+	return context.Background()
+}
+
+func sleepContext(ctx context.Context, d time.Duration) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func readLimitedErrorBody(r io.Reader) ([]byte, error) {
+	const maxErrorResponseBodyBytes = 1 << 20
+	return io.ReadAll(io.LimitReader(r, maxErrorResponseBodyBytes+1))
+}
+
+func readLimitedImageBody(r io.Reader) ([]byte, error) {
+	const maxGeneratedImageBytes = 64 << 20
+	data, err := io.ReadAll(io.LimitReader(r, maxGeneratedImageBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxGeneratedImageBytes {
+		return nil, fmt.Errorf("image response exceeds %d bytes", maxGeneratedImageBytes)
+	}
+	return data, nil
 }

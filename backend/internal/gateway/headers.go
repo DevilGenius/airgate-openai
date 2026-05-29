@@ -398,8 +398,123 @@ func parseCodexUsageFromSSEEvent(data []byte) *CodexUsageSnapshot {
 	}
 }
 
+const (
+	codexUsageMemoryTTL = 24 * time.Hour
+
+	// codexUsageMemoryMaxEntries 只是异常流量下的高水位安全阀；正常回收主要靠 TTL。
+	codexUsageMemoryMaxEntries = 500000
+	codexUsageCleanupInterval  = 30 * time.Minute
+)
+
+type codexUsageMemoryEntry struct {
+	snapshot *CodexUsageSnapshot
+	storedAt time.Time
+}
+
+type codexUsageMemoryStore struct {
+	mu              sync.Mutex
+	items           map[int64]codexUsageMemoryEntry
+	ttl             time.Duration
+	maxEntries      int
+	lastCleanupTime time.Time
+}
+
+func newCodexUsageMemoryStore(ttl time.Duration, maxEntries int) *codexUsageMemoryStore {
+	return &codexUsageMemoryStore{
+		items:           make(map[int64]codexUsageMemoryEntry),
+		ttl:             ttl,
+		maxEntries:      maxEntries,
+		lastCleanupTime: time.Now().UTC(),
+	}
+}
+
+func (s *codexUsageMemoryStore) Load(key any) (any, bool) {
+	accountID, ok := key.(int64)
+	if s == nil || !ok {
+		return nil, false
+	}
+	now := time.Now().UTC()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cleanupExpiredLocked(now)
+	entry, ok := s.items[accountID]
+	if !ok {
+		return nil, false
+	}
+	if s.expired(entry, now) {
+		delete(s.items, accountID)
+		return nil, false
+	}
+	return cloneCodexUsageSnapshot(entry.snapshot), true
+}
+
+func (s *codexUsageMemoryStore) Store(key, value any) {
+	accountID, ok := key.(int64)
+	snapshot, okSnapshot := value.(*CodexUsageSnapshot)
+	if s == nil || !ok || !okSnapshot || snapshot == nil {
+		return
+	}
+	now := time.Now().UTC()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cleanupExpiredLocked(now)
+	if _, exists := s.items[accountID]; !exists && s.maxEntries > 0 && len(s.items) >= s.maxEntries {
+		s.deleteOldestLocked(now)
+	}
+	s.items[accountID] = codexUsageMemoryEntry{
+		snapshot: cloneCodexUsageSnapshot(snapshot),
+		storedAt: now,
+	}
+}
+
+func (s *codexUsageMemoryStore) Delete(key any) {
+	accountID, ok := key.(int64)
+	if s == nil || !ok {
+		return
+	}
+	s.mu.Lock()
+	delete(s.items, accountID)
+	s.mu.Unlock()
+}
+
+func (s *codexUsageMemoryStore) cleanupExpiredLocked(now time.Time) {
+	if now.Sub(s.lastCleanupTime) < codexUsageCleanupInterval && (s.maxEntries <= 0 || len(s.items) < s.maxEntries) {
+		return
+	}
+	for accountID, entry := range s.items {
+		if s.expired(entry, now) {
+			delete(s.items, accountID)
+		}
+	}
+	s.lastCleanupTime = now
+}
+
+func (s *codexUsageMemoryStore) expired(entry codexUsageMemoryEntry, now time.Time) bool {
+	return s.ttl > 0 && !entry.storedAt.IsZero() && now.Sub(entry.storedAt) > s.ttl
+}
+
+func (s *codexUsageMemoryStore) deleteOldestLocked(now time.Time) {
+	var oldestID int64
+	var oldestAt time.Time
+	found := false
+	for accountID, entry := range s.items {
+		if s.expired(entry, now) {
+			delete(s.items, accountID)
+			return
+		}
+		if !found || entry.storedAt.Before(oldestAt) {
+			oldestID = accountID
+			oldestAt = entry.storedAt
+			found = true
+		}
+	}
+	if found {
+		delete(s.items, oldestID)
+	}
+}
+
 // usageStore 存储每个账号的最新用量快照（accountID → snapshot）
-var usageStore sync.Map
+var usageStore = newCodexUsageMemoryStore(codexUsageMemoryTTL, codexUsageMemoryMaxEntries)
 
 // StoreCodexUsage 保存某个账号的用量快照
 func StoreCodexUsage(accountID int64, snapshot *CodexUsageSnapshot) {
@@ -530,13 +645,14 @@ func remainingCodexResetSeconds(existingReset int, existingCapturedAt, nextCaptu
 func GetCodexUsage(accountID int64) *CodexUsageSnapshot {
 	val, ok := usageStore.Load(accountID)
 	if ok {
-		return val.(*CodexUsageSnapshot)
+		snapshot, _ := val.(*CodexUsageSnapshot)
+		return cloneCodexUsageSnapshot(snapshot)
 	}
 	if store := getCodexUsagePersistenceStore(); store != nil {
 		snapshot, err := store.Load(context.Background(), accountID)
 		if err == nil && snapshot != nil {
 			usageStore.Store(accountID, snapshot)
-			return snapshot
+			return cloneCodexUsageSnapshot(snapshot)
 		}
 	}
 	return nil

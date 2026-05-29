@@ -355,7 +355,7 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 
 	// 非 2xx 统一走 failureOutcome 归类。包含 4xx（客户端错）/ 429 / 401 / 403 / 5xx。
 	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := readLimitedErrorBody(resp.Body)
 		errDetail := gjson.GetBytes(respBody, "error.message").String()
 		if errDetail == "" {
 			errDetail = truncate(string(respBody), 200)
@@ -624,7 +624,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 	)
 
 	runAttempt := func(msg []byte, w http.ResponseWriter) (WSResult, error) {
-		if err := conn.WriteJSON(json.RawMessage(msg)); err != nil {
+		if err := writeWebSocketJSON(conn, json.RawMessage(msg)); err != nil {
 			return WSResult{}, fmt.Errorf("发送 WebSocket 消息失败: %w", err)
 		}
 		var handler WSEventHandler

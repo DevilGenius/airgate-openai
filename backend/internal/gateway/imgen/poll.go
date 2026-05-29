@@ -2,9 +2,9 @@ package imgen
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"sort"
 	"strings"
@@ -75,7 +75,7 @@ func (c *Client) asyncStatus(conversationID string) (*AsyncStatusResult, error) 
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := readLimitedErrorBody(resp.Body)
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("async-status HTTP %d: %s", resp.StatusCode, body)
 	}
@@ -154,7 +154,7 @@ func imagePollAttempts(model string) int {
 	return defaultImagePollAttempts
 }
 
-func (c *Client) pollForImages(conversationID string, maxAttempts int) ([]string, error) {
+func (c *Client) pollForImages(ctx context.Context, conversationID string, maxAttempts int) ([]string, error) {
 	const (
 		interval     = 3 * time.Second
 		stableRounds = 2
@@ -168,7 +168,9 @@ func (c *Client) pollForImages(conversationID string, maxAttempts int) ([]string
 
 	logger := slog.Default()
 	for i := 0; i < maxAttempts; i++ {
-		time.Sleep(interval)
+		if err := sleepContext(ctx, interval); err != nil {
+			return nil, err
+		}
 		logger.Debug("imgen_poll_attempt", "attempt", i+1, "max_attempts", maxAttempts)
 
 		// 主路径：async-status
@@ -255,7 +257,7 @@ func (c *Client) readMappingRefsAndModel(conversationID string) ([]string, strin
 	if resp.StatusCode != 200 {
 		return nil, ""
 	}
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := readLimitedErrorBody(resp.Body)
 	var conv map[string]any
 	if json.Unmarshal(body, &conv) != nil {
 		return nil, ""

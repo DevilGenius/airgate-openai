@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -10,6 +11,8 @@ import (
 
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
+
+const maxErrorResponseBodyBytes = 1 << 20
 
 // 统一错误分类工具（跨 OpenAI / Anthropic 协议共用）。
 //
@@ -190,4 +193,8 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+func readLimitedErrorBody(r io.Reader) ([]byte, error) {
+	return io.ReadAll(io.LimitReader(r, maxErrorResponseBodyBytes+1))
 }

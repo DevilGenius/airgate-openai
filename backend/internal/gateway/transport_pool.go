@@ -5,21 +5,35 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
 
+const (
+	transportPoolMaxEntries      = 100000
+	transportPoolIdleTTL         = 2 * time.Hour
+	transportPoolCleanupInterval = 10 * time.Minute
+)
+
+type transportPoolEntry struct {
+	transport  *http.Transport
+	lastUsedAt time.Time
+}
+
 // TransportPool 按账户+代理隔离的 HTTP Transport 连接池
 // 确保不同账户的连接互不干扰，同一账户的连接可以复用
 type TransportPool struct {
-	mu         sync.RWMutex
-	transports map[string]*http.Transport // key = poolKey(accountID, proxyURL)
+	mu              sync.RWMutex
+	transports      map[string]*transportPoolEntry // key = poolKey(accountID, proxyURL)
+	lastCleanupTime time.Time
 }
 
 // NewTransportPool 创建连接池
 func NewTransportPool() *TransportPool {
 	return &TransportPool{
-		transports: make(map[string]*http.Transport),
+		transports:      make(map[string]*transportPoolEntry),
+		lastCleanupTime: time.Now(),
 	}
 }
 
@@ -58,13 +72,15 @@ func itoa(n int64) string {
 // GetTransport 获取或创建指定账户的 Transport
 func (p *TransportPool) GetTransport(accountID int64, proxyURL string) *http.Transport {
 	key := poolKey(accountID, proxyURL)
+	now := time.Now()
 
 	// 快路径：读锁检查
 	p.mu.RLock()
-	t, ok := p.transports[key]
+	entry, ok := p.transports[key]
 	p.mu.RUnlock()
 	if ok {
-		return t
+		p.touch(key, now)
+		return entry.transport
 	}
 
 	// 慢路径：写锁创建
@@ -72,11 +88,17 @@ func (p *TransportPool) GetTransport(accountID int64, proxyURL string) *http.Tra
 	defer p.mu.Unlock()
 
 	// 双重检查
-	if t, ok = p.transports[key]; ok {
-		return t
+	if entry, ok = p.transports[key]; ok {
+		entry.lastUsedAt = now
+		return entry.transport
 	}
 
-	t = &http.Transport{
+	p.cleanupIdleLocked(now)
+	if len(p.transports) >= transportPoolMaxEntries {
+		p.deleteOldestLocked()
+	}
+
+	t := &http.Transport{
 		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
 		DialContext: (&net.Dialer{
 			Timeout:   30 * time.Second,
@@ -93,18 +115,57 @@ func (p *TransportPool) GetTransport(accountID int64, proxyURL string) *http.Tra
 		}
 	}
 
-	p.transports[key] = t
+	p.transports[key] = &transportPoolEntry{transport: t, lastUsedAt: now}
 	return t
+}
+
+func (p *TransportPool) touch(key string, now time.Time) {
+	p.mu.Lock()
+	if entry, ok := p.transports[key]; ok {
+		entry.lastUsedAt = now
+	}
+	p.cleanupIdleLocked(now)
+	p.mu.Unlock()
+}
+
+func (p *TransportPool) cleanupIdleLocked(now time.Time) {
+	if now.Sub(p.lastCleanupTime) < transportPoolCleanupInterval && len(p.transports) < transportPoolMaxEntries {
+		return
+	}
+	for key, entry := range p.transports {
+		if now.Sub(entry.lastUsedAt) > transportPoolIdleTTL {
+			entry.transport.CloseIdleConnections()
+			delete(p.transports, key)
+		}
+	}
+	p.lastCleanupTime = now
+}
+
+func (p *TransportPool) deleteOldestLocked() {
+	var oldestKey string
+	var oldestAt time.Time
+	for key, entry := range p.transports {
+		if oldestKey == "" || entry.lastUsedAt.Before(oldestAt) {
+			oldestKey = key
+			oldestAt = entry.lastUsedAt
+		}
+	}
+	if oldestKey != "" {
+		p.transports[oldestKey].transport.CloseIdleConnections()
+		delete(p.transports, oldestKey)
+	}
 }
 
 // CloseIdle 关闭所有 Transport 的空闲连接
 func (p *TransportPool) CloseIdle() {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
+	now := time.Now()
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
-	for _, t := range p.transports {
-		t.CloseIdleConnections()
+	for _, entry := range p.transports {
+		entry.transport.CloseIdleConnections()
 	}
+	p.cleanupIdleLocked(now)
 }
 
 // RemoveAccount 移除指定账户的 Transport（账户被禁用时清理）
@@ -115,9 +176,9 @@ func (p *TransportPool) RemoveAccount(accountID int64) {
 	prefix1 := "direct:" + itoa(accountID)
 	prefix2 := ":" + itoa(accountID)
 
-	for key, t := range p.transports {
-		if key == prefix1 || len(key) > 0 && key[len(key)-len(prefix2):] == prefix2 {
-			t.CloseIdleConnections()
+	for key, entry := range p.transports {
+		if key == prefix1 || strings.HasSuffix(key, prefix2) {
+			entry.transport.CloseIdleConnections()
 			delete(p.transports, key)
 		}
 	}

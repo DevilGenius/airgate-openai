@@ -74,6 +74,12 @@ func (rt *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 	return rt.h1.RoundTrip(req)
 }
 
+func (rt *utlsRoundTripper) CloseIdleConnections() {
+	if rt != nil && rt.h1 != nil {
+		rt.h1.CloseIdleConnections()
+	}
+}
+
 func (rt *utlsRoundTripper) dialTLS(ctx context.Context, network, addr string) (net.Conn, error) {
 	rawConn, err := rt.dialRaw(ctx, addr)
 	if err != nil {

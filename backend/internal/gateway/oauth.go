@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -304,7 +303,7 @@ func (g *OpenAIGateway) refreshViaSession(ctx context.Context, sessionToken, pro
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readLimitedErrorBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("读取 session 响应失败: %w", err)
 	}
@@ -456,7 +455,7 @@ func (g *OpenAIGateway) exchangeCodeForTokens(ctx context.Context, callbackURL, 
 		_ = resp.Body.Close()
 	}()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readLimitedErrorBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("读取响应失败: %w", err)
 	}
@@ -671,7 +670,7 @@ func (g *OpenAIGateway) fetchChatGPTAccountInfo(ctx context.Context, accessToken
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readLimitedErrorBody(resp.Body)
 	if err != nil {
 		if g.logger != nil {
 			g.logger.Warn("chatgpt_account_check_read_failed", sdk.LogFieldError, err, "status", resp.StatusCode, "org_id", orgID)
@@ -842,7 +841,7 @@ func (g *OpenAIGateway) refreshTokens(ctx context.Context, refreshToken, proxyUR
 		_ = resp.Body.Close()
 	}()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readLimitedErrorBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("读取响应失败: %w", err)
 	}

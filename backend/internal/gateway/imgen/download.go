@@ -3,7 +3,6 @@ package imgen
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -66,7 +65,10 @@ func (c *Client) downloadFileService(conversationID, fileID string) ([]byte, err
 	// 2) 200 JSON（兼容返回 { download_url } 或直接二进制的形式）
 	if resp.StatusCode == 200 {
 		defer func() { _ = resp.Body.Close() }()
-		body, _ := io.ReadAll(resp.Body)
+		body, err := readLimitedImageBody(resp.Body)
+		if err != nil {
+			return nil, err
+		}
 		var dl struct {
 			DownloadURL string `json:"download_url"`
 		}
@@ -99,7 +101,7 @@ func (c *Client) downloadByJSONLink(path string) ([]byte, error) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
-		b, _ := io.ReadAll(resp.Body)
+		b, _ := readLimitedErrorBody(resp.Body)
 		return nil, fmt.Errorf("获取下载链接失败 HTTP %d: %s", resp.StatusCode, b)
 	}
 	var dl struct {
@@ -116,7 +118,7 @@ func (c *Client) downloadByJSONLink(path string) ([]byte, error) {
 
 // fetchBinary 拿二进制：chatgpt.com 内部 URL 用完整认证头，外部 CDN 仅用 UA。
 func (c *Client) fetchBinary(targetURL string) ([]byte, error) {
-	imgReq, err := http.NewRequest("GET", targetURL, nil)
+	imgReq, err := http.NewRequestWithContext(c.requestContext(), "GET", targetURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -133,8 +135,8 @@ func (c *Client) fetchBinary(targetURL string) ([]byte, error) {
 	}
 	defer func() { _ = imgResp.Body.Close() }()
 	if imgResp.StatusCode != 200 {
-		b, _ := io.ReadAll(imgResp.Body)
+		b, _ := readLimitedErrorBody(imgResp.Body)
 		return nil, fmt.Errorf("下载图片失败 HTTP %d: %s", imgResp.StatusCode, b)
 	}
-	return io.ReadAll(imgResp.Body)
+	return readLimitedImageBody(imgResp.Body)
 }

@@ -138,6 +138,147 @@ type openAISessionResolution struct {
 	SessionSource   string
 }
 
+const (
+	sessionStateMemoryTTL = 3600 * time.Second
+
+	// sessionStateMemoryMaxEntries 只是异常流量下的高水位安全阀；正常回收主要靠 TTL。
+	sessionStateMemoryMaxEntries = 1000000
+	sessionStateCleanupInterval  = time.Minute
+)
+
+type sessionStateMemoryStore struct {
+	mu              sync.Mutex
+	items           map[string]*openAISessionState
+	ttl             time.Duration
+	maxEntries      int
+	lastCleanupTime time.Time
+}
+
+func newSessionStateMemoryStore(ttl time.Duration, maxEntries int) *sessionStateMemoryStore {
+	return &sessionStateMemoryStore{
+		items:           make(map[string]*openAISessionState),
+		ttl:             ttl,
+		maxEntries:      maxEntries,
+		lastCleanupTime: time.Now().UTC(),
+	}
+}
+
+func (s *sessionStateMemoryStore) Load(key any) (any, bool) {
+	sessionKey, ok := key.(string)
+	if s == nil || !ok || sessionKey == "" {
+		return nil, false
+	}
+	now := time.Now().UTC()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cleanupExpiredLocked(now)
+	state, ok := s.items[sessionKey]
+	if !ok {
+		return nil, false
+	}
+	if s.expired(state, now) {
+		delete(s.items, sessionKey)
+		return nil, false
+	}
+	return cloneSessionState(state), true
+}
+
+func (s *sessionStateMemoryStore) Store(key, value any) {
+	sessionKey, ok := key.(string)
+	state, okState := value.(*openAISessionState)
+	if s == nil || !ok || sessionKey == "" || !okState || state == nil {
+		return
+	}
+	now := time.Now().UTC()
+	cloned := cloneSessionState(state)
+	if cloned.SessionKey == "" {
+		cloned.SessionKey = sessionKey
+	}
+	if cloned.LastSeenAt.IsZero() {
+		cloned.LastSeenAt = now
+	}
+	if s.expired(cloned, now) {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cleanupExpiredLocked(now)
+	if _, exists := s.items[sessionKey]; !exists && s.maxEntries > 0 && len(s.items) >= s.maxEntries {
+		s.deleteOldestLocked(now)
+	}
+	s.items[sessionKey] = cloned
+}
+
+func (s *sessionStateMemoryStore) Delete(key any) {
+	sessionKey, ok := key.(string)
+	if s == nil || !ok || sessionKey == "" {
+		return
+	}
+	s.mu.Lock()
+	delete(s.items, sessionKey)
+	s.mu.Unlock()
+}
+
+func (s *sessionStateMemoryStore) cleanupExpiredLocked(now time.Time) {
+	if now.Sub(s.lastCleanupTime) < sessionStateCleanupInterval && (s.maxEntries <= 0 || len(s.items) < s.maxEntries) {
+		return
+	}
+	for key, state := range s.items {
+		if s.expired(state, now) {
+			delete(s.items, key)
+		}
+	}
+	s.lastCleanupTime = now
+}
+
+func (s *sessionStateMemoryStore) expired(state *openAISessionState, now time.Time) bool {
+	if s.ttl <= 0 || state == nil {
+		return false
+	}
+	last := sessionStateLastActivity(state)
+	return !last.IsZero() && now.Sub(last) > s.ttl
+}
+
+func (s *sessionStateMemoryStore) deleteOldestLocked(now time.Time) {
+	var oldestKey string
+	var oldestAt time.Time
+	for key, state := range s.items {
+		if s.expired(state, now) {
+			delete(s.items, key)
+			return
+		}
+		last := sessionStateLastActivity(state)
+		if last.IsZero() {
+			last = now
+		}
+		if oldestKey == "" || last.Before(oldestAt) {
+			oldestKey = key
+			oldestAt = last
+		}
+	}
+	if oldestKey != "" {
+		delete(s.items, oldestKey)
+	}
+}
+
+func sessionStateLastActivity(state *openAISessionState) time.Time {
+	if state == nil {
+		return time.Time{}
+	}
+	last := state.LastSeenAt
+	for _, candidate := range []time.Time{
+		state.LastUpdatedAt,
+		state.LastResponseAt,
+		state.LastTurnStateAt,
+	} {
+		if candidate.After(last) {
+			last = candidate
+		}
+	}
+	return last.UTC()
+}
+
 func resolveOpenAISession(headers http.Header, body []byte, accountID int64) openAISessionResolution {
 	promptCacheKey := resolvePromptCacheKeyFromBody(body)
 	sessionID := ""
@@ -213,7 +354,7 @@ func resolveOpenAISession(headers http.Header, body []byte, accountID int64) ope
 	return resolution
 }
 
-var sessionStateStore sync.Map
+var sessionStateStore = newSessionStateMemoryStore(sessionStateMemoryTTL, sessionStateMemoryMaxEntries)
 
 const (
 	anthropicDigestCacheMaxSize = 20000

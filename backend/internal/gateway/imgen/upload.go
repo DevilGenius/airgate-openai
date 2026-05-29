@@ -148,7 +148,7 @@ func (c *Client) fileCreate(fileName string, fileSize int64, mimeType string) (f
 		return "", "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := readLimitedErrorBody(resp.Body)
 	if resp.StatusCode != 200 {
 		return "", "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, respBody)
 	}
@@ -187,7 +187,7 @@ func (c *Client) fileUploadToURL(uploadURL string, body io.Reader, mimeType, fil
 		uploadURL = BaseURL + uploadURL
 	}
 
-	req, err := http.NewRequest(method, uploadURL, body)
+	req, err := http.NewRequestWithContext(c.requestContext(), method, uploadURL, body)
 	if err != nil {
 		return err
 	}
@@ -211,7 +211,7 @@ func (c *Client) fileUploadToURL(uploadURL string, body io.Reader, mimeType, fil
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := readLimitedErrorBody(resp.Body)
 
 	if resp.StatusCode != 200 && resp.StatusCode != 201 {
 		return fmt.Errorf("upload HTTP %d: %s", resp.StatusCode, respBody)
@@ -247,7 +247,7 @@ func (c *Client) fileUploadStream(fileID string, body io.Reader, mimeType string
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := readLimitedErrorBody(resp.Body)
 
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("process_upload_stream HTTP %d: %s", resp.StatusCode, respBody)

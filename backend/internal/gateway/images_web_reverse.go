@@ -24,12 +24,11 @@ import (
 // decodeImageRefs 把 parseImagesRequest 返回的 data URL / http URL 字符串列表
 // 转为 imgen.ImageInput 切片（内存中的原始二进制）。
 // 目前只支持 data URL（base64 编码）；http(s) URL 会跳过并 log 警告。
-func decodeImageRefs(refs []string) ([]imgen.ImageInput, error) {
+func decodeImageRefs(ctx context.Context, refs []string) ([]imgen.ImageInput, error) {
 	if len(refs) == 0 {
 		return nil, nil
 	}
 	out := make([]imgen.ImageInput, 0, len(refs))
-	client := &http.Client{Timeout: 30 * time.Second}
 	for _, ref := range refs {
 		if strings.HasPrefix(ref, "data:") {
 			input, err := decodeDataImageRef(ref)
@@ -40,7 +39,7 @@ func decodeImageRefs(refs []string) ([]imgen.ImageInput, error) {
 			continue
 		}
 		if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
-			input, err := downloadImageRef(client, ref)
+			input, err := downloadImageRef(ctx, ref)
 			if err != nil {
 				return nil, err
 			}
@@ -75,8 +74,12 @@ func decodeDataImageRef(ref string) (imgen.ImageInput, error) {
 	return imgen.ImageInput{Data: data, MimeType: mimeType}, nil
 }
 
-func downloadImageRef(client *http.Client, ref string) (imgen.ImageInput, error) {
-	resp, err := client.Get(ref)
+func downloadImageRef(ctx context.Context, ref string) (imgen.ImageInput, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ref, nil)
+	if err != nil {
+		return imgen.ImageInput{}, fmt.Errorf("构建参考图片请求失败: %w", err)
+	}
+	resp, err := imageDownloadHTTPClient.Do(req)
 	if err != nil {
 		return imgen.ImageInput{}, fmt.Errorf("下载参考图片失败: %w", err)
 	}
@@ -174,7 +177,7 @@ func (g *OpenAIGateway) forwardImagesViaWebReverse(ctx context.Context, req *sdk
 
 	var imageInputs []imgen.ImageInput
 	if isEdit && len(imgReq.Images) > 0 {
-		imageInputs, err = decodeImageRefs(imgReq.Images)
+		imageInputs, err = decodeImageRefs(ctx, imgReq.Images)
 		if err != nil {
 			return webReverseImagesError(start, http.StatusBadRequest, req.Writer,
 				fmt.Sprintf("解码参考图片失败: %v", err))
@@ -192,6 +195,7 @@ func (g *OpenAIGateway) forwardImagesViaWebReverse(ctx context.Context, req *sdk
 		}
 	}
 	client := imgen.NewClient(accessToken, proxyURL)
+	defer client.Close()
 
 	var sseKA *ssePingKeepAlive
 	if req.Stream {

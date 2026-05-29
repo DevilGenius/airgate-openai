@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -355,7 +354,7 @@ func (g *OpenAIGateway) forwardAnthropicResponses(
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := readLimitedErrorBody(resp.Body)
 		dur := time.Since(start)
 		logger.Warn("upstream_request_non_2xx",
 			sdk.LogFieldAccountID, account.ID,
