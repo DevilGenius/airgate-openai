@@ -347,6 +347,16 @@ func TestPreprocessRequestBodyPreservesPreviousResponseID(t *testing.T) {
 	}
 }
 
+func TestResolveEffectiveModelFallsBackToMini(t *testing.T) {
+	t.Parallel()
+
+	for _, existing := range []any{"", "None", "gpt-unknown", nil} {
+		if got := resolveEffectiveModel("", existing); got != "gpt-5.4-mini" {
+			t.Fatalf("resolveEffectiveModel(%#v) = %q, want gpt-5.4-mini", existing, got)
+		}
+	}
+}
+
 func TestFirstNonEmptyTier_RequestFastFallsBackToUpstreamPriority(t *testing.T) {
 	if got := firstNonEmptyTier("fast", "priority"); got != "priority" {
 		t.Fatalf("firstNonEmptyTier(fast, priority) = %q, want %q", got, "priority")

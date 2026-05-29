@@ -70,7 +70,7 @@ var (
 	// 当客户端请求体里 model 字段为空、null 或字面量 "None" 时使用这个值，
 	// 避免把无效 model 发到上游触发 "The 'None' model is not supported" 错误。
 	codexDefaultModel = resolveRoleTargetModel(
-		"gpt-5.2",
+		"gpt-5.4-mini",
 		"AIRGATE_CODEX_DEFAULT_MODEL",
 	)
 	enableAnthropicContinuation = strings.EqualFold(firstNonEmptyEnv("AIRGATE_ENABLE_ANTHROPIC_CONTINUATION"), "true")
