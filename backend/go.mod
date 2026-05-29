@@ -1,6 +1,6 @@
 module github.com/DevilGenius/airgate-openai/backend
 
-go 1.25.7
+go 1.26.3
 
 require (
 	github.com/DevilGenius/airgate-sdk v0.2.1
