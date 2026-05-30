@@ -236,7 +236,7 @@ func (g *OpenAIGateway) forwardImagesViaWebReverse(ctx context.Context, req *sdk
 	respBody := buildWebReverseImagesResponse(imgRes, inputEstimate.TextTokens, inputEstimate.ImageTokens, 0)
 	if sseKA != nil {
 		sseKA.Stop()
-		writeImagesRESTSSE(req.Writer, respBody)
+		writeImagesRESTSSE(req.Writer, respBody, isEdit)
 	}
 
 	elapsed := time.Since(start)

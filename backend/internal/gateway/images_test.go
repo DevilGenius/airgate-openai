@@ -300,7 +300,7 @@ func TestStartSSEPingKeepAliveDoesNotCommitImmediately(t *testing.T) {
 	}
 }
 
-func TestHandleImagesResponse_StreamWrapsRESTJSONAsSSE(t *testing.T) {
+func TestHandleImagesResponse_StreamReturnsOfficialCompletedEvent(t *testing.T) {
 	body := `{"created":1713833628,"data":[{"b64_json":"iVBORw0"}],"usage":{"input_tokens":1,"output_tokens":2}}`
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
@@ -336,14 +336,56 @@ func TestHandleImagesResponse_StreamWrapsRESTJSONAsSSE(t *testing.T) {
 		t.Fatalf("writer body = %q, want REST JSON event and DONE", gotBody)
 	}
 	eventBody := strings.TrimSuffix(strings.TrimPrefix(gotBody, prefix), suffix)
+	if got := gjson.Get(eventBody, "type").String(); got != "image_generation.completed" {
+		t.Fatalf("event type = %q, want image_generation.completed", got)
+	}
+	if got := gjson.Get(eventBody, "b64_json").String(); got != "iVBORw0" {
+		t.Fatalf("event b64_json = %q, want iVBORw0", got)
+	}
+	if got := gjson.Get(eventBody, "created_at").Int(); got != 1713833628 {
+		t.Fatalf("event created_at = %d, want 1713833628", got)
+	}
 	if got := gjson.Get(eventBody, "quality").String(); got != "medium" {
 		t.Fatalf("event quality = %q, want medium", got)
 	}
-	if gjson.Get(eventBody, "data.0.quality").Exists() {
-		t.Fatalf("event data[0].quality should be omitted")
+	if gjson.Get(eventBody, "data").Exists() {
+		t.Fatalf("official stream event should not contain REST data array")
 	}
 	if got := gjson.Get(eventBody, "output_format").String(); got != "png" {
 		t.Fatalf("event output_format = %q, want png", got)
+	}
+}
+
+func TestHandleImagesResponse_StreamReturnsOfficialEditCompletedEvent(t *testing.T) {
+	body := `{"created":1713833628,"data":[{"b64_json":"iVBORw0"}]}`
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       ioNopCloserFromString(body),
+	}
+	w := httptest.NewRecorder()
+	sseKA := startSSEPingKeepAlive(w)
+
+	outcome, err := handleImagesResponse(resp, w, sseKA, time.Now(), "gpt-image-2", imagesResponseOptions{IsEdit: true})
+	if err != nil {
+		t.Fatalf("handleImagesResponse returned err: %v", err)
+	}
+	if outcome.Kind != sdk.OutcomeSuccess {
+		t.Fatalf("Kind = %v, want Success", outcome.Kind)
+	}
+
+	gotBody := w.Body.String()
+	const prefix = "data: "
+	const suffix = "\n\ndata: [DONE]\n\n"
+	if !strings.HasPrefix(gotBody, prefix) || !strings.HasSuffix(gotBody, suffix) {
+		t.Fatalf("writer body = %q, want completed event and DONE", gotBody)
+	}
+	eventBody := strings.TrimSuffix(strings.TrimPrefix(gotBody, prefix), suffix)
+	if got := gjson.Get(eventBody, "type").String(); got != "image_edit.completed" {
+		t.Fatalf("event type = %q, want image_edit.completed", got)
+	}
+	if got := gjson.Get(eventBody, "b64_json").String(); got != "iVBORw0" {
+		t.Fatalf("event b64_json = %q, want iVBORw0", got)
 	}
 }
 

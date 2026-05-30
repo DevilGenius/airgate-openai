@@ -498,15 +498,75 @@ func isMultipartContentType(contentType string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(contentType)), "multipart/")
 }
 
+func stripMultipartFields(body []byte, contentType string, fieldNames ...string) ([]byte, string, error) {
+	_, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return nil, "", fmt.Errorf("multipart content-type 解析失败: %w", err)
+	}
+	boundary := params["boundary"]
+	if boundary == "" {
+		return nil, "", fmt.Errorf("multipart content-type 缺少 boundary")
+	}
+
+	drop := make(map[string]struct{}, len(fieldNames))
+	for _, name := range fieldNames {
+		drop[name] = struct{}{}
+	}
+
+	reader := multipart.NewReader(bytes.NewReader(body), boundary)
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			_ = writer.Close()
+			return nil, "", fmt.Errorf("multipart 读取失败: %w", err)
+		}
+
+		header := textproto.MIMEHeader{}
+		for key, values := range part.Header {
+			header[key] = append([]string(nil), values...)
+		}
+		name := part.FormName()
+		data, readErr := io.ReadAll(part)
+		_ = part.Close()
+		if readErr != nil {
+			_ = writer.Close()
+			return nil, "", fmt.Errorf("读取 multipart part %q 失败: %w", name, readErr)
+		}
+		if _, ok := drop[name]; ok {
+			continue
+		}
+
+		dst, err := writer.CreatePart(header)
+		if err != nil {
+			_ = writer.Close()
+			return nil, "", err
+		}
+		if _, err := dst.Write(data); err != nil {
+			_ = writer.Close()
+			return nil, "", err
+		}
+	}
+	if err := writer.Close(); err != nil {
+		return nil, "", err
+	}
+	return buf.Bytes(), writer.FormDataContentType(), nil
+}
+
 func imagesResponseOptionsFromRequestBody(body []byte, contentType string, isEdit bool) imagesResponseOptions {
 	if len(body) == 0 {
-		return imagesResponseOptions{}
+		return imagesResponseOptions{IsEdit: isEdit}
 	}
 	if isEdit && isMultipartContentType(contentType) {
 		return imagesResponseOptionsFromMultipartBody(body, contentType)
 	}
 	size := strings.TrimSpace(gjson.GetBytes(body, "size").String())
 	opts := imagesResponseOptions{
+		IsEdit:              isEdit,
 		BillingSize:         size,
 		RequestSize:         size,
 		RequestQuality:      normalizeImageQualityDefaultMedium(gjson.GetBytes(body, "quality").String()),
@@ -521,7 +581,7 @@ func imagesResponseOptionsFromRequestBody(body []byte, contentType string, isEdi
 }
 
 func imagesResponseOptionsFromMultipartBody(body []byte, contentType string) imagesResponseOptions {
-	opts := imagesResponseOptions{}
+	opts := imagesResponseOptions{IsEdit: true}
 	_, params, err := mime.ParseMediaType(contentType)
 	if err != nil || params["boundary"] == "" {
 		return opts
@@ -595,6 +655,7 @@ func applyImagesRequestOptions(opts *imagesResponseOptions, req *imagesRequest) 
 	if opts == nil || req == nil {
 		return
 	}
+	opts.IsEdit = req.IsEdit
 	size := strings.TrimSpace(req.Size)
 	opts.BillingSize = size
 	opts.RequestSize = size
@@ -1775,7 +1836,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 	}
 	if sseKA != nil {
 		sseKA.Stop()
-		writeImagesRESTSSE(req.Writer, respBody)
+		writeImagesRESTSSE(req.Writer, respBody, isEdit)
 		outcome.Upstream.Headers = http.Header{"Content-Type": []string{"text/event-stream"}}
 	} else {
 		outcome.Upstream.Body = respBody
@@ -1858,6 +1919,107 @@ func buildImagesRESTResponse(wsResult WSResult, textInputTokens, imageOutputToke
 	}
 	b, _ := json.Marshal(payload)
 	return b
+}
+
+func imagesStreamCompletedEventType(isEdit bool) string {
+	if isEdit {
+		return "image_edit.completed"
+	}
+	return "image_generation.completed"
+}
+
+func imagesRESTStreamCompletedEvents(body []byte, isEdit bool) [][]byte {
+	root := gjson.ParseBytes(body)
+	data := root.Get("data")
+	if !data.IsArray() {
+		return nil
+	}
+
+	items := data.Array()
+	events := make([][]byte, 0, len(items))
+	for idx, item := range items {
+		event := map[string]any{
+			"type":            imagesStreamCompletedEventType(isEdit),
+			"sequence_number": idx,
+		}
+		if createdAt := firstExistingJSONValue(root.Get("created_at"), root.Get("created")); createdAt.Exists() {
+			setJSONValue(event, "created_at", createdAt)
+		}
+
+		b64 := strings.TrimSpace(item.Get("b64_json").String())
+		url := strings.TrimSpace(item.Get("url").String())
+		switch {
+		case b64 != "":
+			event["b64_json"] = b64
+		case url != "":
+			event["url"] = url
+		default:
+			continue
+		}
+
+		for _, field := range []string{
+			"revised_prompt",
+			"background",
+			"output_format",
+			"quality",
+			"size",
+			"moderation",
+			"output_compression",
+		} {
+			if value := firstExistingJSONValue(item.Get(field), root.Get(field)); value.Exists() {
+				setJSONValue(event, field, value)
+			}
+		}
+
+		// 官方 completed 事件会携带 usage；多图时只放在最后一个 completed 事件，
+		// 避免按事件聚合的客户端重复计算同一份总 usage。
+		if idx == len(items)-1 {
+			if usage := root.Get("usage"); usage.Exists() {
+				setJSONValue(event, "usage", usage)
+			}
+		}
+
+		encoded, err := json.Marshal(event)
+		if err != nil {
+			continue
+		}
+		events = append(events, encoded)
+	}
+	return events
+}
+
+func firstExistingJSONValue(values ...gjson.Result) gjson.Result {
+	for _, value := range values {
+		if value.Exists() {
+			return value
+		}
+	}
+	return gjson.Result{}
+}
+
+func setJSONValue(dst map[string]any, key string, value gjson.Result) {
+	if dst == nil || key == "" || !value.Exists() {
+		return
+	}
+	switch value.Type {
+	case gjson.String:
+		if s := value.String(); strings.TrimSpace(s) != "" {
+			dst[key] = s
+		}
+	case gjson.Number:
+		if strings.Contains(value.Raw, ".") {
+			dst[key] = value.Float()
+		} else {
+			dst[key] = value.Int()
+		}
+	case gjson.True, gjson.False:
+		dst[key] = value.Bool()
+	case gjson.JSON:
+		var parsed any
+		if err := json.Unmarshal([]byte(value.Raw), &parsed); err == nil {
+			dst[key] = parsed
+		}
+	}
 }
 
 func normalizeImagesResponseSize(size string) string {
@@ -2134,6 +2296,7 @@ func buildImagesErrorBodyWithCode(status int, code, message string) []byte {
 // usage.input_tokens / usage.output_tokens / usage.input_tokens_details.cached_tokens
 // 与 Responses API 字段同构，parseUsage 已经处理了 cached token 扣减。
 type imagesResponseOptions struct {
+	IsEdit                  bool
 	BillingSize             string
 	RequestSize             string
 	RequestQuality          string
@@ -2192,7 +2355,7 @@ func handleImagesResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 
 	if sseKA != nil {
 		sseKA.Stop()
-		writeImagesRESTSSE(w, body)
+		writeImagesRESTSSE(w, body, opts.IsEdit)
 	} else if w != nil {
 		if ct := resp.Header.Get("Content-Type"); ct != "" {
 			w.Header().Set("Content-Type", ct)

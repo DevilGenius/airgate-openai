@@ -104,7 +104,14 @@ func writeSSEError(w http.ResponseWriter, message string) {
 	writeSSEDone(w)
 }
 
-func writeImagesRESTSSE(w http.ResponseWriter, body []byte) {
-	writeSSEData(w, body)
+func writeImagesRESTSSE(w http.ResponseWriter, body []byte, isEdit bool) {
+	events := imagesRESTStreamCompletedEvents(body, isEdit)
+	if len(events) == 0 {
+		writeSSEData(w, body)
+	} else {
+		for _, event := range events {
+			writeSSEData(w, event)
+		}
+	}
 	writeSSEDone(w)
 }
