@@ -12,6 +12,15 @@ interface UsageRecordLike {
   usage_metadata?: Record<string, string>;
 }
 
+const TOKEN_COLORS = {
+  cacheRead: 'var(--ag-usage-token-cache-read)',
+  image: 'var(--ag-text)',
+  input: 'var(--ag-usage-token-input)',
+  output: 'var(--ag-usage-token-output)',
+  reasoning: 'var(--ag-usage-token-reasoning)',
+  total: 'var(--ag-text)',
+} as const;
+
 const panelStyle: CSSProperties = {
   overflow: 'hidden',
   borderRadius: 'var(--radius)',
@@ -77,9 +86,13 @@ const inlineValueStyle: CSSProperties = {
 const inlineValueMetaStyle: CSSProperties = {
   minWidth: 0,
   overflow: 'hidden',
-  color: 'var(--ag-text-tertiary)',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
+};
+
+const reasoningValueMetaStyle: CSSProperties = {
+  ...inlineValueMetaStyle,
+  color: TOKEN_COLORS.reasoning,
 };
 
 const inlineValueNumberStyle: CSSProperties = {
@@ -97,6 +110,10 @@ const valueStyle: CSSProperties = {
   textAlign: 'right',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
+};
+
+const strongValueStyle: CSSProperties = {
+  fontWeight: 700,
 };
 
 const chipWrapStyle: CSSProperties = {
@@ -160,11 +177,11 @@ function metadataNumber(metadata: Record<string, string>, keys: string[]) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function Row({ label, tone, value }: { label: ReactNode; tone?: string; value: ReactNode }) {
+function Row({ label, strong, tone, value }: { label: ReactNode; strong?: boolean; tone?: string; value: ReactNode }) {
   return (
     <div style={rowStyle}>
       <span style={labelStyle}>{label}</span>
-      <span style={{ ...valueStyle, color: tone }}>{value}</span>
+      <span style={{ ...valueStyle, ...(strong ? strongValueStyle : {}), color: tone }}>{value}</span>
     </div>
   );
 }
@@ -173,7 +190,7 @@ function outputTokenValue(reasoningTokens: number, outputTokens: number) {
   return (
     <span style={inlineValueStyle}>
       {reasoningTokens > 0 ? (
-        <span style={inlineValueMetaStyle}>(推理 {formatNumber(reasoningTokens)})</span>
+        <span style={reasoningValueMetaStyle}>(推理 {formatNumber(reasoningTokens)})</span>
       ) : null}
       <span style={inlineValueNumberStyle}>{formatNumber(outputTokens)}</span>
     </span>
@@ -221,11 +238,11 @@ export function UsageMetricDetail({ context }: UsageRecordSurfaceProps) {
         </div>
       ) : null}
       <div style={bodyStyle}>
-        {images > 0 ? <Row label="图片数量" value={formatNumber(images)} tone="var(--ag-success)" /> : null}
-        <Row label="输入 Token" value={inputTokenValue(textInputTokens, imageInputTokens, inputTokens)} tone="var(--ag-info)" />
-        <Row label="输出 Token" value={outputTokenValue(reasoningTokens, outputTokens)} tone="var(--ag-primary)" />
-        {cachedInputTokens > 0 ? <Row label="缓存读取 Token" value={formatNumber(cachedInputTokens)} tone="var(--ag-success)" /> : null}
-        <Row label="总 Token" value={formatNumber(totalTokens)} tone="var(--ag-text)" />
+        {images > 0 ? <Row label="图片数量" value={formatNumber(images)} tone={TOKEN_COLORS.image} /> : null}
+        <Row label="输入 Token" value={inputTokenValue(textInputTokens, imageInputTokens, inputTokens)} tone={TOKEN_COLORS.input} />
+        <Row label="输出 Token" value={outputTokenValue(reasoningTokens, outputTokens)} tone={TOKEN_COLORS.output} />
+        {cachedInputTokens > 0 ? <Row label="缓存读取 Token" value={formatNumber(cachedInputTokens)} tone={TOKEN_COLORS.cacheRead} /> : null}
+        <Row label="总 Token" value={formatNumber(totalTokens)} tone={TOKEN_COLORS.total} strong />
       </div>
     </div>
   );
