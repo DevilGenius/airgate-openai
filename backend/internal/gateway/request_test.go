@@ -315,6 +315,24 @@ func TestNormalizeResponsesInputPreservesChatImageURL(t *testing.T) {
 	}
 }
 
+func TestNormalizeResponsesInputMovesSystemInputToInstructions(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.4","instructions":"base","input":[{"role":"system","content":[{"type":"input_text","text":"rule one"},{"type":"input_text","text":"rule two"}]},{"type":"metadata","role":"system","content":"rule three"},{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}`)
+	result := normalizeResponsesInput(body, "/v1/responses")
+
+	if got := gjson.GetBytes(result, "instructions").String(); got != "rule one\n\nrule two\n\nrule three\n\nbase" {
+		t.Fatalf("instructions = %q; body=%s", got, result)
+	}
+	if got := gjson.GetBytes(result, "input.#").Int(); got != 1 {
+		t.Fatalf("input length = %d, want 1; body=%s", got, result)
+	}
+	if got := gjson.GetBytes(result, "input.0.role").String(); got != "user" {
+		t.Fatalf("remaining role = %q, want user; body=%s", got, result)
+	}
+	if got := gjson.GetBytes(result, "input.0.content.0.text").String(); got != "hi" {
+		t.Fatalf("remaining user text = %q, want hi; body=%s", got, result)
+	}
+}
+
 func TestPreprocessRequestBody_ForcesResponsesStoreFalse(t *testing.T) {
 	cases := []struct {
 		name string

@@ -247,6 +247,9 @@ func preserveOpenAIConversationImages(body []byte) []byte {
 // 同时处理一种历史兼容场景：客户端把 Chat Completions 风格的 messages 字段发到
 // /v1/responses，本函数把 messages 翻译成 Responses API 的 input 列表（复用
 // convertChatMessagesToResponsesInput）。
+//
+// 对完整 input 列表中的 system item，沿用 Chat Completions 转换策略：提取为
+// top-level instructions，避免上游 Codex/Responses 兼容层拒绝 system message。
 func normalizeResponsesInput(body []byte, reqPath string) []byte {
 	if !isResponsesRequestPath(reqPath) {
 		return body
@@ -276,7 +279,12 @@ func normalizeResponsesInput(body []byte, reqPath string) []byte {
 		return body
 	}
 
-	// 情况 2：没有 input 但有 Chat Completions 风格的 messages → 翻译
+	// 情况 2：input 已是完整列表 → system message 提升到 instructions
+	if inputNode.Exists() && inputNode.IsArray() {
+		return normalizeResponsesSystemInputMessages(body, inputNode)
+	}
+
+	// 情况 3：没有 input 但有 Chat Completions 风格的 messages → 翻译
 	if !inputNode.Exists() {
 		if msgs := gjson.GetBytes(body, "messages"); msgs.Exists() && msgs.IsArray() {
 			input, instructions := convertChatMessagesToResponsesInput(msgs.Array())
@@ -304,6 +312,73 @@ func normalizeResponsesInput(body []byte, reqPath string) []byte {
 	}
 
 	return body
+}
+
+func normalizeResponsesSystemInputMessages(body []byte, inputNode gjson.Result) []byte {
+	var kept []json.RawMessage
+	var instructionsParts []string
+	changed := false
+
+	for _, item := range inputNode.Array() {
+		role := strings.ToLower(strings.TrimSpace(item.Get("role").String()))
+		if role == "system" {
+			if text := extractResponsesInputMessageText(item); text != "" {
+				instructionsParts = append(instructionsParts, text)
+			}
+			changed = true
+			continue
+		}
+		kept = append(kept, json.RawMessage(item.Raw))
+	}
+
+	if !changed {
+		return body
+	}
+
+	encoded, err := json.Marshal(kept)
+	if err != nil {
+		return body
+	}
+	result, err := sjson.SetRawBytes(body, "input", encoded)
+	if err != nil {
+		return body
+	}
+
+	if len(instructionsParts) == 0 {
+		return result
+	}
+	instructions := strings.Join(instructionsParts, "\n\n")
+	if existing := strings.TrimSpace(gjson.GetBytes(result, "instructions").String()); existing != "" {
+		instructions = instructions + "\n\n" + existing
+	}
+	if modified, err := sjson.SetBytes(result, "instructions", instructions); err == nil {
+		return modified
+	}
+	return result
+}
+
+func extractResponsesInputMessageText(msg gjson.Result) string {
+	content := msg.Get("content")
+	if !content.Exists() {
+		return ""
+	}
+	if content.Type == gjson.String {
+		return content.String()
+	}
+	if !content.IsArray() {
+		return ""
+	}
+
+	var parts []string
+	for _, part := range content.Array() {
+		switch part.Get("type").String() {
+		case "input_text", "text", "output_text":
+			if text := part.Get("text").String(); text != "" {
+				parts = append(parts, text)
+			}
+		}
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 func isResponsesRequestPath(reqPath string) bool {
