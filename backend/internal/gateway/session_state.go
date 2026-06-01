@@ -319,6 +319,7 @@ func resolveOpenAISession(headers http.Header, body []byte, accountID int64) ope
 
 	if state := getSessionState(sessionKey); state != nil {
 		resolution.FromStoredState = true
+		sameAccount := state.AccountID == 0 || state.AccountID == accountID
 		if resolution.SessionID == "" {
 			resolution.SessionID = state.SessionID
 		}
@@ -328,10 +329,12 @@ func resolveOpenAISession(headers http.Header, body []byte, accountID int64) ope
 		if resolution.PromptCacheKey == "" {
 			resolution.PromptCacheKey = state.PromptCacheKey
 		}
-		if previousResponseID == "" && (state.AccountID == 0 || state.AccountID == accountID) {
+		if previousResponseID == "" && sameAccount {
 			previousResponseID = state.LastResponseID
 		}
-		resolution.LastTurnState = state.LastTurnState
+		if sameAccount {
+			resolution.LastTurnState = state.LastTurnState
+		}
 		if resolution.SessionSource == "" {
 			resolution.SessionSource = "stored_session_state"
 		}
@@ -574,6 +577,12 @@ func updateSessionStateFromRequest(resolution openAISessionResolution, accountID
 			state.PromptCacheKey = pck
 		}
 		if accountID > 0 {
+			if state.AccountID > 0 && state.AccountID != accountID {
+				state.LastResponseID = ""
+				state.LastResponseAt = time.Time{}
+				state.LastTurnState = ""
+				state.LastTurnStateAt = time.Time{}
+			}
 			state.AccountID = accountID
 		}
 	})

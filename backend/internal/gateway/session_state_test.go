@@ -44,14 +44,47 @@ func TestResolveOpenAISessionIgnoresStoredResponseFromDifferentAccount(t *testin
 		SessionID:      "pcache_account_mismatch",
 		AccountID:      301,
 		LastResponseID: "resp_wrong_account",
+		LastTurnState:  "turn_state_wrong_account",
 	})
 
 	resolution := resolveOpenAISession(http.Header{}, []byte(`{"prompt_cache_key":"pcache_account_mismatch"}`), 302)
 	if resolution.PreviousRespID != "" {
 		t.Fatalf("expected previous response id to be ignored across accounts, got %q", resolution.PreviousRespID)
 	}
+	if resolution.LastTurnState != "" {
+		t.Fatalf("expected turn state to be ignored across accounts, got %q", resolution.LastTurnState)
+	}
 	if !resolution.FromStoredState {
 		t.Fatalf("expected stored state to still be detected")
+	}
+}
+
+func TestUpdateSessionStateFromRequestClearsContinuationStateOnAccountChange(t *testing.T) {
+	sessionStateStore.Delete("pcache:pcache_account_change")
+	upsertSessionState(&openAISessionState{
+		SessionKey:     "pcache:pcache_account_change",
+		PromptCacheKey: "pcache_account_change",
+		SessionID:      "pcache_account_change",
+		AccountID:      401,
+		LastResponseID: "resp_old",
+		LastTurnState:  "turn_state_old",
+	})
+
+	resolution := resolveOpenAISession(http.Header{}, []byte(`{"prompt_cache_key":"pcache_account_change"}`), 402)
+	updateSessionStateFromRequest(resolution, 402)
+
+	state := getSessionState("pcache:pcache_account_change")
+	if state == nil {
+		t.Fatalf("expected stored state")
+	}
+	if state.AccountID != 402 {
+		t.Fatalf("AccountID = %d, want 402", state.AccountID)
+	}
+	if state.LastResponseID != "" {
+		t.Fatalf("expected LastResponseID to be cleared, got %q", state.LastResponseID)
+	}
+	if state.LastTurnState != "" {
+		t.Fatalf("expected LastTurnState to be cleared, got %q", state.LastTurnState)
 	}
 }
 

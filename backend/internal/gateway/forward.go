@@ -827,19 +827,22 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		statusCode := http.StatusBadGateway
 		message := result.Err.Error()
 		var retryAfter time.Duration
+		code := kind.String()
 		if errors.As(result.Err, &failure) {
 			kind = failure.outcomeKind()
 			statusCode = failure.StatusCode
 			message = failure.Message
 			retryAfter = failure.RetryAfter
+			code = failure.codeOrKind()
 		}
 		streamOutputStarted := (lastChatWriter != nil && lastChatWriter.wrote) ||
 			(lastSSEHandler != nil && lastSSEHandler.wrote)
 		// 只有已经向客户端写过可见输出时才视为流中断；首包前错误仍交给 Core failover。
 		if req.Stream && streamOutputStarted && kind != sdk.OutcomeClientError {
 			kind = sdk.OutcomeStreamAborted
+			code = kind.String()
 		}
-		errBody := openAIErrorJSON(openAIErrorTypeForStatus(statusCode), kind.String(), message)
+		errBody := openAIErrorJSON(openAIErrorTypeForStatus(statusCode), code, message)
 		logger.Warn("upstream_request_non_2xx",
 			sdk.LogFieldAccountID, account.ID,
 			sdk.LogFieldModel, req.Model,

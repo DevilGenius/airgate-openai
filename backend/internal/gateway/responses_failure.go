@@ -76,6 +76,16 @@ func (e *responsesFailureError) isContinuationAnchorError() bool {
 	return e != nil && e.Kind == responsesFailureKindContinuationAnchor
 }
 
+func (e *responsesFailureError) codeOrKind() string {
+	if e == nil {
+		return ""
+	}
+	if strings.TrimSpace(e.Code) != "" {
+		return e.Code
+	}
+	return string(e.Kind)
+}
+
 func classifyResponsesFailure(data []byte) *responsesFailureError {
 	eventType := gjson.GetBytes(data, "type").String()
 	if eventType != "response.failed" {
@@ -197,8 +207,17 @@ func classifyResponsesError(errType, errCode, msg string) *responsesFailureError
 	case containsAny(errType, errCode, msg, "previous_response_not_found", "previous response", "response not found"):
 		return &responsesFailureError{
 			Kind:               responsesFailureKindContinuationAnchor,
-			StatusCode:         http.StatusConflict,
+			StatusCode:         http.StatusBadRequest,
 			AnthropicErrorType: "invalid_request_error",
+			Code:               "previous_response_not_found",
+			Message:            msg,
+		}
+	case isEncryptedContentVerificationError(errType, errCode, msg):
+		return &responsesFailureError{
+			Kind:               responsesFailureKindContinuationAnchor,
+			StatusCode:         http.StatusBadRequest,
+			AnthropicErrorType: "invalid_request_error",
+			Code:               "invalid_encrypted_content",
 			Message:            msg,
 		}
 	case containsAny(errType, errCode, msg, "context_length", "context window", "max_tokens", "max_input_tokens", "max_output_tokens", "token limit", "too many tokens"):
@@ -246,6 +265,25 @@ func classifyResponsesError(errType, errCode, msg string) *responsesFailureError
 			Message:            msg,
 		}
 	}
+}
+
+func isEncryptedContentVerificationError(parts ...string) bool {
+	combined := strings.ToLower(strings.Join(parts, " "))
+	if combined == "" {
+		return false
+	}
+	if strings.Contains(combined, "invalid_encrypted_content") {
+		return true
+	}
+	if strings.Contains(combined, "encrypted_content verify failed") ||
+		strings.Contains(combined, "encrypted content verify failed") ||
+		strings.Contains(combined, "encrypted content verification failed") {
+		return true
+	}
+	return strings.Contains(combined, "encrypted content") &&
+		(strings.Contains(combined, "could not be verified") ||
+			strings.Contains(combined, "couldn't be verified") ||
+			strings.Contains(combined, "cannot be verified"))
 }
 
 // isSafetyRejectionText 用关键词组合识别"明确的安全拒绝"。

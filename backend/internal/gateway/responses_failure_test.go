@@ -84,8 +84,60 @@ func TestClassifyResponsesFailureContinuationAnchor(t *testing.T) {
 	if failure.Kind != responsesFailureKindContinuationAnchor {
 		t.Fatalf("unexpected kind %q", failure.Kind)
 	}
+	if failure.StatusCode != http.StatusBadRequest {
+		t.Fatalf("unexpected status %d", failure.StatusCode)
+	}
+	if failure.Code != "previous_response_not_found" {
+		t.Fatalf("unexpected code %q", failure.Code)
+	}
 	if !failure.isContinuationAnchorError() {
 		t.Fatalf("expected continuation anchor error")
+	}
+}
+
+func TestClassifyResponsesFailureEncryptedContentVerifyFailed(t *testing.T) {
+	raw := []byte(`{"type":"response.failed","response":{"error":{"type":"invalid_request_error","message":"encrypted content verify failed"}}}`)
+	failure := classifyResponsesFailure(raw)
+	if failure == nil {
+		t.Fatalf("expected failure")
+	}
+	if failure.Kind != responsesFailureKindContinuationAnchor {
+		t.Fatalf("unexpected kind %q", failure.Kind)
+	}
+	if failure.StatusCode != http.StatusBadRequest {
+		t.Fatalf("unexpected status %d", failure.StatusCode)
+	}
+	if failure.Code != "invalid_encrypted_content" {
+		t.Fatalf("unexpected code %q", failure.Code)
+	}
+	if kind := failure.outcomeKind(); kind != sdk.OutcomeClientError {
+		t.Fatalf("expected OutcomeClientError, got %v", kind)
+	}
+}
+
+func TestClassifyResponsesFailureInvalidEncryptedContentVariants(t *testing.T) {
+	raw := []byte(`{"type":"response.failed","response":{"error":{"type":"invalid_request_error","code":"invalid_encrypted_content","message":"The encrypted content could not be verified."}}}`)
+	failure := classifyResponsesFailure(raw)
+	if failure == nil {
+		t.Fatalf("expected failure")
+	}
+	if failure.Kind != responsesFailureKindContinuationAnchor {
+		t.Fatalf("unexpected kind %q", failure.Kind)
+	}
+	if failure.Code != "invalid_encrypted_content" {
+		t.Fatalf("unexpected code %q", failure.Code)
+	}
+
+	wsRaw := []byte(`{"type":"error","error":{"type":"invalid_request_error","message":"The encrypted content could not be verified."}}`)
+	wsFailure := classifyWSErrorEvent(wsRaw)
+	if wsFailure == nil {
+		t.Fatalf("expected websocket failure")
+	}
+	if wsFailure.Kind != responsesFailureKindContinuationAnchor {
+		t.Fatalf("unexpected websocket kind %q", wsFailure.Kind)
+	}
+	if wsFailure.Code != "invalid_encrypted_content" {
+		t.Fatalf("unexpected websocket code %q", wsFailure.Code)
 	}
 }
 

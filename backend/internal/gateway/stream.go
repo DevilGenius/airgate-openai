@@ -147,10 +147,12 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 		var failure *responsesFailureError
 		if errors.As(streamErr, &failure) {
 			kind := failure.outcomeKind()
+			code := failure.codeOrKind()
 			if streamStarted && kind != sdk.OutcomeClientError {
 				kind = sdk.OutcomeStreamAborted
+				code = kind.String()
 			}
-			errBody := openAIErrorJSON(openAIErrorTypeForStatus(failure.StatusCode), string(failure.Kind), failure.Message)
+			errBody := openAIErrorJSON(openAIErrorTypeForStatus(failure.StatusCode), code, failure.Message)
 			return sdk.ForwardOutcome{
 				Kind:       kind,
 				Upstream:   sdk.UpstreamResponse{StatusCode: failure.StatusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
