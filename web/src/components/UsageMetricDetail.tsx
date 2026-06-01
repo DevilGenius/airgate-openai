@@ -15,6 +15,8 @@ interface UsageRecordLike {
 const TOKEN_COLORS = {
   cacheRead: 'var(--ag-usage-token-cache-read)',
   image: 'var(--ag-text)',
+  imageInputText: 'var(--ag-usage-token-image-input-text)',
+  imageInputValue: 'var(--ag-usage-token-image-input-value)',
   input: 'var(--ag-usage-token-input)',
   output: 'var(--ag-usage-token-output)',
   reasoning: 'var(--ag-usage-token-reasoning)',
@@ -95,8 +97,18 @@ const reasoningValueMetaStyle: CSSProperties = {
   color: TOKEN_COLORS.reasoning,
 };
 
+const imageInputTextMetaStyle: CSSProperties = {
+  ...inlineValueMetaStyle,
+  color: TOKEN_COLORS.imageInputText,
+};
+
 const inlineValueNumberStyle: CSSProperties = {
   flexShrink: 0,
+};
+
+const imageInputValueNumberStyle: CSSProperties = {
+  ...inlineValueNumberStyle,
+  color: TOKEN_COLORS.imageInputValue,
 };
 
 const valueStyle: CSSProperties = {
@@ -201,8 +213,8 @@ function inputTokenValue(textInputTokens: number, imageInputTokens: number, inpu
   if (imageInputTokens <= 0) return formatNumber(inputTokens);
   return (
     <span style={inlineValueStyle}>
-      <span style={inlineValueMetaStyle}>(文本 {formatNumber(textInputTokens)})</span>
-      <span style={inlineValueNumberStyle}>{formatNumber(inputTokens)}</span>
+      <span style={imageInputTextMetaStyle}>(文本 {formatNumber(textInputTokens)})</span>
+      <span style={imageInputValueNumberStyle}>{formatNumber(inputTokens)}</span>
     </span>
   );
 }
