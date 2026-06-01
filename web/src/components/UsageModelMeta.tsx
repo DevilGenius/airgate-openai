@@ -20,6 +20,8 @@ const EFFORT_COLORS: Record<string, string> = {
 };
 const IMAGE_SIZE_COLOR = 'rgb(148,163,184)';
 const FAST_SERVICE_TIER_COLOR = 'rgb(168, 85, 247)';
+const IMAGE_TIER_1K_MAX_PIXELS = 1536 * 1024;
+const IMAGE_TIER_2K_MAX_PIXELS = 2048 * 2048;
 const FAST_INDICATOR_STYLE: CSSProperties = {
   position: 'absolute',
   left: '0.375rem',
@@ -43,9 +45,12 @@ function imageSizeDotColor(imageSize: string): string {
   if (/\b1k\b/.test(normalized)) return EFFORT_LOW_COLOR;
 
   const dimensions = normalized.match(/\d+(?:\.\d+)?/g)?.map(Number).filter(Number.isFinite) ?? [];
-  const maxDimension = Math.max(0, ...dimensions);
-  if (maxDimension > 2048) return EFFORT_HIGH_COLOR;
-  if (maxDimension > 1536) return EFFORT_MEDIUM_COLOR;
+  const [width, height] = dimensions;
+  if (width && height) {
+    const pixels = width * height;
+    if (pixels > IMAGE_TIER_2K_MAX_PIXELS) return EFFORT_HIGH_COLOR;
+    if (pixels > IMAGE_TIER_1K_MAX_PIXELS) return EFFORT_MEDIUM_COLOR;
+  }
   return EFFORT_LOW_COLOR;
 }
 

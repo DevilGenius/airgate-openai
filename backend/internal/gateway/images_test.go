@@ -674,15 +674,16 @@ func TestImagePriceForSize(t *testing.T) {
 		size string
 		want float64
 	}{
-		// 1K (≤1536)
+		// 1K
 		{"1024x1024", 0.10},
 		{"1536x1024", 0.10},
 		{"1024x1536", 0.10},
-		// 2K (1537-2048)
+		// 2K
 		{"2048x2048", 0.20},
 		{"2048x1152", 0.20},
 		{"1152x2048", 0.20},
-		// 4K (>2048)
+		{"2560x1440", 0.20},
+		// 4K
 		{"3840x2160", 0.40},
 		{"2160x3840", 0.40},
 		// fallback 1K
@@ -693,6 +694,32 @@ func TestImagePriceForSize(t *testing.T) {
 	for _, tc := range cases {
 		if got := imagePriceForSize(tc.size); !almostEqual(got, tc.want, 1e-9) {
 			t.Errorf("imagePriceForSize(%q) = %v, want %v", tc.size, got, tc.want)
+		}
+	}
+}
+
+func TestImageFallbackSizeFor4K(t *testing.T) {
+	cases := []struct {
+		size string
+		want string
+		ok   bool
+	}{
+		{"3840x2160", "2560x1440", true},
+		{"2160x3840", "1440x2560", true},
+		{"4096x2304", "2560x1440", true},
+		{"3840x3840", "2048x2048", true},
+		{"2048x1152", "", false},
+		{"auto", "", false},
+	}
+	for _, tc := range cases {
+		got, ok := imageFallbackSizeFor4K(tc.size)
+		if ok != tc.ok || got != tc.want {
+			t.Fatalf("imageFallbackSizeFor4K(%q) = (%q, %v), want (%q, %v)", tc.size, got, ok, tc.want, tc.ok)
+		}
+		if ok {
+			if tier, _, tierOK := imageTierPriceForSize(got); !tierOK || tier != "2k" {
+				t.Fatalf("fallback size %q tier = (%q, %v), want 2k", got, tier, tierOK)
+			}
 		}
 	}
 }
@@ -708,6 +735,7 @@ func TestFillUsageCostPerImageBySize(t *testing.T) {
 		{"1K single", "1024x1024", 1, "0.1"},
 		{"1K triple", "1536x1024", 3, "0.1"},
 		{"2K single", "2048x2048", 1, "0.2"},
+		{"2K qhd", "2560x1440", 1, "0.2"},
 		{"4K double", "3840x2160", 2, "0.4"},
 		{"auto fallback to 1K", "auto", 4, "0.1"},
 		{"zero images skipped", "1024x1024", 0, ""},
@@ -1168,6 +1196,20 @@ func TestBuildImagesToolCreateMsg_ClampsOversizedSize(t *testing.T) {
 	}
 	if got := gjson.GetBytes(msg, "tools.0.quality").String(); got != "medium" {
 		t.Errorf("tools[0].quality = %q, want medium", got)
+	}
+}
+
+func TestBuildImagesToolCreateMsg_QHDRemains2KQuality(t *testing.T) {
+	body := []byte(`{"model":"gpt-image-1.5","prompt":"a shiba","n":1,"size":"2560x1440"}`)
+	msg, _, _, err := buildImagesToolCreateMsg(body, "application/json", false, openAISessionResolution{})
+	if err != nil {
+		t.Fatalf("buildImagesToolCreateMsg returned err: %v", err)
+	}
+	if got := gjson.GetBytes(msg, "tools.0.size").String(); got != "2560x1440" {
+		t.Fatalf("tools[0].size = %q, want 2560x1440", got)
+	}
+	if got := gjson.GetBytes(msg, "tools.0.quality").String(); got != "medium" {
+		t.Fatalf("tools[0].quality = %q, want medium", got)
 	}
 }
 
@@ -2249,6 +2291,166 @@ func TestForwardImagesViaResponsesTool_InvalidSize(t *testing.T) {
 	}
 	if !strings.Contains(string(outcome.Upstream.Body), "16") {
 		t.Errorf("error body should mention the 16-multiple constraint: %s", outcome.Upstream.Body)
+	}
+}
+
+func TestForwardAPIKeyImages_Downgrades4KTo2KAndRetriesTwice(t *testing.T) {
+	result := testPNGBase64(1, 1, func(x, y int) color.RGBA {
+		return color.RGBA{R: 10, G: 20, B: 30, A: 255}
+	})
+	var sizes []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		sizes = append(sizes, gjson.GetBytes(raw, "size").String())
+		w.Header().Set("Content-Type", "application/json")
+		if len(sizes) < 3 {
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = fmt.Fprint(w, `{"error":{"message":"temporary image failure"}}`)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"size":"3840x2160","data":[{"b64_json":%q}]}`, result)
+	}))
+	defer srv.Close()
+
+	g := &OpenAIGateway{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	req := &sdk.ForwardRequest{
+		Account: &sdk.Account{ID: 1, Credentials: map[string]string{
+			"api_key":  "sk-test",
+			"base_url": srv.URL,
+		}},
+		Model: "gpt-image-2",
+		Body:  []byte(`{"model":"gpt-image-2","prompt":"a shiba","n":1,"size":"3840x2160"}`),
+		Headers: http.Header{
+			"X-Forwarded-Path":   []string{"/v1/images/generations"},
+			"X-Forwarded-Method": []string{http.MethodPost},
+			"Content-Type":       []string{"application/json"},
+		},
+	}
+
+	outcome, err := g.forwardAPIKey(t.Context(), req, "")
+	if err != nil {
+		t.Fatalf("forwardAPIKey returned err: %v", err)
+	}
+	if outcome.Kind != sdk.OutcomeSuccess {
+		t.Fatalf("Kind = %v, want Success; reason=%s", outcome.Kind, outcome.Reason)
+	}
+	if got, want := strings.Join(sizes, ","), "3840x2160,2560x1440,2560x1440"; got != want {
+		t.Fatalf("attempt sizes = %q, want %q", got, want)
+	}
+	if got := gjson.GetBytes(outcome.Upstream.Body, "size").String(); got != "2560x1440" {
+		t.Fatalf("response size = %q, want 2560x1440", got)
+	}
+	if got := usageImageUnitPrice(outcome.Usage); got != "0.2" {
+		t.Fatalf("image unit_price = %q, want 0.2", got)
+	}
+}
+
+func TestForwardImagesViaResponsesTool_Downgrades4KTo2KAfterFailure(t *testing.T) {
+	tinyResult := strings.TrimPrefix(testPNGDataURL(1, 1, func(x, y int) color.RGBA {
+		return color.RGBA{R: 120, G: 90, B: 60, A: 255}
+	}), "data:image/png;base64,")
+
+	var sizes []string
+	var handlerErr string
+	upgrader := websocket.Upgrader{ReadBufferSize: 1024, WriteBufferSize: 1024}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			handlerErr = err.Error()
+			return
+		}
+		defer func() { _ = conn.Close() }()
+
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			handlerErr = err.Error()
+			return
+		}
+		sizes = append(sizes, gjson.GetBytes(msg, "tools.0.size").String())
+		if len(sizes) == 1 {
+			_ = conn.WriteJSON(map[string]any{
+				"type": "response.failed",
+				"response": map[string]any{
+					"id":    "resp_fail",
+					"model": "gpt-5.4",
+					"error": map[string]any{
+						"type":    "server_error",
+						"message": "temporary 4k image failure",
+					},
+				},
+			})
+			return
+		}
+
+		_ = conn.WriteJSON(map[string]any{
+			"type": "response.created",
+			"response": map[string]any{
+				"id":    "resp_2",
+				"model": "gpt-5.4",
+				"tools": []map[string]any{{"type": "image_generation", "model": "gpt-image-2"}},
+			},
+		})
+		_ = conn.WriteJSON(map[string]any{
+			"type": "response.output_item.done",
+			"item": map[string]any{
+				"type":          "image_generation_call",
+				"id":            "call_2",
+				"status":        "completed",
+				"result":        tinyResult,
+				"size":          "3840x2160",
+				"quality":       "medium",
+				"output_format": "png",
+				"model":         "gpt-image-2",
+			},
+		})
+		_ = conn.WriteJSON(map[string]any{
+			"type": "response.completed",
+			"response": map[string]any{
+				"id":          "resp_2",
+				"model":       "gpt-5.4",
+				"usage":       map[string]any{"input_tokens": 12, "output_tokens": 34},
+				"tool_usage":  map[string]any{"image_gen": map[string]any{"input_tokens": 0, "output_tokens": 0}},
+				"output":      []map[string]any{{"type": "image_generation_call", "id": "call_2"}},
+				"stop_reason": "stop",
+			},
+		})
+	}))
+	defer server.Close()
+
+	g := &OpenAIGateway{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	req := &sdk.ForwardRequest{
+		Account: &sdk.Account{ID: 1, Credentials: map[string]string{
+			"access_token":       "tok",
+			"chatgpt_account_id": "acct-123",
+		}},
+		Body: []byte(`{"model":"gpt-image-2","prompt":"a shiba","n":1,"size":"3840x2160"}`),
+		Headers: http.Header{
+			"X-Forwarded-Path":   []string{"/v1/images/generations"},
+			"X-Forwarded-Method": []string{http.MethodPost},
+			"Content-Type":       []string{"application/json"},
+		},
+		Writer: httptest.NewRecorder(),
+	}
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	outcome, err := g.forwardImagesViaResponsesToolWithURL(t.Context(), req, wsURL)
+	if err != nil {
+		t.Fatalf("forwardImagesViaResponsesToolWithURL returned err: %v", err)
+	}
+	if handlerErr != "" {
+		t.Fatalf("websocket handler returned err: %s", handlerErr)
+	}
+	if outcome.Kind != sdk.OutcomeSuccess {
+		t.Fatalf("Kind = %v, want Success; reason=%s", outcome.Kind, outcome.Reason)
+	}
+	if got, want := strings.Join(sizes, ","), "3840x2160,2560x1440"; got != want {
+		t.Fatalf("attempt sizes = %q, want %q", got, want)
+	}
+	if got := gjson.GetBytes(outcome.Upstream.Body, "size").String(); got != "2560x1440" {
+		t.Fatalf("response size = %q, want 2560x1440", got)
+	}
+	if got := usageImageUnitPrice(outcome.Usage); got != "0.2" {
+		t.Fatalf("image unit_price = %q, want 0.2", got)
 	}
 }
 

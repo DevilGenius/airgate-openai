@@ -101,6 +101,134 @@ func normalizeImageQualityDefaultMedium(quality string) string {
 	return q
 }
 
+const (
+	imageFallback2KAttempts = 2
+)
+
+type imageSizeAttempt struct {
+	Size       string
+	Downgrade  bool
+	RetryIndex int
+}
+
+func imageSizeAttemptsForRequest(size string) []imageSizeAttempt {
+	attempts := []imageSizeAttempt{{}}
+	fallbackSize, ok := imageFallbackSizeFor4K(size)
+	if !ok {
+		return attempts
+	}
+	for i := 1; i <= imageFallback2KAttempts; i++ {
+		attempts = append(attempts, imageSizeAttempt{Size: fallbackSize, Downgrade: true, RetryIndex: i})
+	}
+	return attempts
+}
+
+func imagesResponseOptionsForAttempt(base imagesResponseOptions, attempt imageSizeAttempt) imagesResponseOptions {
+	if attempt.Size == "" {
+		return base
+	}
+	base.BillingSize = attempt.Size
+	base.RequestSize = attempt.Size
+	base.ForceBillingSize = true
+	return base
+}
+
+func imagesRequestBodyForAttempt(body []byte, contentType string, isEdit bool, attempt imageSizeAttempt) ([]byte, string, error) {
+	if attempt.Size == "" {
+		return body, contentType, nil
+	}
+	return setImagesRequestSize(body, contentType, isEdit, attempt.Size)
+}
+
+func setImagesRequestSize(body []byte, contentType string, isEdit bool, size string) ([]byte, string, error) {
+	size = strings.TrimSpace(size)
+	if size == "" {
+		return body, contentType, nil
+	}
+	if isEdit && isMultipartContentType(contentType) {
+		return setMultipartTextField(body, contentType, "size", size)
+	}
+	updated, err := sjson.SetBytes(body, "size", size)
+	if err != nil {
+		return nil, "", err
+	}
+	return updated, contentType, nil
+}
+
+func setMultipartTextField(body []byte, contentType, fieldName, value string) ([]byte, string, error) {
+	_, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return nil, "", fmt.Errorf("multipart content-type 解析失败: %w", err)
+	}
+	boundary := params["boundary"]
+	if boundary == "" {
+		return nil, "", fmt.Errorf("multipart content-type 缺少 boundary")
+	}
+
+	reader := multipart.NewReader(bytes.NewReader(body), boundary)
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			_ = writer.Close()
+			return nil, "", fmt.Errorf("multipart 读取失败: %w", err)
+		}
+		name := part.FormName()
+		data, readErr := io.ReadAll(part)
+		header := textproto.MIMEHeader{}
+		for key, values := range part.Header {
+			header[key] = append([]string(nil), values...)
+		}
+		_ = part.Close()
+		if readErr != nil {
+			_ = writer.Close()
+			return nil, "", fmt.Errorf("读取 multipart part %q 失败: %w", name, readErr)
+		}
+		if name == fieldName {
+			continue
+		}
+		dst, err := writer.CreatePart(header)
+		if err != nil {
+			_ = writer.Close()
+			return nil, "", err
+		}
+		if _, err := dst.Write(data); err != nil {
+			_ = writer.Close()
+			return nil, "", err
+		}
+	}
+	if err := writer.WriteField(fieldName, value); err != nil {
+		_ = writer.Close()
+		return nil, "", err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, "", err
+	}
+	return buf.Bytes(), writer.FormDataContentType(), nil
+}
+
+func shouldRetryImageFallback(outcome sdk.ForwardOutcome, err error) bool {
+	if outcome.Kind == sdk.OutcomeSuccess {
+		return false
+	}
+	switch outcome.Kind {
+	case sdk.OutcomeAccountDead, sdk.OutcomeAccountUnavailable:
+		return false
+	}
+	reason := strings.Join([]string{
+		outcome.Reason,
+		string(outcome.Upstream.Body),
+	}, " ")
+	if err != nil {
+		reason += " " + err.Error()
+	}
+	return !isSafetyRejectionText(reason)
+}
+
 func calculateGPTImageOutputTokensForImages(modelName, size, quality string, numImages int) int {
 	if numImages <= 0 || !isGPTImageTwoModel(modelName) {
 		return 0
@@ -981,32 +1109,25 @@ func imageActualSizeFromBase64(b64 string) (string, bool) {
 }
 
 // imagePriceForSize 把生成的 size 映射成 USD 单价（1K/2K/4K 三档）。
-// 阈值按最长边：≤1536=1K, ≤2048=2K, 否则 4K。当前固定档位价格：
+// 分档按官方示例尺寸的总像素范围：
 //
-//	1K  → $0.10/张  (1024×1024 / 1536×1024 / 1024×1536)
-//	2K  → $0.20/张  (2048×2048 / 2048×1152 / 1152×2048)
-//	4K  → $0.40/张  (3840×2160 / 2160×3840)
+//	  1K: 到 1536x1024 / 1024x1536
+//	  2K: 到 2048x2048
+//	  4K: 更高分辨率（如 3840x2160 / 2160x3840）
+//
+//		1K  → $0.10/张  (1024×1024 / 1536×1024 / 1024×1536)
+//		2K  → $0.20/张  (2048×2048 / 2048×1152 / 2560×1440)
+//		4K  → $0.40/张  (3840×2160 / 2160×3840)
 //
 // size = "auto" 或为空（上游用默认 1024²）按 1K 计费。
 // 跟 plugin.yaml 里 ImagePrice 字段解耦——OAuth → image_generation tool 路径
 // 走这一档分档表，不读 spec.ImagePrice。
 func imagePriceForSize(size string) float64 {
-	width, height, ok := parseImageSize(size)
+	_, price, ok := imageTierPriceForSize(size)
 	if !ok {
 		return 0.10
 	}
-	longest := width
-	if height > longest {
-		longest = height
-	}
-	switch {
-	case longest <= 1536:
-		return 0.10
-	case longest <= 2048:
-		return 0.20
-	default:
-		return 0.40
-	}
+	return price
 }
 
 // validateImageSize 在 OAuth → image_generation tool 路径上预校验 size，
@@ -1603,66 +1724,205 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 		"size", imgReq.Size,
 		"n", imgReq.N,
 	)
-	createMsg, n, inputEstimate, err := buildImagesToolCreateMsgWithUsage(req.Body, contentType, isEdit, session)
-	if err != nil {
-		body := jsonError(err.Error())
-		return sdk.ForwardOutcome{
-			Kind: sdk.OutcomeClientError,
-			Upstream: sdk.UpstreamResponse{
-				StatusCode: http.StatusBadRequest,
-				Headers:    http.Header{"Content-Type": []string{"application/json"}},
-				Body:       body,
-			},
-			Reason:   err.Error(),
-			Duration: time.Since(start),
-		}, nil
-	}
+	var sseKA *ssePingKeepAlive
+	var handler *imagesSilentHandler
+	var wsResult WSResult
+	var inputEstimate imagesInputTokenEstimate
+	var n int
+	downgradedBillingSize := ""
+	elapsed := time.Since(start)
+	attempts := imageSizeAttemptsForRequest(imgReq.Size)
+	baseBody := append([]byte(nil), req.Body...)
+	baseContentType := contentType
+	for idx, attempt := range attempts {
+		attemptBody, attemptContentType, err := imagesRequestBodyForAttempt(baseBody, baseContentType, isEdit, attempt)
+		if err != nil {
+			body := jsonError(err.Error())
+			return sdk.ForwardOutcome{
+				Kind: sdk.OutcomeClientError,
+				Upstream: sdk.UpstreamResponse{
+					StatusCode: http.StatusBadRequest,
+					Headers:    http.Header{"Content-Type": []string{"application/json"}},
+					Body:       body,
+				},
+				Reason:   err.Error(),
+				Duration: time.Since(start),
+			}, nil
+		}
+		attemptReq, err := parseImagesRequest(attemptBody, attemptContentType, isEdit)
+		if err == nil {
+			err = validateImageSize(attemptReq.Size, attemptReq.Model)
+		}
+		if err != nil {
+			body := jsonError(err.Error())
+			return sdk.ForwardOutcome{
+				Kind: sdk.OutcomeClientError,
+				Upstream: sdk.UpstreamResponse{
+					StatusCode: http.StatusBadRequest,
+					Headers:    http.Header{"Content-Type": []string{"application/json"}},
+					Body:       body,
+				},
+				Reason:   err.Error(),
+				Duration: time.Since(start),
+			}, nil
+		}
+		createMsg, attemptN, attemptInputEstimate, err := buildImagesToolCreateMsgWithUsage(attemptBody, attemptContentType, isEdit, session)
+		if err != nil {
+			body := jsonError(err.Error())
+			return sdk.ForwardOutcome{
+				Kind: sdk.OutcomeClientError,
+				Upstream: sdk.UpstreamResponse{
+					StatusCode: http.StatusBadRequest,
+					Headers:    http.Header{"Content-Type": []string{"application/json"}},
+					Body:       body,
+				},
+				Reason:   err.Error(),
+				Duration: time.Since(start),
+			}, nil
+		}
 
-	cfg := WSConfig{
-		URL:            targetURL,
-		Token:          account.Credentials["access_token"],
-		AccountID:      account.Credentials["chatgpt_account_id"],
-		ProxyURL:       account.ProxyURL,
-		SessionID:      session.SessionID,
-		ConversationID: session.ConversationID,
-		TurnState:      session.LastTurnState,
-		Originator:     req.Headers.Get("originator"),
-		UserAgent:      req.Headers.Get("User-Agent"),
-	}
-	conn, wsResp, err := DialWebSocket(cfg)
-	if err != nil {
-		if wsResp != nil {
-			wsBody := openAIErrorJSON(openAIErrorTypeForStatus(wsResp.StatusCode), "", err.Error())
-			outcome := failureOutcome(wsResp.StatusCode, wsBody, wsResp.Header.Clone(), err.Error(), extractRetryAfterHeader(wsResp.Header))
+		cfg := WSConfig{
+			URL:            targetURL,
+			Token:          account.Credentials["access_token"],
+			AccountID:      account.Credentials["chatgpt_account_id"],
+			ProxyURL:       account.ProxyURL,
+			SessionID:      session.SessionID,
+			ConversationID: session.ConversationID,
+			TurnState:      session.LastTurnState,
+			Originator:     req.Headers.Get("originator"),
+		}
+		conn, wsResp, err := DialWebSocket(cfg)
+		if err != nil {
+			var outcome sdk.ForwardOutcome
+			if wsResp != nil {
+				wsBody := openAIErrorJSON(openAIErrorTypeForStatus(wsResp.StatusCode), "", err.Error())
+				outcome = failureOutcome(wsResp.StatusCode, wsBody, wsResp.Header.Clone(), err.Error(), extractRetryAfterHeader(wsResp.Header))
+			} else {
+				outcome = transientOutcome(err.Error())
+			}
 			outcome.Duration = time.Since(start)
+			if idx < len(attempts)-1 && shouldRetryImageFallback(outcome, err) {
+				g.logger.Warn("images_oauth_4k_downgrade_retry",
+					"path", reqPath,
+					"request_model", attemptReq.Model,
+					"from_size", imgReq.Size,
+					"to_size", attempts[idx+1].Size,
+					"next_retry", attempts[idx+1].RetryIndex,
+					"kind", outcome.Kind,
+					sdk.LogFieldStatus, outcome.Upstream.StatusCode,
+					sdk.LogFieldReason, outcome.Reason,
+				)
+				continue
+			}
 			return outcome, forwardErrForOutcome(outcome, err)
 		}
-		return transientOutcome(err.Error()), err
-	}
-	defer func() { _ = conn.Close() }()
-	if wsResp != nil {
-		if turnState := decodeTurnStateHeader(wsResp.Header); turnState != "" {
-			updateSessionStateTurnState(session.SessionKey, turnState)
+		if wsResp != nil {
+			if turnState := decodeTurnStateHeader(wsResp.Header); turnState != "" {
+				updateSessionStateTurnState(session.SessionKey, turnState)
+			}
 		}
-	}
 
-	if err := writeWebSocketJSON(conn, json.RawMessage(createMsg)); err != nil {
-		reason := fmt.Sprintf("发送 WebSocket 消息失败: %v", err)
-		return transientOutcome(reason), fmt.Errorf("%s", reason)
-	}
+		if err := writeWebSocketJSON(conn, json.RawMessage(createMsg)); err != nil {
+			_ = conn.Close()
+			reason := fmt.Sprintf("发送 WebSocket 消息失败: %v", err)
+			outcome := transientOutcome(reason)
+			outcome.Duration = time.Since(start)
+			if idx < len(attempts)-1 && shouldRetryImageFallback(outcome, err) {
+				g.logger.Warn("images_oauth_4k_downgrade_retry",
+					"path", reqPath,
+					"request_model", attemptReq.Model,
+					"from_size", imgReq.Size,
+					"to_size", attempts[idx+1].Size,
+					"next_retry", attempts[idx+1].RetryIndex,
+					"kind", outcome.Kind,
+					sdk.LogFieldReason, outcome.Reason,
+				)
+				continue
+			}
+			return outcome, fmt.Errorf("%s", reason)
+		}
 
-	var sseKA *ssePingKeepAlive
-	if req.Stream {
-		sseKA = startSSEPingKeepAlive(req.Writer)
-	}
+		if req.Stream && sseKA == nil {
+			sseKA = startSSEPingKeepAlive(req.Writer)
+		}
 
-	handler := &imagesSilentHandler{accountID: account.ID, start: start}
-	wsResult := ReceiveWSResponse(ctx, conn, handler)
-	if wsResult.ResponseID != "" && session.SessionKey != "" {
-		updateSessionStateResponseID(session.SessionKey, wsResult.ResponseID, account.ID)
-	}
+		handler = &imagesSilentHandler{accountID: account.ID, start: start}
+		wsResult = ReceiveWSResponse(ctx, conn, handler)
+		_ = conn.Close()
+		if wsResult.ResponseID != "" && session.SessionKey != "" {
+			updateSessionStateResponseID(session.SessionKey, wsResult.ResponseID, account.ID)
+		}
+		elapsed = time.Since(start)
+		imgReq = attemptReq
+		n = attemptN
+		inputEstimate = attemptInputEstimate
 
-	elapsed := time.Since(start)
+		var retryOutcome sdk.ForwardOutcome
+		var retryErr error
+		switch {
+		case wsResult.Err != nil:
+			retryErr = wsResult.Err
+			retryOutcome = sdk.ForwardOutcome{
+				Kind:     sdk.OutcomeUpstreamTransient,
+				Upstream: sdk.UpstreamResponse{StatusCode: http.StatusBadGateway},
+				Reason:   wsResult.Err.Error(),
+				Duration: elapsed,
+			}
+			var failure *responsesFailureError
+			if errors.As(wsResult.Err, &failure) {
+				errBody := openAIErrorJSON(openAIErrorTypeForStatus(failure.StatusCode), string(failure.Kind), failure.Message)
+				retryOutcome = sdk.ForwardOutcome{
+					Kind:       failure.outcomeKind(),
+					Upstream:   sdk.UpstreamResponse{StatusCode: failure.StatusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
+					Reason:     failure.Error(),
+					RetryAfter: failure.RetryAfter,
+					Duration:   elapsed,
+				}
+			}
+		case len(wsResult.ImageGenCalls) == 0:
+			reason := fmt.Sprintf("image_generation_call 为空 (n=%d)", n)
+			if detail := imageGenCallDiagnosticsDetail(wsResult); detail != "" {
+				reason += ": " + detail
+			}
+			retryOutcome = sdk.ForwardOutcome{
+				Kind:     sdk.OutcomeUpstreamTransient,
+				Upstream: sdk.UpstreamResponse{StatusCode: http.StatusBadGateway},
+				Reason:   reason,
+				Duration: elapsed,
+			}
+			if failure := classifyImageGenCallFailures(wsResult.ImageGenCallFailures, reason); failure != nil {
+				body := buildImagesErrorBodyWithCode(failure.StatusCode, failure.Code, failure.Message)
+				retryOutcome = sdk.ForwardOutcome{
+					Kind:     failure.outcomeKind(),
+					Upstream: sdk.UpstreamResponse{StatusCode: failure.StatusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: body},
+					Reason:   failure.Message,
+					Duration: elapsed,
+				}
+			}
+		default:
+			retryOutcome = sdk.ForwardOutcome{Kind: sdk.OutcomeSuccess}
+		}
+		if retryOutcome.Kind == sdk.OutcomeSuccess {
+			if attempt.Downgrade {
+				downgradedBillingSize = attempt.Size
+			}
+			break
+		}
+		if idx < len(attempts)-1 && shouldRetryImageFallback(retryOutcome, retryErr) {
+			g.logger.Warn("images_oauth_4k_downgrade_retry",
+				"path", reqPath,
+				"request_model", attemptReq.Model,
+				"from_size", imgReq.Size,
+				"to_size", attempts[idx+1].Size,
+				"next_retry", attempts[idx+1].RetryIndex,
+				"kind", retryOutcome.Kind,
+				sdk.LogFieldStatus, retryOutcome.Upstream.StatusCode,
+				sdk.LogFieldReason, retryOutcome.Reason,
+			)
+			continue
+		}
+		break
+	}
 
 	if wsResult.Err != nil {
 		var failure *responsesFailureError
@@ -1812,7 +2072,9 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 	// 这里得到的 billingSize 同时用于 response.usage.output_tokens 估算，
 	// 避免为了写 usage 再额外解析一次图片。
 	billingSize := imgReq.Size
-	if len(wsResult.ImageGenCalls) > 0 {
+	if downgradedBillingSize != "" {
+		billingSize = downgradedBillingSize
+	} else if len(wsResult.ImageGenCalls) > 0 {
 		first := wsResult.ImageGenCalls[0]
 		if first.Size != "" {
 			billingSize = first.Size
@@ -2226,12 +2488,25 @@ type imagesResponseSummary struct {
 	BillingSize string
 }
 
-func summarizeImagesResponseForBilling(body []byte, fallbackSize string) imagesResponseSummary {
+func summarizeImagesResponseForBilling(body []byte, fallbackSize string, forceFallback bool) imagesResponseSummary {
 	summary := imagesResponseSummary{BillingSize: strings.TrimSpace(fallbackSize)}
 	sizeResolved := false
-	if rootSize := normalizeImagesResponseSize(gjson.GetBytes(body, "size").String()); rootSize != "" {
-		summary.BillingSize = rootSize
-		sizeResolved = true
+	if forceFallback {
+		if fallback := normalizeImagesResponseSize(fallbackSize); fallback != "" {
+			summary.BillingSize = fallback
+			sizeResolved = true
+		}
+	}
+	if !sizeResolved {
+		if rootSize := normalizeImagesResponseSize(gjson.GetBytes(body, "size").String()); rootSize != "" {
+			summary.BillingSize = rootSize
+			sizeResolved = true
+		}
+	}
+	if !sizeResolved {
+		if fallback := normalizeImagesResponseSize(fallbackSize); fallback != "" {
+			summary.BillingSize = fallback
+		}
 	}
 	dataArr := gjson.GetBytes(body, "data")
 	if !dataArr.Exists() || !dataArr.IsArray() {
@@ -2303,6 +2578,7 @@ type imagesResponseOptions struct {
 	RequestOutputFormat     string
 	RequestTextInputTokens  int
 	RequestImageInputTokens int
+	ForceBillingSize        bool
 }
 
 func handleImagesResponse(resp *http.Response, w http.ResponseWriter, sseKA *ssePingKeepAlive, start time.Time, fallbackModel string, options ...imagesResponseOptions) (sdk.ForwardOutcome, error) {
@@ -2339,7 +2615,7 @@ func handleImagesResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 	if logger == nil {
 		logger = slog.Default()
 	}
-	summary := summarizeImagesResponseForBilling(body, opts.BillingSize)
+	summary := summarizeImagesResponseForBilling(body, opts.BillingSize, opts.ForceBillingSize)
 	body = applyImagesResponseMetadata(body, opts, summary)
 	imageOutputTokens := calculateGPTImageOutputTokensForImages(modelName, summary.BillingSize, opts.RequestQuality, summary.NumImages)
 	if !isGPTImageTwoModel(modelName) {

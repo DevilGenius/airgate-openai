@@ -280,36 +280,6 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 		}
 	}
 
-	var bodyReader io.Reader
-	if methodAllowsBody(reqMethod) && len(req.Body) > 0 {
-		bodyReader = bytes.NewReader(req.Body)
-	}
-
-	upstreamReq, err := http.NewRequestWithContext(ctx, reqMethod, targetURL, bodyReader)
-	if err != nil {
-		reason := fmt.Sprintf("构建上游请求失败: %v", err)
-		logger.Warn("upstream_request_build_failed",
-			sdk.LogFieldAccountID, account.ID,
-			sdk.LogFieldModel, req.Model,
-			"url", redactURL(targetURL),
-			sdk.LogFieldError, err,
-		)
-		return transientOutcome(reason), fmt.Errorf("%s", reason)
-	}
-
-	setAuthHeaders(upstreamReq, account)
-	if methodAllowsBody(reqMethod) {
-		// /v1/images/edits 是 multipart/form-data，必须保留 boundary。其它路径
-		// Core 侧已把 body 归一化成 JSON 文本，统一 application/json。
-		if ct := req.Headers.Get("Content-Type"); isImagesEditRequest(reqPath) &&
-			strings.HasPrefix(strings.ToLower(ct), "multipart/") {
-			upstreamReq.Header.Set("Content-Type", ct)
-		} else {
-			upstreamReq.Header.Set("Content-Type", "application/json")
-		}
-	}
-	passHeadersForAccount(req.Headers, upstreamReq.Header, account)
-
 	// 重启恢复：有上游异步 task_id 的 images 请求直接 poll，不再重复发起上游请求
 	if isImagesRequest(reqPath) {
 		if recoveryID := req.Headers.Get(upstreamTaskIDHeader); recoveryID != "" {
@@ -340,6 +310,12 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 		sseKA = startSSEPingKeepAlive(req.Writer)
 	}
 
+	attempts := []imageSizeAttempt{{}}
+	if isImageReq {
+		attempts = imageSizeAttemptsForRequest(imagesRespOpts.RequestSize)
+	}
+	baseBody := append([]byte(nil), req.Body...)
+	baseHeaders := req.Headers.Clone()
 	logger.Debug("upstream_request_start",
 		sdk.LogFieldAccountID, account.ID,
 		sdk.LogFieldModel, req.Model,
@@ -350,10 +326,110 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 	)
 
 	client := g.buildHTTPClient(account)
+	for idx, attempt := range attempts {
+		attemptBody, attemptContentType, err := imagesRequestBodyForAttempt(baseBody, baseHeaders.Get("Content-Type"), isImageEdit, attempt)
+		if err != nil {
+			if sseKA != nil {
+				sseKA.Stop()
+				writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
+			}
+			errBody := jsonError(err.Error())
+			return sdk.ForwardOutcome{
+				Kind: sdk.OutcomeClientError,
+				Upstream: sdk.UpstreamResponse{
+					StatusCode: http.StatusBadRequest,
+					Headers:    http.Header{"Content-Type": []string{"application/json"}},
+					Body:       errBody,
+				},
+				Reason:   err.Error(),
+				Duration: time.Since(start),
+			}, nil
+		}
+		attemptHeaders := baseHeaders.Clone()
+		if attemptContentType != "" {
+			attemptHeaders.Set("Content-Type", attemptContentType)
+		}
+		attemptOpts := imagesResponseOptionsForAttempt(imagesRespOpts, attempt)
+		if isImageReq && len(attemptBody) > 0 {
+			attemptOpts = imagesResponseOptionsFromRequestBody(attemptBody, attemptContentType, isImageEdit)
+			attemptOpts = imagesResponseOptionsForAttempt(attemptOpts, attempt)
+		}
+		finalAttempt := idx == len(attempts)-1
+		outcome, err := g.forwardAPIKeyAttempt(ctx, req, reqMethod, reqPath, targetURL, attemptBody, attemptHeaders, attemptOpts, sseKA, start, reqServiceTier, finalAttempt, client)
+		if outcome.Kind == sdk.OutcomeSuccess || finalAttempt || !isImageReq {
+			return outcome, err
+		}
+		if !shouldRetryImageFallback(outcome, err) {
+			if sseKA != nil {
+				sseKA.Stop()
+				writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
+			}
+			return outcome, err
+		}
+		logger.Warn("images_4k_downgrade_retry",
+			sdk.LogFieldAccountID, account.ID,
+			sdk.LogFieldModel, req.Model,
+			"from_size", imagesRespOpts.RequestSize,
+			"to_size", attempts[idx+1].Size,
+			"next_retry", attempts[idx+1].RetryIndex,
+			"kind", outcome.Kind,
+			sdk.LogFieldStatus, outcome.Upstream.StatusCode,
+			sdk.LogFieldReason, outcome.Reason,
+		)
+	}
+	return transientOutcome("image request attempts exhausted"), fmt.Errorf("image request attempts exhausted")
+}
+
+func (g *OpenAIGateway) forwardAPIKeyAttempt(
+	ctx context.Context,
+	req *sdk.ForwardRequest,
+	reqMethod, reqPath, targetURL string,
+	body []byte,
+	headers http.Header,
+	imagesRespOpts imagesResponseOptions,
+	sseKA *ssePingKeepAlive,
+	start time.Time,
+	reqServiceTier string,
+	finalAttempt bool,
+	client *http.Client,
+) (sdk.ForwardOutcome, error) {
+	account := req.Account
+	logger := sdk.LoggerFromContext(ctx)
+
+	var bodyReader io.Reader
+	if methodAllowsBody(reqMethod) && len(body) > 0 {
+		bodyReader = bytes.NewReader(body)
+	}
+
+	upstreamReq, err := http.NewRequestWithContext(ctx, reqMethod, targetURL, bodyReader)
+	if err != nil {
+		reason := fmt.Sprintf("构建上游请求失败: %v", err)
+		logger.Warn("upstream_request_build_failed",
+			sdk.LogFieldAccountID, account.ID,
+			sdk.LogFieldModel, req.Model,
+			"url", redactURL(targetURL),
+			sdk.LogFieldError, err,
+		)
+		return transientOutcome(reason), fmt.Errorf("%s", reason)
+	}
+
+	setAuthHeaders(upstreamReq, account)
+	if methodAllowsBody(reqMethod) {
+		// /v1/images/edits 是 multipart/form-data，必须保留 boundary。其它路径
+		// Core 侧已把 body 归一化成 JSON 文本，统一 application/json。
+		if ct := headers.Get("Content-Type"); isImagesEditRequest(reqPath) &&
+			strings.HasPrefix(strings.ToLower(ct), "multipart/") {
+			upstreamReq.Header.Set("Content-Type", ct)
+		} else {
+			upstreamReq.Header.Set("Content-Type", "application/json")
+		}
+	}
+	passHeadersForAccount(headers, upstreamReq.Header, account)
+
 	resp, err := client.Do(upstreamReq)
 	if err != nil {
 		dur := time.Since(start)
-		if sseKA != nil {
+		if sseKA != nil && finalAttempt {
 			sseKA.Stop()
 			logger.Warn("images_apikey_stream_failed_redacted",
 				sdk.LogFieldPath, reqPath,
@@ -381,7 +457,7 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 			errDetail = truncate(string(respBody), 200)
 		}
 		dur := time.Since(start)
-		if sseKA != nil {
+		if sseKA != nil && finalAttempt {
 			sseKA.Stop()
 			logger.Warn("images_apikey_upstream_error_redacted",
 				sdk.LogFieldPath, reqPath,
@@ -429,7 +505,7 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 		_ = resp.Body.Close()
 		if readErr != nil {
 			reason := fmt.Sprintf("读取 Images 响应失败: %v", readErr)
-			if sseKA != nil {
+			if sseKA != nil && finalAttempt {
 				sseKA.Stop()
 				writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
 			}
@@ -460,7 +536,7 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 					"task_id", taskID,
 					sdk.LogFieldError, pollErr,
 				)
-				if sseKA != nil {
+				if sseKA != nil && finalAttempt {
 					sseKA.Stop()
 					writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
 				}

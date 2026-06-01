@@ -12,7 +12,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -316,17 +315,6 @@ func webReverseImagesError(start time.Time, status int, _ http.ResponseWriter, m
 	return outcome, forwardErrForOutcome(outcome, fmt.Errorf("%s", msg))
 }
 
-const webReverseMaxImageEdge = 3840
-
-func normalizeImageSizeForUpstream(size string) string {
-	width, height, ok := parseImageSize(size)
-	if !ok {
-		return strings.TrimSpace(size)
-	}
-	width, height = clampImageSize(width, height, webReverseMaxImageEdge)
-	return fmt.Sprintf("%dx%d", width, height)
-}
-
 func applyWebReverseSizeHint(prompt, size string) string {
 	width, height, ok := parseImageSize(size)
 	if !ok {
@@ -341,37 +329,6 @@ func applyWebReverseSizeHint(prompt, size string) string {
 		orientation = "portrait"
 	}
 	return fmt.Sprintf("Generate a %s image at %dx%d resolution. %s", orientation, width, height, prompt)
-}
-
-func parseImageSize(size string) (int, int, bool) {
-	parts := strings.Split(strings.ToLower(strings.TrimSpace(size)), "x")
-	if len(parts) != 2 {
-		return 0, 0, false
-	}
-
-	width, err := strconv.Atoi(strings.TrimSpace(parts[0]))
-	if err != nil || width <= 0 {
-		return 0, 0, false
-	}
-	height, err := strconv.Atoi(strings.TrimSpace(parts[1]))
-	if err != nil || height <= 0 {
-		return 0, 0, false
-	}
-	return width, height, true
-}
-
-func clampImageSize(width, height, maxEdge int) (int, int) {
-	if width <= maxEdge && height <= maxEdge {
-		return width, height
-	}
-	if width >= height {
-		return maxEdge, scaleImageDimension(height, width, maxEdge)
-	}
-	return scaleImageDimension(width, height, maxEdge), maxEdge
-}
-
-func scaleImageDimension(value, oldEdge, newEdge int) int {
-	return int((int64(value)*int64(newEdge) + int64(oldEdge)/2) / int64(oldEdge))
 }
 
 // classifyWebReverseError 根据 err.Error() 文本判定 HTTP 状态码。
