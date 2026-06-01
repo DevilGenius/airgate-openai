@@ -21,9 +21,10 @@ import (
 const (
 	usageCurrencyUSD = "USD"
 
-	usageAttrServiceTier = "service_tier"
-	usageAttrImageSize   = "openai.image.size"
-	usageAttrResponseID  = "openai.response_id"
+	usageAttrServiceTier  = "service_tier"
+	usageAttrImageSize    = "openai.image.size"
+	usageAttrResponseID   = "openai.response_id"
+	usageDefaultImageSize = "1024x1024"
 
 	usageMetricInputTokens           = "input_tokens"
 	usageMetricTextInputTokens       = "openai.image.input_text_tokens"
@@ -367,10 +368,19 @@ func fillUsageCostPerImageBySize(usage *sdk.Usage, numImages int, size string) {
 	if usage == nil || numImages <= 0 {
 		return
 	}
+	size = usageImageSizeOrDefault(size)
 	price := imagePriceForSize(size)
 	fillUsageCost(usage)
 	setUsageImageSize(usage, size)
 	addImageCost(usage, numImages, price)
+}
+
+func usageImageSizeOrDefault(size string) string {
+	width, height, ok := parseImageSize(size)
+	if !ok {
+		return usageDefaultImageSize
+	}
+	return fmt.Sprintf("%dx%d", width, height)
 }
 
 func addUsageCostForModel(

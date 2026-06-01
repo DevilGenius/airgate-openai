@@ -738,6 +738,7 @@ func TestFillUsageCostPerImageBySize(t *testing.T) {
 		{"2K qhd", "2560x1440", 1, "0.2"},
 		{"4K double", "3840x2160", 2, "0.4"},
 		{"auto fallback to 1K", "auto", 4, "0.1"},
+		{"empty fallback to 1K", "", 1, "0.1"},
 		{"zero images skipped", "1024x1024", 0, ""},
 	}
 	for _, tc := range cases {
@@ -752,6 +753,12 @@ func TestFillUsageCostPerImageBySize(t *testing.T) {
 			}
 			if got := usageImageUnitPrice(usage); got != tc.wantUnitPrice {
 				t.Errorf("image unit_price = %q, want %q", got, tc.wantUnitPrice)
+			}
+			if tc.numImages > 0 {
+				wantSize := usageImageSizeOrDefault(tc.size)
+				if got := usage.Metadata["openai.image.size"]; got != wantSize {
+					t.Errorf("image size = %q, want %q", got, wantSize)
+				}
 			}
 		})
 	}
