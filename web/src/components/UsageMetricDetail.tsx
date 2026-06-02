@@ -16,7 +16,6 @@ const TOKEN_COLORS = {
   cacheRead: 'var(--ag-usage-token-cache-read)',
   image: 'var(--ag-text)',
   imageInputText: 'var(--ag-usage-token-image-input-text)',
-  imageInputValue: 'var(--ag-usage-token-image-input-value)',
   input: 'var(--ag-usage-token-input)',
   output: 'var(--ag-usage-token-output)',
   reasoning: 'var(--ag-usage-token-reasoning)',
@@ -104,11 +103,6 @@ const imageInputTextMetaStyle: CSSProperties = {
 
 const inlineValueNumberStyle: CSSProperties = {
   flexShrink: 0,
-};
-
-const imageInputValueNumberStyle: CSSProperties = {
-  ...inlineValueNumberStyle,
-  color: TOKEN_COLORS.imageInputValue,
 };
 
 const valueStyle: CSSProperties = {
@@ -214,7 +208,7 @@ function inputTokenValue(textInputTokens: number, imageInputTokens: number, inpu
   return (
     <span style={inlineValueStyle}>
       <span style={imageInputTextMetaStyle}>(文本 {formatNumber(textInputTokens)})</span>
-      <span style={imageInputValueNumberStyle}>{formatNumber(inputTokens)}</span>
+      <span style={inlineValueNumberStyle}>{formatNumber(inputTokens)}</span>
     </span>
   );
 }
