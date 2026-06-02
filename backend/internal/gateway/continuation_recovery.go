@@ -38,7 +38,7 @@ func requestCanRecoverPreviousResponseNotFound(body []byte) bool {
 		return false
 	}
 	signals := analyzePreviousResponseRecoverySignals(reqData)
-	return !signals.hasEncryptedContent && !(signals.hasToolOutput && !signals.hasToolCallContext)
+	return !signals.hasEncryptedContent && (!signals.hasToolOutput || signals.hasToolCallContext)
 }
 
 func analyzePreviousResponseRecoverySignals(reqData map[string]any) previousResponseRecoverySignals {
