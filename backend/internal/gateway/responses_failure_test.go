@@ -141,6 +141,24 @@ func TestClassifyResponsesFailureInvalidEncryptedContentVariants(t *testing.T) {
 	}
 }
 
+func TestOutcomeIsPreviousResponseNotFound(t *testing.T) {
+	outcome := sdk.ForwardOutcome{
+		Kind: sdk.OutcomeClientError,
+		Upstream: sdk.UpstreamResponse{
+			StatusCode: http.StatusBadRequest,
+			Body:       []byte(`{"error":{"type":"invalid_request_error","code":"previous_response_not_found","message":"Previous response not found"}}`),
+		},
+	}
+	if !outcomeIsPreviousResponseNotFound(outcome) {
+		t.Fatalf("expected previous_response_not_found outcome")
+	}
+
+	outcome.Upstream.Body = []byte(`{"error":{"type":"invalid_request_error","code":"invalid_encrypted_content","message":"The encrypted content could not be verified."}}`)
+	if outcomeIsPreviousResponseNotFound(outcome) {
+		t.Fatalf("invalid_encrypted_content must not trigger previous_response_not_found recovery")
+	}
+}
+
 func TestClassifyHTTPFailureTreatsUsageLimit403AsRateLimited(t *testing.T) {
 	got := classifyHTTPFailure(403, "The usage limit has been reached. Please try again later.")
 	if got != sdk.OutcomeAccountRateLimited {

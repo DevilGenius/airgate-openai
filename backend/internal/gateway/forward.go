@@ -326,6 +326,7 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 	)
 
 	client := g.buildHTTPClient(account)
+	recoveredPreviousResponse := false
 	for idx, attempt := range attempts {
 		attemptBody, attemptContentType, err := imagesRequestBodyForAttempt(baseBody, baseHeaders.Get("Content-Type"), isImageEdit, attempt)
 		if err != nil {
@@ -356,6 +357,18 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 		}
 		finalAttempt := idx == len(attempts)-1
 		outcome, err := g.forwardAPIKeyAttempt(ctx, req, reqMethod, reqPath, targetURL, attemptBody, attemptHeaders, attemptOpts, sseKA, start, reqServiceTier, finalAttempt, client)
+		if !isImageReq && !recoveredPreviousResponse && err == nil && outcomeIsPreviousResponseNotFound(outcome) {
+			if retryBody, ok := previousResponseNotFoundRecoveryBody(attemptBody); ok {
+				recoveredPreviousResponse = true
+				logger.Warn("previous_response_not_found_recovery_retry",
+					sdk.LogFieldAccountID, account.ID,
+					sdk.LogFieldModel, req.Model,
+					sdk.LogFieldPath, reqPath,
+					"account_type", "apikey",
+				)
+				outcome, err = g.forwardAPIKeyAttempt(ctx, req, reqMethod, reqPath, targetURL, retryBody, attemptHeaders, attemptOpts, sseKA, start, reqServiceTier, true, client)
+			}
+		}
 		if outcome.Kind == sdk.OutcomeSuccess || finalAttempt || !isImageReq {
 			return outcome, err
 		}
@@ -723,6 +736,10 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		if err := writeWebSocketJSON(conn, json.RawMessage(msg)); err != nil {
 			return WSResult{}, fmt.Errorf("发送 WebSocket 消息失败: %w", err)
 		}
+		lastSSEHandler = nil
+		lastChatWriter = nil
+		lastChatSilent = nil
+		lastResponsesSilent = nil
 		var handler WSEventHandler
 		switch {
 		case isChatCompletions && req.Stream:
@@ -787,6 +804,32 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		)
 		return transientOutcome(err.Error()), err
 	}
+	streamOutputStarted := func() bool {
+		return (lastChatWriter != nil && lastChatWriter.wrote) ||
+			(lastSSEHandler != nil && lastSSEHandler.wrote)
+	}
+	if isPreviousResponseNotFoundError(result.Err) && !streamOutputStarted() {
+		if retryMsg, ok := previousResponseNotFoundRecoveryBody(createMsg); ok {
+			logger.Warn("previous_response_not_found_recovery_retry",
+				sdk.LogFieldAccountID, account.ID,
+				sdk.LogFieldModel, req.Model,
+				"account_type", "oauth",
+				"session", session.SessionKey,
+			)
+			clearSessionStateResponseID(session.SessionKey)
+			result, err = runAttempt(retryMsg, w)
+			if err != nil {
+				logger.Warn("upstream_request_failed",
+					sdk.LogFieldAccountID, account.ID,
+					sdk.LogFieldModel, req.Model,
+					sdk.LogFieldDurationMs, time.Since(start).Milliseconds(),
+					sdk.LogFieldError, err,
+					"phase", "ws_recovery_send",
+				)
+				return transientOutcome(err.Error()), err
+			}
+		}
+	}
 	if session.SessionKey != "" {
 		if result.ResponseID != "" {
 			updateSessionStateResponseID(session.SessionKey, result.ResponseID, account.ID)
@@ -835,10 +878,8 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 			retryAfter = failure.RetryAfter
 			code = failure.codeOrKind()
 		}
-		streamOutputStarted := (lastChatWriter != nil && lastChatWriter.wrote) ||
-			(lastSSEHandler != nil && lastSSEHandler.wrote)
 		// 只有已经向客户端写过可见输出时才视为流中断；首包前错误仍交给 Core failover。
-		if req.Stream && streamOutputStarted && kind != sdk.OutcomeClientError {
+		if req.Stream && streamOutputStarted() && kind != sdk.OutcomeClientError {
 			kind = sdk.OutcomeStreamAborted
 			code = kind.String()
 		}
@@ -964,6 +1005,10 @@ func (s *sseEventWriter) OnRawEvent(eventType string, data []byte) {
 			}
 		}
 		return
+	case "response.failed", "error":
+		if !s.wrote {
+			return
+		}
 	case "response.created", "response.completed", "response.done":
 		if s.sessionKey != "" {
 			if responseID := gjson.GetBytes(data, "response.id").String(); strings.TrimSpace(responseID) != "" {

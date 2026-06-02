@@ -156,6 +156,49 @@ func TestApplyContinuationStateDoesNotBackfillWithToolCallContext(t *testing.T) 
 	}
 }
 
+func TestPreviousResponseNotFoundRecoveryBodyDropsSoftAnchor(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.4","previous_response_id":"resp_old","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}`)
+
+	got, ok := previousResponseNotFoundRecoveryBody(body)
+	if !ok {
+		t.Fatalf("expected recovery body")
+	}
+	if gjson.GetBytes(got, "previous_response_id").Exists() {
+		t.Fatalf("previous_response_id was not removed: %s", got)
+	}
+	if input := gjson.GetBytes(got, "input.0.content.0.text").String(); input != "hi" {
+		t.Fatalf("input text = %q, want hi; body=%s", input, got)
+	}
+}
+
+func TestPreviousResponseNotFoundRecoveryBodyRejectsToolOutputWithoutContext(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.4","previous_response_id":"resp_old","input":[{"type":"function_call_output","call_id":"call_1","output":"ok"}]}`)
+
+	if _, ok := previousResponseNotFoundRecoveryBody(body); ok {
+		t.Fatalf("expected recovery to be rejected for tool output without call context")
+	}
+}
+
+func TestPreviousResponseNotFoundRecoveryBodyAllowsToolOutputWithContext(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.4","previous_response_id":"resp_old","input":[{"type":"function_call","call_id":"call_1","name":"lookup"},{"type":"function_call_output","call_id":"call_1","output":"ok"}]}`)
+
+	got, ok := previousResponseNotFoundRecoveryBody(body)
+	if !ok {
+		t.Fatalf("expected recovery body when tool call context is present")
+	}
+	if gjson.GetBytes(got, "previous_response_id").Exists() {
+		t.Fatalf("previous_response_id was not removed: %s", got)
+	}
+}
+
+func TestPreviousResponseNotFoundRecoveryBodyRejectsEncryptedContent(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.4","previous_response_id":"resp_old","input":[{"type":"reasoning","id":"rs_1","encrypted_content":"sealed"}]}`)
+
+	if _, ok := previousResponseNotFoundRecoveryBody(body); ok {
+		t.Fatalf("expected recovery to be rejected for encrypted reasoning content")
+	}
+}
+
 func TestNormalizeOpenAIServiceTier_FastIsInvalid(t *testing.T) {
 	if got := normalizeOpenAIServiceTier("fast"); got != "" {
 		t.Fatalf("normalizeOpenAIServiceTier(fast) = %q, want empty", got)
