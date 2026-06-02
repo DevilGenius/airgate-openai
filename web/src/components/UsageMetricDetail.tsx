@@ -168,8 +168,9 @@ function formatNumber(value: number) {
 }
 
 function metadataText(metadata: Record<string, string>, keys: string[]) {
+  const keySet = new Set(keys);
   for (const [key, value] of Object.entries(metadata)) {
-    if (!keys.includes(norm(key))) continue;
+    if (!keySet.has(norm(key))) continue;
     const text = value.trim();
     if (text) return text;
   }
