@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@devilgenius/airgate-theme':
-        specifier: https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.1/airgate-theme-v0.2.1.tgz
-        version: https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.1/airgate-theme-v0.2.1.tgz(react@19.2.6)
+        specifier: https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.2/airgate-theme-v0.2.2.tgz
+        version: https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.2/airgate-theme-v0.2.2.tgz(react@19.2.6)
       react:
         specifier: ^19.0.0
         version: 19.2.6
@@ -128,9 +128,9 @@ packages:
     resolution: {integrity: sha512-4zBIxpPzowiZpusoFkyGVwakdRJUyuH5PxQ/PrqghfdFWWasvnCdPfQXHrenDai+gyLARulZjZowCOj6fjT4pA==}
     engines: {node: '>=6.9.0'}
 
-  '@devilgenius/airgate-theme@https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.1/airgate-theme-v0.2.1.tgz':
-    resolution: {tarball: https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.1/airgate-theme-v0.2.1.tgz, integrity: sha512-OeumFl/SOBeqOrXE/bNR+vPMxc7pwTwrHLik5zQf34ktBQasxPXe+sgWDPiqu5LEfKmtM3w33sH4Uhc6OS3FPg==}
-    version: 0.2.1
+  '@devilgenius/airgate-theme@https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.2/airgate-theme-v0.2.2.tgz':
+    resolution: {integrity: sha512-vN/msFVriS/yMfcLUJrvYPr8z/d4GcEJse4HNvswHoQg78+ujBs0jtPEJD7RN40PHrUZ0qoOwI5G4VTsHyc3KA==, tarball: https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.2/airgate-theme-v0.2.2.tgz}
+    version: 0.2.2
     peerDependencies:
       react: ^19.0.0
 
@@ -1127,7 +1127,7 @@ snapshots:
       '@babel/helper-string-parser': 7.29.7
       '@babel/helper-validator-identifier': 7.29.7
 
-  '@devilgenius/airgate-theme@https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.1/airgate-theme-v0.2.1.tgz(react@19.2.6)':
+  '@devilgenius/airgate-theme@https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.2/airgate-theme-v0.2.2.tgz(react@19.2.6)':
     dependencies:
       react: 19.2.6
 
