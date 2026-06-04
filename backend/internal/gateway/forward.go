@@ -312,7 +312,7 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 
 	attempts := []imageSizeAttempt{{}}
 	if isImageReq {
-		attempts = imageSizeAttemptsForRequest(imagesRespOpts.RequestSize)
+		attempts = imageSizeAttemptsForRequestWithBudget(imagesRespOpts.RequestSize, imageRetryUsed(req.Headers))
 	}
 	baseBody := append([]byte(nil), req.Body...)
 	baseHeaders := req.Headers.Clone()
@@ -327,6 +327,7 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 
 	client := g.buildHTTPClient(account)
 	recoveredPreviousResponse := false
+	imageFallbackUsed := false
 	for idx, attempt := range attempts {
 		attemptBody, attemptContentType, err := imagesRequestBodyForAttempt(baseBody, baseHeaders.Get("Content-Type"), isImageEdit, attempt)
 		if err != nil {
@@ -370,6 +371,9 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 			}
 		}
 		if outcome.Kind == sdk.OutcomeSuccess || finalAttempt || !isImageReq {
+			if imageFallbackUsed && outcome.Kind != sdk.OutcomeSuccess {
+				markImageRetryUsed(&outcome)
+			}
 			return outcome, err
 		}
 		if !shouldRetryImageFallback(outcome, err) {
@@ -389,6 +393,7 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 			sdk.LogFieldStatus, outcome.Upstream.StatusCode,
 			sdk.LogFieldReason, outcome.Reason,
 		)
+		imageFallbackUsed = true
 	}
 	return transientOutcome("image request attempts exhausted"), fmt.Errorf("image request attempts exhausted")
 }
@@ -488,6 +493,9 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 			sdk.LogFieldReason, errDetail,
 		)
 		outcome := failureOutcome(resp.StatusCode, respBody, resp.Header.Clone(), errDetail, extractRetryAfterHeader(resp.Header))
+		if isImagesRequest(reqPath) {
+			applyImageRateLimitPolicy(&outcome)
+		}
 		outcome.Duration = time.Since(start)
 		return outcome, nil
 	}

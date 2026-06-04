@@ -34,6 +34,9 @@ const (
 	usageMetricReasoningOutputTokens = "reasoning_output_tokens"
 	usageMetricTotalTokens           = "total_tokens"
 	usageMetricImages                = "openai.image.count"
+
+	imageRetryUsedHeader        = "X-Airgate-Image-Retry-Used"
+	imageRateLimitMinRetryAfter = time.Minute
 )
 
 // successOutcome 构造 Success 判决，Usage 由调用方填。Duration 由调用方填。
@@ -67,6 +70,29 @@ func failureOutcome(statusCode int, body []byte, headers http.Header, message st
 		Reason:     reason,
 		RetryAfter: retryAfter,
 	}
+}
+
+func applyImageRateLimitPolicy(outcome *sdk.ForwardOutcome) {
+	if outcome == nil || outcome.Kind != sdk.OutcomeAccountRateLimited {
+		return
+	}
+	if outcome.RetryAfter < imageRateLimitMinRetryAfter {
+		outcome.RetryAfter = imageRateLimitMinRetryAfter
+	}
+}
+
+func markImageRetryUsed(outcome *sdk.ForwardOutcome) {
+	if outcome == nil {
+		return
+	}
+	if outcome.Upstream.Headers == nil {
+		outcome.Upstream.Headers = http.Header{}
+	}
+	outcome.Upstream.Headers.Set(imageRetryUsedHeader, "true")
+}
+
+func imageRetryUsed(headers http.Header) bool {
+	return strings.EqualFold(headers.Get(imageRetryUsedHeader), "true")
 }
 
 // transientOutcome 连接级 / 网络层错误（无上游 HTTP 响应），归类为 UpstreamTransient。

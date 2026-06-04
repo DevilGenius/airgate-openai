@@ -213,6 +213,7 @@ func (g *OpenAIGateway) forwardImagesViaWebReverse(ctx context.Context, req *sdk
 				writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
 			}
 			outcome := failureOutcome(status, nil, nil, err.Error(), parseRetryDelay(err.Error()))
+			applyImageRateLimitPolicy(&outcome)
 			outcome.Duration = time.Since(start)
 			if outcome.Usage == nil {
 				outcome.Usage = newTokenUsage(imagesWebReverseModel, "", 0, 0, 0, 0, 0)
@@ -308,6 +309,7 @@ func buildWebReverseImagesResponse(res *imgen.Result, textInputTokens, imageInpu
 func webReverseImagesError(start time.Time, status int, _ http.ResponseWriter, msg string) (sdk.ForwardOutcome, error) {
 	body := buildImagesErrorBody(status, msg)
 	outcome := failureOutcome(status, body, http.Header{"Content-Type": []string{"application/json"}}, msg, parseRetryDelay(msg))
+	applyImageRateLimitPolicy(&outcome)
 	outcome.Duration = time.Since(start)
 	if outcome.Usage == nil {
 		outcome.Usage = newTokenUsage(imagesWebReverseModel, "", 0, 0, 0, 0, 0)

@@ -102,7 +102,7 @@ func normalizeImageQualityDefaultMedium(quality string) string {
 }
 
 const (
-	imageFallback2KAttempts = 2
+	imageFallback2KAttempts = 1
 )
 
 type imageSizeAttempt struct {
@@ -121,6 +121,13 @@ func imageSizeAttemptsForRequest(size string) []imageSizeAttempt {
 		attempts = append(attempts, imageSizeAttempt{Size: fallbackSize, Downgrade: true, RetryIndex: i})
 	}
 	return attempts
+}
+
+func imageSizeAttemptsForRequestWithBudget(size string, retryUsed bool) []imageSizeAttempt {
+	if retryUsed {
+		return []imageSizeAttempt{{}}
+	}
+	return imageSizeAttemptsForRequest(size)
 }
 
 func imagesResponseOptionsForAttempt(base imagesResponseOptions, attempt imageSizeAttempt) imagesResponseOptions {
@@ -216,7 +223,7 @@ func shouldRetryImageFallback(outcome sdk.ForwardOutcome, err error) bool {
 		return false
 	}
 	switch outcome.Kind {
-	case sdk.OutcomeAccountDead, sdk.OutcomeAccountUnavailable:
+	case sdk.OutcomeAccountRateLimited, sdk.OutcomeAccountDead, sdk.OutcomeAccountUnavailable:
 		return false
 	}
 	reason := strings.Join([]string{
@@ -1731,9 +1738,10 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 	var n int
 	downgradedBillingSize := ""
 	elapsed := time.Since(start)
-	attempts := imageSizeAttemptsForRequest(imgReq.Size)
+	attempts := imageSizeAttemptsForRequestWithBudget(imgReq.Size, imageRetryUsed(req.Headers))
 	baseBody := append([]byte(nil), req.Body...)
 	baseContentType := contentType
+	imageFallbackUsed := false
 	for idx, attempt := range attempts {
 		attemptBody, attemptContentType, err := imagesRequestBodyForAttempt(baseBody, baseContentType, isEdit, attempt)
 		if err != nil {
@@ -1797,6 +1805,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 			if wsResp != nil {
 				wsBody := openAIErrorJSON(openAIErrorTypeForStatus(wsResp.StatusCode), "", err.Error())
 				outcome = failureOutcome(wsResp.StatusCode, wsBody, wsResp.Header.Clone(), err.Error(), extractRetryAfterHeader(wsResp.Header))
+				applyImageRateLimitPolicy(&outcome)
 			} else {
 				outcome = transientOutcome(err.Error())
 			}
@@ -1812,7 +1821,11 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 					sdk.LogFieldStatus, outcome.Upstream.StatusCode,
 					sdk.LogFieldReason, outcome.Reason,
 				)
+				imageFallbackUsed = true
 				continue
+			}
+			if imageFallbackUsed && outcome.Kind != sdk.OutcomeSuccess {
+				markImageRetryUsed(&outcome)
 			}
 			return outcome, forwardErrForOutcome(outcome, err)
 		}
@@ -1837,7 +1850,11 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 					"kind", outcome.Kind,
 					sdk.LogFieldReason, outcome.Reason,
 				)
+				imageFallbackUsed = true
 				continue
+			}
+			if imageFallbackUsed && outcome.Kind != sdk.OutcomeSuccess {
+				markImageRetryUsed(&outcome)
 			}
 			return outcome, fmt.Errorf("%s", reason)
 		}
@@ -1878,6 +1895,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 					RetryAfter: failure.RetryAfter,
 					Duration:   elapsed,
 				}
+				applyImageRateLimitPolicy(&retryOutcome)
 			}
 		case len(wsResult.ImageGenCalls) == 0:
 			reason := fmt.Sprintf("image_generation_call 为空 (n=%d)", n)
@@ -1898,6 +1916,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 					Reason:   failure.Message,
 					Duration: elapsed,
 				}
+				applyImageRateLimitPolicy(&retryOutcome)
 			}
 		default:
 			retryOutcome = sdk.ForwardOutcome{Kind: sdk.OutcomeSuccess}
@@ -1919,6 +1938,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 				sdk.LogFieldStatus, retryOutcome.Upstream.StatusCode,
 				sdk.LogFieldReason, retryOutcome.Reason,
 			)
+			imageFallbackUsed = true
 			continue
 		}
 		break
@@ -1961,13 +1981,18 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 				writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
 			}
 			errBody := openAIErrorJSON(openAIErrorTypeForStatus(failure.StatusCode), failure.codeOrKind(), failure.Message)
-			return sdk.ForwardOutcome{
+			outcome := sdk.ForwardOutcome{
 				Kind:       failure.outcomeKind(),
 				Upstream:   sdk.UpstreamResponse{StatusCode: failure.StatusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
 				Reason:     failure.Error(),
 				RetryAfter: failure.RetryAfter,
 				Duration:   elapsed,
-			}, wsResult.Err
+			}
+			applyImageRateLimitPolicy(&outcome)
+			if imageFallbackUsed && outcome.Kind != sdk.OutcomeSuccess {
+				markImageRetryUsed(&outcome)
+			}
+			return outcome, wsResult.Err
 		}
 		// 兜底：网络层 / 解析失败 等无 *responsesFailureError 的情况，保留 UpstreamTransient/502。
 		if sseKA != nil {
@@ -1976,12 +2001,16 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 				"path", reqPath, "model", imgReq.Model, "error", wsResult.Err)
 			writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
 		}
-		return sdk.ForwardOutcome{
+		outcome := sdk.ForwardOutcome{
 			Kind:     sdk.OutcomeUpstreamTransient,
 			Upstream: sdk.UpstreamResponse{StatusCode: http.StatusBadGateway},
 			Reason:   wsResult.Err.Error(),
 			Duration: elapsed,
-		}, wsResult.Err
+		}
+		if imageFallbackUsed {
+			markImageRetryUsed(&outcome)
+		}
+		return outcome, wsResult.Err
 	}
 
 	if len(wsResult.ImageGenCalls) == 0 {
@@ -2016,7 +2045,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 				"path", reqPath, "model", imgReq.Model, "reason", reason)
 			writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
 		}
-		return sdk.ForwardOutcome{
+		outcome := sdk.ForwardOutcome{
 			Kind: sdk.OutcomeUpstreamTransient,
 			Upstream: sdk.UpstreamResponse{
 				StatusCode: http.StatusBadGateway,
@@ -2025,7 +2054,11 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 			},
 			Reason:   reason,
 			Duration: elapsed,
-		}, fmt.Errorf("%s", reason)
+		}
+		if imageFallbackUsed {
+			markImageRetryUsed(&outcome)
+		}
+		return outcome, fmt.Errorf("%s", reason)
 	}
 	if isEdit {
 		// 局部绘图只把 mask / 区域标注交给模型，不再把生成结果按 mask 回拼原图。

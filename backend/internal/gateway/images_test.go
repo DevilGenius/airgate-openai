@@ -2301,7 +2301,7 @@ func TestForwardImagesViaResponsesTool_InvalidSize(t *testing.T) {
 	}
 }
 
-func TestForwardAPIKeyImages_Downgrades4KTo2KAndRetriesTwice(t *testing.T) {
+func TestForwardAPIKeyImages_Downgrades4KTo2KOnce(t *testing.T) {
 	result := testPNGBase64(1, 1, func(x, y int) color.RGBA {
 		return color.RGBA{R: 10, G: 20, B: 30, A: 255}
 	})
@@ -2310,7 +2310,7 @@ func TestForwardAPIKeyImages_Downgrades4KTo2KAndRetriesTwice(t *testing.T) {
 		raw, _ := io.ReadAll(r.Body)
 		sizes = append(sizes, gjson.GetBytes(raw, "size").String())
 		w.Header().Set("Content-Type", "application/json")
-		if len(sizes) < 3 {
+		if len(sizes) < 2 {
 			w.WriteHeader(http.StatusBadGateway)
 			_, _ = fmt.Fprint(w, `{"error":{"message":"temporary image failure"}}`)
 			return
@@ -2341,7 +2341,7 @@ func TestForwardAPIKeyImages_Downgrades4KTo2KAndRetriesTwice(t *testing.T) {
 	if outcome.Kind != sdk.OutcomeSuccess {
 		t.Fatalf("Kind = %v, want Success; reason=%s", outcome.Kind, outcome.Reason)
 	}
-	if got, want := strings.Join(sizes, ","), "3840x2160,2560x1440,2560x1440"; got != want {
+	if got, want := strings.Join(sizes, ","), "3840x2160,2560x1440"; got != want {
 		t.Fatalf("attempt sizes = %q, want %q", got, want)
 	}
 	if got := gjson.GetBytes(outcome.Upstream.Body, "size").String(); got != "2560x1440" {
