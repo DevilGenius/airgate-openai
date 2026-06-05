@@ -38,19 +38,26 @@ const FAST_INDICATOR_STYLE: CSSProperties = {
   pointerEvents: 'none',
 };
 
-function imageSizeDotColor(imageSize: string): string {
+function imageSizeTier(imageSize: string): 'high' | 'low' | 'medium' {
   const normalized = imageSize.trim().toLowerCase();
-  if (/\b4k\b/.test(normalized)) return EFFORT_HIGH_COLOR;
-  if (/\b2k\b/.test(normalized)) return EFFORT_MEDIUM_COLOR;
-  if (/\b1k\b/.test(normalized)) return EFFORT_LOW_COLOR;
+  if (/\b4k\b/.test(normalized)) return 'high';
+  if (/\b2k\b/.test(normalized)) return 'medium';
+  if (/\b1k\b/.test(normalized)) return 'low';
 
   const dimensions = normalized.match(/\d+(?:\.\d+)?/g)?.map(Number).filter(Number.isFinite) ?? [];
   const [width, height] = dimensions;
   if (width && height) {
     const pixels = width * height;
-    if (pixels > IMAGE_TIER_2K_MAX_PIXELS) return EFFORT_HIGH_COLOR;
-    if (pixels > IMAGE_TIER_1K_MAX_PIXELS) return EFFORT_MEDIUM_COLOR;
+    if (pixels > IMAGE_TIER_2K_MAX_PIXELS) return 'high';
+    if (pixels > IMAGE_TIER_1K_MAX_PIXELS) return 'medium';
   }
+  return 'low';
+}
+
+function imageSizeDotColor(imageSize: string): string {
+  const tier = imageSizeTier(imageSize);
+  if (tier === 'high') return EFFORT_HIGH_COLOR;
+  if (tier === 'medium') return EFFORT_MEDIUM_COLOR;
   return EFFORT_LOW_COLOR;
 }
 
@@ -76,13 +83,14 @@ function usageMetadata(context: UsageRecordSurfaceProps['context']): Record<stri
 export function UsageModelMeta(props: UsageRecordSurfaceProps) {
   const ctx = (props.context ?? {}) as UsageContext;
   const imageSize = usageMetadata(props.context)['openai.image.size']?.trim() ?? '';
-  const chips: Array<{ label: string; color: string; dotColor?: string; fastMark?: boolean }> = [];
+  const chips: Array<{ imageTier?: 'high' | 'low' | 'medium'; label: string; color: string; dotColor?: string; fastMark?: boolean }> = [];
 
   if (imageSize) {
     chips.push({
       label: imageSize,
       color: IMAGE_SIZE_COLOR,
       dotColor: imageSizeDotColor(imageSize),
+      imageTier: imageSizeTier(imageSize),
     });
   }
   const hasReasoningEffort = Boolean(ctx.reasoning_effort?.trim());
@@ -105,15 +113,23 @@ export function UsageModelMeta(props: UsageRecordSurfaceProps) {
       {chips.map((chip) => (
         <span
           key={chip.label}
-          className={`inline-flex shrink-0 items-center rounded px-1.5 font-semibold leading-4 whitespace-nowrap ${chip.dotColor ? 'ag-usage-image-size-chip justify-start gap-1 text-[11px]' : 'text-[12px]'}`}
+          className={[
+            'ag-usage-meta-chip',
+            chip.dotColor && 'ag-usage-meta-chip--image',
+            chip.imageTier && `ag-usage-meta-chip--image-${chip.imageTier}`,
+            'inline-flex shrink-0 items-center rounded px-1.5 font-semibold leading-4 whitespace-nowrap',
+            chip.dotColor ? 'justify-start gap-1 text-[11px]' : 'text-[12px]',
+          ].filter(Boolean).join(' ')}
           style={{
             ...chipStyle(chip.color),
+            '--ag-usage-meta-chip-color': chip.color,
+            '--ag-usage-meta-chip-dot-color': chip.dotColor ?? chip.color,
             position: chip.fastMark ? 'relative' : undefined,
-          }}
+          } as CSSProperties}
         >
           {chip.dotColor ? (
             <span
-              className="ag-usage-image-size-dot"
+              className="ag-usage-meta-chip-dot"
               aria-hidden="true"
               style={{ backgroundColor: chip.dotColor }}
             />
