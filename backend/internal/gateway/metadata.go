@@ -50,6 +50,7 @@ func BuildPluginInfo() sdk.PluginInfo {
 			"account.oauth_plans": `[
 				{"key":"free","label":"Free","credential_key":"plan_type","matches":["free"]},
 				{"key":"plus","label":"Plus","credential_key":"plan_type","matches":["plus"]},
+				{"key":"team","label":"Team","credential_key":"plan_type","matches":["team"]},
 				{"key":"pro","label":"Pro","credential_key":"plan_type","matches":["pro"]}
 			]`,
 		},
