@@ -115,9 +115,11 @@ func (g *OpenAIGateway) handleWSWithAPIKey(ctx context.Context, clientConn sdk.W
 
 // bridgeWebSocket 双向桥接客户端和上游的 WebSocket 消息
 func bridgeWebSocket(ctx context.Context, clientConn sdk.WebSocketConn, upstreamConn *websocket.Conn) error {
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 	var wg sync.WaitGroup
 	var closeOnce sync.Once
+	var doneOnce sync.Once
+	bridgeDone := make(chan struct{})
 
 	closeBoth := func() {
 		closeOnce.Do(func() {
@@ -125,6 +127,41 @@ func bridgeWebSocket(ctx context.Context, clientConn sdk.WebSocketConn, upstream
 			_ = upstreamConn.Close()
 		})
 	}
+	closeBridgeDone := func() {
+		doneOnce.Do(func() {
+			close(bridgeDone)
+		})
+	}
+
+	clientReadReset := make(chan struct{}, 1)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		timer := time.NewTimer(webSocketReadTimeout)
+		defer timer.Stop()
+		for {
+			select {
+			case <-bridgeDone:
+				return
+			case <-clientReadReset:
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(webSocketReadTimeout)
+			case <-timer.C:
+				reportWebSocketBridgeError(errCh, &webSocketBridgeError{
+					op:  "读取客户端消息",
+					err: fmt.Errorf("WebSocket 客户端读取超时: %s", webSocketReadTimeout),
+				})
+				closeBoth()
+				return
+			}
+		}
+	}()
 
 	// 客户端 → 上游
 	wg.Add(1)
@@ -133,15 +170,19 @@ func bridgeWebSocket(ctx context.Context, clientConn sdk.WebSocketConn, upstream
 		for {
 			msgType, data, err := clientConn.ReadMessage()
 			if err != nil {
-				errCh <- &webSocketBridgeError{op: "读取客户端消息", err: err}
+				reportWebSocketBridgeError(errCh, &webSocketBridgeError{op: "读取客户端消息", err: err})
 				return
+			}
+			select {
+			case clientReadReset <- struct{}{}:
+			default:
 			}
 			wsType := websocket.TextMessage
 			if msgType == sdk.WSMessageBinary {
 				wsType = websocket.BinaryMessage
 			}
 			if err := writeWebSocketMessage(upstreamConn, wsType, data); err != nil {
-				errCh <- &webSocketBridgeError{op: "写入上游消息", err: err}
+				reportWebSocketBridgeError(errCh, &webSocketBridgeError{op: "写入上游消息", err: err})
 				return
 			}
 		}
@@ -152,9 +193,13 @@ func bridgeWebSocket(ctx context.Context, clientConn sdk.WebSocketConn, upstream
 	go func() {
 		defer wg.Done()
 		for {
+			if err := upstreamConn.SetReadDeadline(time.Now().Add(webSocketReadTimeout)); err != nil {
+				reportWebSocketBridgeError(errCh, &webSocketBridgeError{op: "设置上游读取超时", err: err})
+				return
+			}
 			wsType, data, err := upstreamConn.ReadMessage()
 			if err != nil {
-				errCh <- &webSocketBridgeError{op: "读取上游消息", err: err}
+				reportWebSocketBridgeError(errCh, &webSocketBridgeError{op: "读取上游消息", err: err})
 				return
 			}
 			msgType := sdk.WSMessageText
@@ -162,7 +207,7 @@ func bridgeWebSocket(ctx context.Context, clientConn sdk.WebSocketConn, upstream
 				msgType = sdk.WSMessageBinary
 			}
 			if err := clientConn.WriteMessage(msgType, data); err != nil {
-				errCh <- &webSocketBridgeError{op: "写入客户端消息", err: err}
+				reportWebSocketBridgeError(errCh, &webSocketBridgeError{op: "写入客户端消息", err: err})
 				return
 			}
 		}
@@ -171,16 +216,25 @@ func bridgeWebSocket(ctx context.Context, clientConn sdk.WebSocketConn, upstream
 	// 等待任一方向结束或 context 取消
 	select {
 	case <-ctx.Done():
+		closeBridgeDone()
 		closeBoth()
 		wg.Wait()
 		return ctx.Err()
 	case err := <-errCh:
+		closeBridgeDone()
 		closeBoth()
 		wg.Wait()
 		if isNormalWebSocketBridgeClose(err) {
 			return nil
 		}
 		return err
+	}
+}
+
+func reportWebSocketBridgeError(errCh chan<- error, err error) {
+	select {
+	case errCh <- err:
+	default:
 	}
 }
 

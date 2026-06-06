@@ -24,6 +24,7 @@ const (
 	// WSBetaHeader WebSocket 协议的 OpenAI-Beta 头（仅 WS 模式需要）
 	WSBetaHeader = "responses_websockets=2026-02-06"
 
+	webSocketReadTimeout  = 300 * time.Second
 	webSocketWriteTimeout = 30 * time.Second
 )
 
@@ -184,6 +185,7 @@ func formatWebSocketDialError(resp *http.Response, err error) error {
 		// 尝试读取上游响应体中的错误详情
 		upstreamMsg := ""
 		if resp.Body != nil {
+			defer func() { _ = resp.Body.Close() }()
 			if body, readErr := readLimitedErrorBody(resp.Body); readErr == nil && len(body) > 0 {
 				// 尝试提取 JSON 中的 error.message
 				if msg := gjson.GetBytes(body, "error.message").String(); msg != "" {
@@ -259,7 +261,7 @@ func ReceiveWSResponse(ctx context.Context, conn *websocket.Conn, handler WSEven
 		default:
 		}
 
-		if err := conn.SetReadDeadline(time.Now().Add(300 * time.Second)); err != nil {
+		if err := conn.SetReadDeadline(time.Now().Add(webSocketReadTimeout)); err != nil {
 			result.Err = fmt.Errorf("设置 WebSocket 读取超时失败: %w", err)
 			break
 		}

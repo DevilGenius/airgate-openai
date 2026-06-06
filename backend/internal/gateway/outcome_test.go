@@ -46,6 +46,24 @@ func TestMarkImageRetryUsed(t *testing.T) {
 	}
 }
 
+func TestMarkImageRetryUsedAfterFallbackSkipsRateLimit(t *testing.T) {
+	outcome := sdk.ForwardOutcome{Kind: sdk.OutcomeAccountRateLimited}
+	markImageRetryUsedAfterFallback(&outcome)
+
+	if imageRetryUsed(outcome.Upstream.Headers) {
+		t.Fatalf("%s marked for rate limit", imageRetryUsedHeader)
+	}
+}
+
+func TestMarkImageRetryUsedAfterFallbackMarksNonRateLimit(t *testing.T) {
+	outcome := sdk.ForwardOutcome{Kind: sdk.OutcomeUpstreamTransient}
+	markImageRetryUsedAfterFallback(&outcome)
+
+	if !imageRetryUsed(outcome.Upstream.Headers) {
+		t.Fatalf("%s not marked for transient failure", imageRetryUsedHeader)
+	}
+}
+
 func TestImageRetryBudgetDisablesFallbackAttempts(t *testing.T) {
 	if got := len(imageSizeAttemptsForRequest("4096x4096")); got != 2 {
 		t.Fatalf("imageSizeAttemptsForRequest len = %d, want 2", got)

@@ -1824,8 +1824,8 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 				imageFallbackUsed = true
 				continue
 			}
-			if imageFallbackUsed && outcome.Kind != sdk.OutcomeSuccess {
-				markImageRetryUsed(&outcome)
+			if imageFallbackUsed {
+				markImageRetryUsedAfterFallback(&outcome)
 			}
 			return outcome, forwardErrForOutcome(outcome, err)
 		}
@@ -1853,8 +1853,8 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 				imageFallbackUsed = true
 				continue
 			}
-			if imageFallbackUsed && outcome.Kind != sdk.OutcomeSuccess {
-				markImageRetryUsed(&outcome)
+			if imageFallbackUsed {
+				markImageRetryUsedAfterFallback(&outcome)
 			}
 			return outcome, fmt.Errorf("%s", reason)
 		}
@@ -1959,7 +1959,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 					}
 					writeSSEErrorIfStarted(req.Writer, sseKA, clientMsg)
 				}
-				return sdk.ForwardOutcome{
+				outcome := sdk.ForwardOutcome{
 					Kind: sdk.OutcomeClientError,
 					Upstream: sdk.UpstreamResponse{
 						StatusCode: failure.StatusCode,
@@ -1968,7 +1968,11 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 					},
 					Reason:   failure.Message,
 					Duration: elapsed,
-				}, nil
+				}
+				if imageFallbackUsed {
+					markImageRetryUsedAfterFallback(&outcome)
+				}
+				return outcome, nil
 			}
 			// 用 *responsesFailureError 自带的分类驱动 Outcome：
 			// rate_limited 走 AccountRateLimited（带 RetryAfter），server 等仍归 UpstreamTransient。
@@ -1989,8 +1993,8 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 				Duration:   elapsed,
 			}
 			applyImageRateLimitPolicy(&outcome)
-			if imageFallbackUsed && outcome.Kind != sdk.OutcomeSuccess {
-				markImageRetryUsed(&outcome)
+			if imageFallbackUsed {
+				markImageRetryUsedAfterFallback(&outcome)
 			}
 			return outcome, wsResult.Err
 		}
@@ -2008,7 +2012,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 			Duration: elapsed,
 		}
 		if imageFallbackUsed {
-			markImageRetryUsed(&outcome)
+			markImageRetryUsedAfterFallback(&outcome)
 		}
 		return outcome, wsResult.Err
 	}
@@ -2027,7 +2031,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 					"code", failure.Code, "reason", reason)
 				writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
 			}
-			return sdk.ForwardOutcome{
+			outcome := sdk.ForwardOutcome{
 				Kind: sdk.OutcomeClientError,
 				Upstream: sdk.UpstreamResponse{
 					StatusCode: failure.StatusCode,
@@ -2036,7 +2040,11 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 				},
 				Reason:   failure.Message,
 				Duration: elapsed,
-			}, nil
+			}
+			if imageFallbackUsed {
+				markImageRetryUsedAfterFallback(&outcome)
+			}
+			return outcome, nil
 		}
 		body := buildImagesErrorBody(http.StatusBadGateway, "上游未返回图像结果")
 		if sseKA != nil {
@@ -2056,7 +2064,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 			Duration: elapsed,
 		}
 		if imageFallbackUsed {
-			markImageRetryUsed(&outcome)
+			markImageRetryUsedAfterFallback(&outcome)
 		}
 		return outcome, fmt.Errorf("%s", reason)
 	}

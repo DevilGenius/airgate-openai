@@ -371,8 +371,8 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 			}
 		}
 		if outcome.Kind == sdk.OutcomeSuccess || finalAttempt || !isImageReq {
-			if imageFallbackUsed && outcome.Kind != sdk.OutcomeSuccess {
-				markImageRetryUsed(&outcome)
+			if imageFallbackUsed {
+				markImageRetryUsedAfterFallback(&outcome)
 			}
 			return outcome, err
 		}
