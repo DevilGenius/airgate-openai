@@ -123,13 +123,6 @@ func imageSizeAttemptsForRequest(size string) []imageSizeAttempt {
 	return attempts
 }
 
-func imageSizeAttemptsForRequestWithBudget(size string, retryUsed bool) []imageSizeAttempt {
-	if retryUsed {
-		return []imageSizeAttempt{{}}
-	}
-	return imageSizeAttemptsForRequest(size)
-}
-
 func imagesResponseOptionsForAttempt(base imagesResponseOptions, attempt imageSizeAttempt) imagesResponseOptions {
 	if attempt.Size == "" {
 		return base
@@ -1738,10 +1731,9 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 	var n int
 	downgradedBillingSize := ""
 	elapsed := time.Since(start)
-	attempts := imageSizeAttemptsForRequestWithBudget(imgReq.Size, imageRetryUsed(req.Headers))
+	attempts := imageSizeAttemptsForRequest(imgReq.Size)
 	baseBody := append([]byte(nil), req.Body...)
 	baseContentType := contentType
-	imageFallbackUsed := false
 	for idx, attempt := range attempts {
 		attemptBody, attemptContentType, err := imagesRequestBodyForAttempt(baseBody, baseContentType, isEdit, attempt)
 		if err != nil {
@@ -1821,11 +1813,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 					sdk.LogFieldStatus, outcome.Upstream.StatusCode,
 					sdk.LogFieldReason, outcome.Reason,
 				)
-				imageFallbackUsed = true
 				continue
-			}
-			if imageFallbackUsed {
-				markImageRetryUsedAfterFallback(&outcome)
 			}
 			return outcome, forwardErrForOutcome(outcome, err)
 		}
@@ -1850,11 +1838,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 					"kind", outcome.Kind,
 					sdk.LogFieldReason, outcome.Reason,
 				)
-				imageFallbackUsed = true
 				continue
-			}
-			if imageFallbackUsed {
-				markImageRetryUsedAfterFallback(&outcome)
 			}
 			return outcome, fmt.Errorf("%s", reason)
 		}
@@ -1938,7 +1922,6 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 				sdk.LogFieldStatus, retryOutcome.Upstream.StatusCode,
 				sdk.LogFieldReason, retryOutcome.Reason,
 			)
-			imageFallbackUsed = true
 			continue
 		}
 		break
@@ -1969,9 +1952,6 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 					Reason:   failure.Message,
 					Duration: elapsed,
 				}
-				if imageFallbackUsed {
-					markImageRetryUsedAfterFallback(&outcome)
-				}
 				return outcome, nil
 			}
 			// 用 *responsesFailureError 自带的分类驱动 Outcome：
@@ -1993,9 +1973,6 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 				Duration:   elapsed,
 			}
 			applyImageRateLimitPolicy(&outcome)
-			if imageFallbackUsed {
-				markImageRetryUsedAfterFallback(&outcome)
-			}
 			return outcome, wsResult.Err
 		}
 		// 兜底：网络层 / 解析失败 等无 *responsesFailureError 的情况，保留 UpstreamTransient/502。
@@ -2010,9 +1987,6 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 			Upstream: sdk.UpstreamResponse{StatusCode: http.StatusBadGateway},
 			Reason:   wsResult.Err.Error(),
 			Duration: elapsed,
-		}
-		if imageFallbackUsed {
-			markImageRetryUsedAfterFallback(&outcome)
 		}
 		return outcome, wsResult.Err
 	}
@@ -2041,9 +2015,6 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 				Reason:   failure.Message,
 				Duration: elapsed,
 			}
-			if imageFallbackUsed {
-				markImageRetryUsedAfterFallback(&outcome)
-			}
 			return outcome, nil
 		}
 		body := buildImagesErrorBody(http.StatusBadGateway, "上游未返回图像结果")
@@ -2062,9 +2033,6 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 			},
 			Reason:   reason,
 			Duration: elapsed,
-		}
-		if imageFallbackUsed {
-			markImageRetryUsedAfterFallback(&outcome)
 		}
 		return outcome, fmt.Errorf("%s", reason)
 	}

@@ -37,39 +37,9 @@ func TestApplyImageRateLimitPolicy(t *testing.T) {
 	}
 }
 
-func TestMarkImageRetryUsed(t *testing.T) {
-	outcome := sdk.ForwardOutcome{}
-	markImageRetryUsed(&outcome)
-
-	if !imageRetryUsed(outcome.Upstream.Headers) {
-		t.Fatalf("%s not marked", imageRetryUsedHeader)
-	}
-}
-
-func TestMarkImageRetryUsedAfterFallbackSkipsRateLimit(t *testing.T) {
-	outcome := sdk.ForwardOutcome{Kind: sdk.OutcomeAccountRateLimited}
-	markImageRetryUsedAfterFallback(&outcome)
-
-	if imageRetryUsed(outcome.Upstream.Headers) {
-		t.Fatalf("%s marked for rate limit", imageRetryUsedHeader)
-	}
-}
-
-func TestMarkImageRetryUsedAfterFallbackMarksNonRateLimit(t *testing.T) {
-	outcome := sdk.ForwardOutcome{Kind: sdk.OutcomeUpstreamTransient}
-	markImageRetryUsedAfterFallback(&outcome)
-
-	if !imageRetryUsed(outcome.Upstream.Headers) {
-		t.Fatalf("%s not marked for transient failure", imageRetryUsedHeader)
-	}
-}
-
-func TestImageRetryBudgetDisablesFallbackAttempts(t *testing.T) {
+func TestImageSizeAttemptsForRequestIncludesFallback(t *testing.T) {
 	if got := len(imageSizeAttemptsForRequest("4096x4096")); got != 2 {
 		t.Fatalf("imageSizeAttemptsForRequest len = %d, want 2", got)
-	}
-	if got := len(imageSizeAttemptsForRequestWithBudget("4096x4096", true)); got != 1 {
-		t.Fatalf("imageSizeAttemptsForRequestWithBudget len = %d, want 1", got)
 	}
 }
 

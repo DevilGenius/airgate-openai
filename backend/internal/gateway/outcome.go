@@ -35,7 +35,6 @@ const (
 	usageMetricTotalTokens           = "total_tokens"
 	usageMetricImages                = "openai.image.count"
 
-	imageRetryUsedHeader        = "X-Airgate-Image-Retry-Used"
 	imageRateLimitMinRetryAfter = time.Minute
 )
 
@@ -79,30 +78,6 @@ func applyImageRateLimitPolicy(outcome *sdk.ForwardOutcome) {
 	if outcome.RetryAfter < imageRateLimitMinRetryAfter {
 		outcome.RetryAfter = imageRateLimitMinRetryAfter
 	}
-}
-
-func markImageRetryUsed(outcome *sdk.ForwardOutcome) {
-	if outcome == nil {
-		return
-	}
-	if outcome.Upstream.Headers == nil {
-		outcome.Upstream.Headers = http.Header{}
-	}
-	outcome.Upstream.Headers.Set(imageRetryUsedHeader, "true")
-}
-
-// markImageRetryUsedAfterFallback prevents Core from replaying non-rate-limit
-// image failures after plugin-side 4K -> 2K fallback. Rate limits stay unmarked
-// so Core can fail over to other accounts.
-func markImageRetryUsedAfterFallback(outcome *sdk.ForwardOutcome) {
-	if outcome == nil || outcome.Kind == sdk.OutcomeSuccess || outcome.Kind == sdk.OutcomeAccountRateLimited {
-		return
-	}
-	markImageRetryUsed(outcome)
-}
-
-func imageRetryUsed(headers http.Header) bool {
-	return strings.EqualFold(headers.Get(imageRetryUsedHeader), "true")
 }
 
 // transientOutcome 连接级 / 网络层错误（无上游 HTTP 响应），归类为 UpstreamTransient。
