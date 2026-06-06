@@ -93,7 +93,7 @@ func markImageRetryUsed(outcome *sdk.ForwardOutcome) {
 
 // markImageRetryUsedAfterFallback prevents Core from replaying non-rate-limit
 // image failures after plugin-side 4K -> 2K fallback. Rate limits stay unmarked
-// so Core can fail over once to another account.
+// so Core can fail over to other accounts.
 func markImageRetryUsedAfterFallback(outcome *sdk.ForwardOutcome) {
 	if outcome == nil || outcome.Kind == sdk.OutcomeSuccess || outcome.Kind == sdk.OutcomeAccountRateLimited {
 		return
