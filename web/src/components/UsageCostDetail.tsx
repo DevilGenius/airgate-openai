@@ -241,13 +241,13 @@ export function UsageCostDetail({ context }: UsageRecordSurfaceProps) {
         {isAdmin && record.account_cost !== undefined ? (
           <Row label="上游计费" value={money(record.account_cost)} tone="var(--ag-success)" />
         ) : null}
-        <Row label="密钥计费" value={money(keyBillingCost)} tone="var(--ag-warning)" />
         {showUserBalanceCharge ? (
           <>
             <Row label="余额扣费" value={money(record.actual_cost)} tone="var(--ag-primary)" />
             <Row label="利润" value={money((record.billed_cost ?? 0) - (record.actual_cost ?? 0))} tone="var(--ag-success)" />
           </>
         ) : null}
+        <Row label="密钥计费" value={money(keyBillingCost)} tone="var(--ag-warning)" />
       </div>
     </div>
   );
