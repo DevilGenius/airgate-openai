@@ -124,6 +124,20 @@ function money(value: unknown) {
   return `$${amount.toFixed(6)}`;
 }
 
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function rate(value: unknown) {
+  const amount = finiteNumber(value);
+  if (amount === undefined) return '-';
+  return `${amount.toLocaleString(undefined, {
+    maximumFractionDigits: 3,
+    minimumFractionDigits: 0,
+    useGrouping: false,
+  })}x`;
+}
+
 function Row({ label, tone, value }: { label: ReactNode; tone?: string; value: ReactNode }) {
   return (
     <div style={rowStyle}>
@@ -156,6 +170,16 @@ export function UsageCostDetail({ context }: UsageRecordSurfaceProps) {
   const record = recordFromContext(context);
   const metadata = metadataFromContext(context, record);
   const isAdmin = context?.adminView !== false;
+  const groupRate = finiteNumber(record.rate_multiplier);
+  const upstreamRate = finiteNumber(record.account_rate_multiplier);
+  const sellRate = finiteNumber(record.sell_rate);
+  const keyBillingCost = record.billed_cost ?? record.actual_cost;
+  const showUserBalanceCharge = isAdmin
+    && sellRate !== undefined
+    && sellRate > 0
+    && record.billed_cost !== undefined
+    && record.actual_cost !== undefined
+    && record.billed_cost !== record.actual_cost;
 
   const rows = fallbackDetails(record);
 
@@ -178,8 +202,9 @@ export function UsageCostDetail({ context }: UsageRecordSurfaceProps) {
   }
 
   const hasRateInfo = !!record.service_tier
-    || (record.rate_multiplier !== undefined && record.rate_multiplier > 0)
-    || (isAdmin && record.account_rate_multiplier !== undefined && record.account_rate_multiplier > 0 && record.account_rate_multiplier !== 1);
+    || groupRate !== undefined
+    || (isAdmin && upstreamRate !== undefined)
+    || (isAdmin && sellRate !== undefined && sellRate > 0);
 
   return (
     <div style={panelStyle}>
@@ -202,24 +227,24 @@ export function UsageCostDetail({ context }: UsageRecordSurfaceProps) {
         {record.service_tier ? (
           <Row label="服务档位" value={<span style={{ textTransform: 'capitalize' }}>{record.service_tier}</span>} />
         ) : null}
-        {record.rate_multiplier !== undefined && record.rate_multiplier > 0 ? (
-          <Row label="倍率" value={`${record.rate_multiplier.toFixed(2)}x`} />
+        {groupRate !== undefined ? (
+          <Row label="分组倍率" value={rate(groupRate)} />
         ) : null}
-        {isAdmin && record.account_rate_multiplier !== undefined && record.account_rate_multiplier > 0 ? (
-          <Row label="账号倍率" value={`${record.account_rate_multiplier.toFixed(2)}x`} />
+        {isAdmin && upstreamRate !== undefined ? (
+          <Row label="上游倍率" value={rate(upstreamRate)} />
         ) : null}
-        {isAdmin && record.sell_rate && record.sell_rate > 0 ? (
-          <Row label="销售倍率" value={`${record.sell_rate.toFixed(2)}x`} />
+        {isAdmin && sellRate !== undefined && sellRate > 0 ? (
+          <Row label="销售倍率" value={rate(sellRate)} />
         ) : null}
         {hasRateInfo ? <div style={dividerStyle} /> : null}
-        <Row label="原始" value={money(record.total_cost)} tone="var(--ag-text)" />
+        <Row label="原始成本" value={money(record.total_cost)} tone="var(--ag-text)" />
         {isAdmin && record.account_cost !== undefined ? (
-          <Row label="账号计费" value={money(record.account_cost)} tone="var(--ag-success)" />
+          <Row label="上游计费" value={money(record.account_cost)} tone="var(--ag-success)" />
         ) : null}
-        <Row label="本次消费" value={money(record.actual_cost)} tone="var(--ag-warning)" />
-        {isAdmin && record.sell_rate && record.sell_rate > 0 && record.billed_cost !== record.actual_cost ? (
+        <Row label="密钥计费" value={money(keyBillingCost)} tone="var(--ag-warning)" />
+        {showUserBalanceCharge ? (
           <>
-            <Row label="客户账面" value={money(record.billed_cost)} tone="var(--ag-primary)" />
+            <Row label="余额扣费" value={money(record.actual_cost)} tone="var(--ag-primary)" />
             <Row label="利润" value={money((record.billed_cost ?? 0) - (record.actual_cost ?? 0))} tone="var(--ag-success)" />
           </>
         ) : null}
