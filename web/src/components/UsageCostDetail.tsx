@@ -174,9 +174,8 @@ export function UsageCostDetail({ context }: UsageRecordSurfaceProps) {
   const upstreamRate = finiteNumber(record.account_rate_multiplier);
   const sellRate = finiteNumber(record.sell_rate);
   const keyBillingCost = record.billed_cost ?? record.actual_cost;
+  const showSellRate = isAdmin && sellRate !== undefined && sellRate !== 1;
   const showUserBalanceCharge = isAdmin
-    && sellRate !== undefined
-    && sellRate > 0
     && record.billed_cost !== undefined
     && record.actual_cost !== undefined
     && record.billed_cost !== record.actual_cost;
@@ -204,7 +203,7 @@ export function UsageCostDetail({ context }: UsageRecordSurfaceProps) {
   const hasRateInfo = !!record.service_tier
     || groupRate !== undefined
     || (isAdmin && upstreamRate !== undefined)
-    || (isAdmin && sellRate !== undefined && sellRate > 0);
+    || showSellRate;
 
   return (
     <div style={panelStyle}>
@@ -233,7 +232,7 @@ export function UsageCostDetail({ context }: UsageRecordSurfaceProps) {
         {isAdmin && upstreamRate !== undefined ? (
           <Row label="上游倍率" value={rate(upstreamRate)} />
         ) : null}
-        {isAdmin && sellRate !== undefined && sellRate > 0 ? (
+        {showSellRate ? (
           <Row label="销售倍率" value={rate(sellRate)} />
         ) : null}
         {hasRateInfo ? <div style={dividerStyle} /> : null}
