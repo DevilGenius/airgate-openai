@@ -558,7 +558,8 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 	}
 	passHeadersForAccount(headers, upstreamReq.Header, account)
 
-	resp, err := client.Do(upstreamReq)
+	streamable := req.Stream && req.Writer != nil && !isImagesRequest(reqPath)
+	resp, cancel, err := g.doStreamableUpstream(ctx, client, upstreamReq, streamable)
 	if err != nil {
 		dur := time.Since(start)
 		if sseKA != nil && finalAttempt {
@@ -579,6 +580,7 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 		// 网络层错误，无上游 HTTP 响应
 		return transientOutcome(err.Error()), fmt.Errorf("请求上游失败: %w", err)
 	}
+	defer cancel()
 	defer func() { _ = resp.Body.Close() }()
 
 	// 非 2xx 统一走 failureOutcome 归类。包含 4xx（客户端错）/ 429 / 401 / 403 / 5xx。
@@ -1187,4 +1189,53 @@ func (g *OpenAIGateway) buildHTTPClient(account *sdk.Account) *http.Client {
 		Transport: transport,
 		Timeout:   g.requestTimeout(),
 	}
+}
+
+const (
+	defaultFirstByteTimeout  = 60 * time.Second
+	defaultStreamIdleTimeout = 60 * time.Second
+)
+
+func (g *OpenAIGateway) firstByteTimeout() time.Duration {
+	if g == nil || g.ctx == nil || g.ctx.Config() == nil {
+		return defaultFirstByteTimeout
+	}
+	if d := g.ctx.Config().GetDuration("first_byte_timeout"); d > 0 {
+		return d
+	}
+	return defaultFirstByteTimeout
+}
+
+func (g *OpenAIGateway) streamIdleTimeout() time.Duration {
+	if g == nil || g.ctx == nil || g.ctx.Config() == nil {
+		return defaultStreamIdleTimeout
+	}
+	if d := g.ctx.Config().GetDuration("stream_idle_timeout"); d > 0 {
+		return d
+	}
+	return defaultStreamIdleTimeout
+}
+
+func (g *OpenAIGateway) doStreamableUpstream(ctx context.Context, client *http.Client, upstreamReq *http.Request, stream bool) (*http.Response, context.CancelFunc, error) {
+	reqCtx, cancel := context.WithCancel(ctx)
+	upstreamReq = upstreamReq.WithContext(reqCtx)
+
+	var firstByteTimer *time.Timer
+	if stream {
+		client.Timeout = 0
+		firstByteTimer = time.AfterFunc(g.firstByteTimeout(), cancel)
+	}
+
+	resp, err := client.Do(upstreamReq)
+	if firstByteTimer != nil {
+		firstByteTimer.Stop()
+	}
+	if err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	if stream {
+		resp.Body = newStallGuardBody(resp.Body, g.streamIdleTimeout(), cancel)
+	}
+	return resp, cancel, nil
 }
