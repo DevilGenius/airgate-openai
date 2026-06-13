@@ -779,6 +779,15 @@ done:
 		firstTokenMs,
 	)
 
+	// 即使流中断 / 上游 response.failed，中断前已产生的 token 上游也已实际计费，
+	// 仍需回传 usage 计费避免漏洞（与 forward.go WS 路径同一模式）。
+	abortUsage := func() *sdk.Usage {
+		if state.InputTokens > 0 || state.OutputTokens > 0 || state.CachedInputTokens > 0 {
+			fillUsageCost(usage)
+			return usage
+		}
+		return nil
+	}
 	if streamErr != nil {
 		var failure *responsesFailureError
 		if errors.As(streamErr, &failure) {
@@ -794,6 +803,7 @@ done:
 				Reason:     failure.Message,
 				RetryAfter: failure.RetryAfter,
 				Duration:   elapsed,
+				Usage:      abortUsage(),
 			}, nil
 		}
 		errBody := anthropicErrorJSON("api_error", streamErr.Error())
@@ -802,6 +812,7 @@ done:
 			Upstream: sdk.UpstreamResponse{StatusCode: http.StatusBadGateway, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
 			Reason:   streamErr.Error(),
 			Duration: elapsed,
+			Usage:    abortUsage(),
 		}, streamErr
 	}
 
