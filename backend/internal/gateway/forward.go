@@ -440,7 +440,11 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 		"account_type", "apikey",
 	)
 
+	streamable := req.Stream && req.Writer != nil && !isImageReq
 	client := g.buildHTTPClient(account)
+	if streamable {
+		client.Timeout = 0
+	}
 	recoveredPreviousResponse := false
 	for idx, attempt := range attempts {
 		attemptBody, attemptContentType, err := imagesRequestBodyForAttempt(baseBody, baseHeaders.Get("Content-Type"), isImageEdit, attempt)

@@ -338,7 +338,11 @@ func (g *OpenAIGateway) forwardAnthropicResponses(
 		"protocol", "anthropic",
 	)
 
+	streamable := gjson.GetBytes(req.Body, "stream").Bool() && w != nil
 	client := g.buildHTTPClient(account)
+	if streamable {
+		client.Timeout = 0
+	}
 	resp, err := client.Do(upstreamReq)
 	if err != nil {
 		dur := time.Since(start)
