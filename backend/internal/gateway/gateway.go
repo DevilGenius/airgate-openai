@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -491,18 +492,15 @@ func (g *OpenAIGateway) probeOAuthUsage(ctx context.Context, accountID int64, cr
 	}
 
 	// 读取 SSE 流，从 codex.rate_limits 事件中捕获用量
-	buf := make([]byte, 4096)
-	for {
-		n, readErr := resp.Body.Read(buf)
-		if n > 0 {
-			for _, line := range splitSSELines(string(buf[:n])) {
-				if snapshot := parseCodexUsageFromSSEEvent([]byte(line)); snapshot != nil {
-					StoreCodexUsage(accountID, snapshot)
-				}
+	// 使用 bufio.Scanner 逐行读取，避免跨 chunk 边界截断不完整行
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, "data: ") {
+			data := strings.TrimPrefix(line, "data: ")
+			if snapshot := parseCodexUsageFromSSEEvent([]byte(data)); snapshot != nil {
+				StoreCodexUsage(accountID, snapshot)
 			}
-		}
-		if readErr != nil {
-			break
 		}
 	}
 
