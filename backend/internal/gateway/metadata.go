@@ -91,6 +91,7 @@ func BuildPluginInfo() sdk.PluginInfo {
 func PluginRouteDefinitions() []sdk.RouteDefinition {
 	return []sdk.RouteDefinition{
 		{Method: "POST", Path: "/v1/responses", Description: "Responses API（Codex 核心端点）"},
+		{Method: "POST", Path: "/v1/responses/compact", Description: "Responses Compact API（上下文压缩）"},
 		{Method: "POST", Path: "/v1/chat/completions", Description: "Chat Completions API"},
 		{Method: "POST", Path: "/v1/messages", Description: "Anthropic Messages API（协议翻译）"},
 		{Method: "POST", Path: "/v1/messages/count_tokens", Description: "Anthropic Count Tokens（兼容回退）"},
@@ -102,6 +103,7 @@ func PluginRouteDefinitions() []sdk.RouteDefinition {
 		{Method: "WS", Path: "/v1/responses", Description: "Responses API（WebSocket）"},
 		// 不带 /v1 前缀的别名路由，方便用户配置时直接使用站点根地址
 		{Method: "POST", Path: "/responses", Description: "Responses API（无 /v1 前缀）"},
+		{Method: "POST", Path: "/responses/compact", Description: "Responses Compact API（无 /v1 前缀）"},
 		{Method: "POST", Path: "/chat/completions", Description: "Chat Completions API（无 /v1 前缀）"},
 		{Method: "POST", Path: "/messages", Description: "Anthropic Messages API（无 /v1 前缀）"},
 		{Method: "POST", Path: "/messages/count_tokens", Description: "Anthropic Count Tokens（无 /v1 前缀）"},

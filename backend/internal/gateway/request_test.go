@@ -191,11 +191,80 @@ func TestPreviousResponseNotFoundRecoveryBodyAllowsToolOutputWithContext(t *test
 	}
 }
 
+func TestPreviousResponseNotFoundRecoveryBodyAllowsModelBudgetFullContext(t *testing.T) {
+	largeText := strings.Repeat("x", 900<<10)
+	body := []byte(`{"model":"gpt-5.5","previous_response_id":"resp_old","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"` + largeText + `"}]}]}`)
+
+	got, ok := previousResponseNotFoundRecoveryBody(body)
+	if !ok {
+		t.Fatalf("expected recovery body within gpt-5.5 model budget")
+	}
+	if gjson.GetBytes(got, "previous_response_id").Exists() {
+		t.Fatalf("previous_response_id was not removed: %s", got)
+	}
+}
+
+func TestPreviousResponseNotFoundRecoveryBodyRejectsOversizedFullContext(t *testing.T) {
+	largeText := strings.Repeat("x", 1<<20)
+	body := []byte(`{"model":"gpt-5.4-mini","previous_response_id":"resp_old","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"` + largeText + `"}]}]}`)
+
+	if _, ok := previousResponseNotFoundRecoveryBody(body); ok {
+		t.Fatalf("expected oversized recovery to be rejected")
+	}
+}
+
+func TestPreviousResponseNotFoundRecoveryBodyAllowsCompactionReplayToolOutput(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.4-mini","previous_response_id":"resp_old","input":[{"type":"compaction","encrypted_content":"summary"},{"type":"function_call_output","call_id":"call_1","output":"ok"}]}`)
+
+	got, ok := previousResponseNotFoundRecoveryBody(body)
+	if !ok {
+		t.Fatalf("expected compaction replay recovery body")
+	}
+	if gjson.GetBytes(got, "previous_response_id").Exists() {
+		t.Fatalf("previous_response_id was not removed: %s", got)
+	}
+}
+
 func TestPreviousResponseNotFoundRecoveryBodyRejectsEncryptedContent(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.4","previous_response_id":"resp_old","input":[{"type":"reasoning","id":"rs_1","encrypted_content":"sealed"}]}`)
 
 	if _, ok := previousResponseNotFoundRecoveryBody(body); ok {
 		t.Fatalf("expected recovery to be rejected for encrypted reasoning content")
+	}
+}
+
+func TestPreprocessRequestBodyCompactDeletesStreamOnly(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.4","stream":false,"input":"hello"}`)
+
+	got := preprocessRequestBody(body, "gpt-5.4", "/v1/responses/compact")
+
+	if gjson.GetBytes(got, "stream").Exists() {
+		t.Fatalf("stream should be removed for compact request: %s", got)
+	}
+	if input := gjson.GetBytes(got, "input"); input.Type != gjson.String || input.String() != "hello" {
+		t.Fatalf("compact input should stay unchanged, got %s in %s", input.Raw, got)
+	}
+	if gjson.GetBytes(got, "store").Exists() {
+		t.Fatalf("store should not be injected for compact request: %s", got)
+	}
+}
+
+func TestPluginRouteDefinitionsIncludesResponsesCompact(t *testing.T) {
+	routes := PluginRouteDefinitions()
+	want := map[string]bool{
+		"POST /v1/responses/compact": false,
+		"POST /responses/compact":    false,
+	}
+	for _, route := range routes {
+		key := route.Method + " " + route.Path
+		if _, ok := want[key]; ok {
+			want[key] = true
+		}
+	}
+	for key, found := range want {
+		if !found {
+			t.Fatalf("route %s not registered", key)
+		}
 	}
 }
 

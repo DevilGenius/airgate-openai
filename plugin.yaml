@@ -35,6 +35,9 @@ gateway:
       path: /v1/responses
       description: Responses API（Codex 核心端点）
     - method: POST
+      path: /v1/responses/compact
+      description: Responses Compact API（上下文压缩）
+    - method: POST
       path: /v1/chat/completions
       description: Chat Completions API
     - method: POST
@@ -64,6 +67,9 @@ gateway:
     - method: POST
       path: /responses
       description: Responses API（无 /v1 前缀）
+    - method: POST
+      path: /responses/compact
+      description: Responses Compact API（无 /v1 前缀）
     - method: POST
       path: /chat/completions
       description: Chat Completions API（无 /v1 前缀）

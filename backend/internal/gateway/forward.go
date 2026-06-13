@@ -57,6 +57,18 @@ func (g *OpenAIGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest
 	// 统一预处理请求体。multipart 请求（images/edits 上传图片）body 是二进制，
 	// 不能按 JSON 处理否则会被 sjson 覆盖丢失数据。
 	_, reqPath := resolveAPIKeyRoute(req)
+	if isResponsesCompactRequestPath(reqPath) && (req.Stream || gjson.GetBytes(req.Body, "stream").Bool()) {
+		body := openAIErrorJSON("invalid_request_error", "invalid_request", "streaming not supported for /responses/compact")
+		return sdk.ForwardOutcome{
+			Kind: sdk.OutcomeClientError,
+			Upstream: sdk.UpstreamResponse{
+				StatusCode: http.StatusBadRequest,
+				Headers:    http.Header{"Content-Type": []string{"application/json"}},
+				Body:       body,
+			},
+			Reason: "streaming not supported for /responses/compact",
+		}, nil
+	}
 	var reqServiceTier string
 	if !strings.HasPrefix(req.Headers.Get("Content-Type"), "multipart/") {
 		req.Body = preprocessRequestBody(req.Body, req.Model, reqPath)
@@ -129,6 +141,9 @@ func (g *OpenAIGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest
 			}
 			return g.forwardImagesViaResponsesTool(ctx, req)
 		}
+		if isResponsesCompactRequestPath(reqPath) {
+			return g.forwardOAuthCompact(ctx, req, reqServiceTier)
+		}
 		return g.forwardOAuth(ctx, req)
 	}
 	reason := "账号缺少 api_key 或 access_token"
@@ -138,6 +153,106 @@ func (g *OpenAIGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest
 		sdk.LogFieldError, reason,
 	)
 	return accountDeadOutcome(reason), fmt.Errorf("%s", reason)
+}
+
+func (g *OpenAIGateway) forwardOAuthCompact(ctx context.Context, req *sdk.ForwardRequest, reqServiceTier string) (sdk.ForwardOutcome, error) {
+	start := time.Now()
+	account := req.Account
+	logger := sdk.LoggerFromContext(ctx)
+	session := resolveOpenAISession(req.Headers, req.Body, account.ID)
+	updateSessionStateFromRequest(session, account.ID)
+
+	targetURL := strings.TrimRight(ChatGPTSSEURL, "/") + "/compact"
+	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(req.Body))
+	if err != nil {
+		reason := fmt.Sprintf("构建上游请求失败: %v", err)
+		logger.Warn("upstream_request_build_failed",
+			sdk.LogFieldAccountID, account.ID,
+			sdk.LogFieldModel, req.Model,
+			"url", redactURL(targetURL),
+			sdk.LogFieldError, err,
+		)
+		return transientOutcome(reason), fmt.Errorf("%s", reason)
+	}
+
+	upstreamReq.Header.Set("Content-Type", "application/json")
+	upstreamReq.Header.Set("Accept", "application/json")
+	upstreamReq.Header.Set("Authorization", "Bearer "+account.Credentials["access_token"])
+	if aid := account.Credentials["chatgpt_account_id"]; aid != "" {
+		upstreamReq.Header.Set("ChatGPT-Account-ID", aid)
+	}
+	if session.SessionID != "" {
+		upstreamReq.Header.Set("session_id", isolateSessionID(session.SessionID))
+	}
+	if session.ConversationID != "" {
+		upstreamReq.Header.Set("conversation_id", isolateSessionID(session.ConversationID))
+	}
+	if session.LastTurnState != "" {
+		upstreamReq.Header.Set("x-codex-turn-state", session.LastTurnState)
+	}
+	if originator := req.Headers.Get("originator"); originator != "" {
+		upstreamReq.Header.Set("originator", originator)
+	}
+	if ua := req.Headers.Get("User-Agent"); ua != "" {
+		upstreamReq.Header.Set("User-Agent", ua)
+	}
+
+	logger.Debug("upstream_request_start",
+		sdk.LogFieldAccountID, account.ID,
+		sdk.LogFieldModel, req.Model,
+		"url", redactURL(targetURL),
+		sdk.LogFieldMethod, http.MethodPost,
+		"stream", false,
+		"account_type", "oauth",
+	)
+
+	resp, err := g.buildHTTPClient(account).Do(upstreamReq)
+	if err != nil {
+		dur := time.Since(start)
+		logger.Warn("upstream_request_failed",
+			sdk.LogFieldAccountID, account.ID,
+			sdk.LogFieldModel, req.Model,
+			sdk.LogFieldDurationMs, dur.Milliseconds(),
+			sdk.LogFieldError, err,
+		)
+		return transientOutcome(err.Error()), fmt.Errorf("请求上游失败: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if snapshot := parseCodexUsageFromHeaders(resp.Header); snapshot != nil {
+		StoreCodexUsage(account.ID, snapshot)
+	}
+	if turnState := decodeTurnStateHeader(resp.Header); turnState != "" {
+		updateSessionStateTurnState(session.SessionKey, turnState)
+	}
+
+	if resp.StatusCode >= 400 {
+		respBody, _ := readLimitedErrorBody(resp.Body)
+		errDetail := gjson.GetBytes(respBody, "error.message").String()
+		if errDetail == "" {
+			errDetail = truncate(string(respBody), 200)
+		}
+		dur := time.Since(start)
+		logger.Warn("upstream_request_non_2xx",
+			sdk.LogFieldAccountID, account.ID,
+			sdk.LogFieldModel, req.Model,
+			sdk.LogFieldStatus, resp.StatusCode,
+			sdk.LogFieldDurationMs, dur.Milliseconds(),
+			sdk.LogFieldReason, errDetail,
+		)
+		outcome := failureOutcome(resp.StatusCode, respBody, resp.Header.Clone(), errDetail, extractRetryAfterHeader(resp.Header))
+		outcome.Duration = dur
+		return outcome, nil
+	}
+
+	logger.Debug("upstream_request_completed",
+		sdk.LogFieldAccountID, account.ID,
+		sdk.LogFieldModel, req.Model,
+		sdk.LogFieldStatus, resp.StatusCode,
+		sdk.LogFieldDurationMs, time.Since(start).Milliseconds(),
+		"stream", false,
+	)
+	return handleNonStreamResponse(resp, req.Writer, start, reqServiceTier)
 }
 
 // isImageTaskListRequest 判断是否为 GET /v1/images/tasks/list 历史列表查询。
@@ -908,7 +1023,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 			fillUsageCostWithImageTool(usage, numImages, imageToolSize)
 			outcome.Usage = usage
 		}
-		return outcome, result.Err
+		return outcome, forwardErrForOutcome(outcome, result.Err)
 	}
 
 	// 结束标记 / 响应体写回。必须在 result.Err 判定之后执行，避免把上游错误补成

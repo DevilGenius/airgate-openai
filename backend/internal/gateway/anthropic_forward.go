@@ -416,7 +416,11 @@ func (g *OpenAIGateway) forwardAnthropicResponses(
 	outcome, err := g.handleAnthropicNonStreamFromResponses(resp, nonStreamWriter, originalModel, mappedModel, req.Body, requestServiceTier, defaultServiceTier, start, session, req.Account.ID)
 	setUsageReasoningEffort(outcome.Usage, resolvedEffort)
 	if suppressErrorWrite && outcome.Kind == sdk.OutcomeClientError && outcome.Upstream.StatusCode >= 400 {
-		return outcome, []byte(outcome.Reason), err
+		errBody := outcome.Upstream.Body
+		if len(errBody) == 0 {
+			errBody = []byte(outcome.Reason)
+		}
+		return outcome, errBody, err
 	}
 	return outcome, nil, err
 }

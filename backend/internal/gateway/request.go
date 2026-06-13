@@ -225,6 +225,13 @@ func preprocessRequestBody(body []byte, model, reqPath string) []byte {
 
 	result = preserveOpenAIConversationImages(result)
 
+	if isResponsesCompactRequestPath(reqPath) {
+		if modified, err := sjson.DeleteBytes(result, "stream"); err == nil {
+			result = modified
+		}
+		return result
+	}
+
 	result = applyContextGuard(result, reqPath)
 	result = normalizeResponsesInput(result, reqPath)
 	result = forceResponsesStoreFalse(result, reqPath)
@@ -382,7 +389,36 @@ func extractResponsesInputMessageText(msg gjson.Result) string {
 }
 
 func isResponsesRequestPath(reqPath string) bool {
-	return strings.Contains(reqPath, "/v1/responses") || strings.HasSuffix(reqPath, "/responses")
+	path := normalizeGatewayRequestPath(reqPath)
+	return path == "/v1/responses" || path == "/responses"
+}
+
+func isResponsesCompactRequestPath(reqPath string) bool {
+	path := normalizeGatewayRequestPath(reqPath)
+	return path == "/v1/responses/compact" || path == "/responses/compact"
+}
+
+func normalizeGatewayRequestPath(reqPath string) string {
+	path := strings.TrimSpace(reqPath)
+	if path == "" {
+		return ""
+	}
+	if strings.Contains(path, "://") {
+		if u, err := url.Parse(path); err == nil && u != nil {
+			path = u.EscapedPath()
+		}
+	}
+	if idx := strings.IndexByte(path, '?'); idx >= 0 {
+		path = path[:idx]
+	}
+	path = strings.TrimRight(strings.ToLower(strings.TrimSpace(path)), "/")
+	if path == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return path
 }
 
 func forceResponsesStoreFalse(body []byte, reqPath string) []byte {

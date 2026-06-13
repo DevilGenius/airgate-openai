@@ -26,6 +26,32 @@ func TestClassifyResponsesFailureContextWindow(t *testing.T) {
 	if failure.AnthropicErrorType != "invalid_request_error" {
 		t.Fatalf("unexpected anthropic error type %q", failure.AnthropicErrorType)
 	}
+	if failure.Code != "context_too_large" {
+		t.Fatalf("unexpected code %q", failure.Code)
+	}
+	if failure.Message != contextTooLargeMessage {
+		t.Fatalf("unexpected message %q", failure.Message)
+	}
+}
+
+func TestClassifyWSErrorEventRequestTooLarge(t *testing.T) {
+	raw := []byte(`{"type":"error","error":{"type":"invalid_request_error","code":"request_too_large","message":"HTTP 413 request entity too large"}}`)
+	failure := classifyWSErrorEvent(raw)
+	if failure == nil {
+		t.Fatalf("expected failure")
+	}
+	if failure.Kind != responsesFailureKindClient {
+		t.Fatalf("unexpected kind %q", failure.Kind)
+	}
+	if failure.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", failure.StatusCode)
+	}
+	if failure.Code != "context_too_large" {
+		t.Fatalf("code = %q, want context_too_large", failure.Code)
+	}
+	if failure.Message != contextTooLargeMessage {
+		t.Fatalf("message = %q, want context message", failure.Message)
+	}
 }
 
 func TestClassifyResponsesFailureSafetyRejected(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
+	"github.com/DevilGenius/airgate-openai/backend/internal/model"
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
@@ -15,7 +16,14 @@ type previousResponseRecoverySignals struct {
 	hasToolOutput       bool
 	hasToolCallContext  bool
 	hasEncryptedContent bool
+	hasCompactionReplay bool
 }
+
+const (
+	previousResponseRecoveryBytesPerToken = 6
+	previousResponseRecoveryMinBodyBytes  = 512 << 10
+	previousResponseRecoveryMaxBodyBytes  = 10 << 20
+)
 
 func previousResponseNotFoundRecoveryBody(body []byte) ([]byte, bool) {
 	if !requestCanRecoverPreviousResponseNotFound(body) {
@@ -38,7 +46,27 @@ func requestCanRecoverPreviousResponseNotFound(body []byte) bool {
 		return false
 	}
 	signals := analyzePreviousResponseRecoverySignals(reqData)
-	return !signals.hasEncryptedContent && (!signals.hasToolOutput || signals.hasToolCallContext)
+	return len(body) <= previousResponseRecoveryMaxBytesForBody(body, signals) &&
+		!signals.hasEncryptedContent &&
+		(!signals.hasToolOutput || signals.hasToolCallContext || signals.hasCompactionReplay)
+}
+
+func previousResponseRecoveryMaxBytesForBody(body []byte, signals previousResponseRecoverySignals) int {
+	if signals.hasCompactionReplay {
+		return previousResponseRecoveryMaxBodyBytes
+	}
+	contextWindow := model.Lookup(gjson.GetBytes(body, "model").String()).ContextWindow
+	if contextWindow <= 0 {
+		contextWindow = model.DefaultSpec.ContextWindow
+	}
+	limit := contextWindow * previousResponseRecoveryBytesPerToken
+	if limit < previousResponseRecoveryMinBodyBytes {
+		return previousResponseRecoveryMinBodyBytes
+	}
+	if limit > previousResponseRecoveryMaxBodyBytes {
+		return previousResponseRecoveryMaxBodyBytes
+	}
+	return limit
 }
 
 func analyzePreviousResponseRecoverySignals(reqData map[string]any) previousResponseRecoverySignals {
@@ -71,6 +99,9 @@ func analyzePreviousResponseInputSignals(input any, signals *previousResponseRec
 
 func analyzePreviousResponseInputItemSignals(item map[string]any, signals *previousResponseRecoverySignals) {
 	itemType := strings.TrimSpace(jsonString(item["type"]))
+	if isCompactionReplayItemType(itemType) {
+		signals.hasCompactionReplay = true
+	}
 	if itemType == "reasoning" && strings.TrimSpace(jsonString(item["encrypted_content"])) != "" {
 		signals.hasEncryptedContent = true
 	}
@@ -139,10 +170,21 @@ func analyzePreviousResponseMessageContentItemSignals(item map[string]any, signa
 		if strings.TrimSpace(jsonString(item["encrypted_content"])) != "" {
 			signals.hasEncryptedContent = true
 		}
+	case "compaction", "compaction_summary":
+		signals.hasCompactionReplay = true
 	case "tool_result":
 		signals.hasToolOutput = true
 	case "tool_use":
 		signals.hasToolCallContext = true
+	}
+}
+
+func isCompactionReplayItemType(itemType string) bool {
+	switch strings.TrimSpace(itemType) {
+	case "compaction", "compaction_summary":
+		return true
+	default:
+		return false
 	}
 }
 

@@ -180,6 +180,7 @@ func isModelFallbackError(statusCode int, body []byte) bool {
 				strings.Contains(msg, "invalid model") ||
 				strings.Contains(msg, "not supported"))
 		contextExceeded := strings.Contains(msg, "context_length") ||
+			strings.Contains(msg, "context_too_large") ||
 			strings.Contains(msg, "context window") ||
 			strings.Contains(msg, "max_input_tokens") ||
 			strings.Contains(msg, "token limit") ||

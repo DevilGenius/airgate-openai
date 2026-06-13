@@ -19,6 +19,8 @@ const (
 	responsesFailureKindContinuationAnchor responsesFailureKind = "continuation_anchor"
 	responsesFailureKindRateLimited        responsesFailureKind = "rate_limited"
 	responsesFailureKindServer             responsesFailureKind = "server"
+
+	contextTooLargeMessage = "上下文过长，请压缩对话、减少历史或开启新会话后重试"
 )
 
 type responsesFailureError struct {
@@ -220,12 +222,13 @@ func classifyResponsesError(errType, errCode, msg string) *responsesFailureError
 			Code:               "invalid_encrypted_content",
 			Message:            msg,
 		}
-	case containsAny(errType, errCode, msg, "context_length", "context window", "max_tokens", "max_input_tokens", "max_output_tokens", "token limit", "too many tokens"):
+	case isContextTooLargeError(errType, errCode, msg):
 		return &responsesFailureError{
 			Kind:               responsesFailureKindClient,
-			StatusCode:         http.StatusBadRequest,
+			StatusCode:         contextTooLargeStatus(errType, errCode, msg),
 			AnthropicErrorType: "invalid_request_error",
-			Message:            msg,
+			Code:               "context_too_large",
+			Message:            contextTooLargeMessage,
 		}
 	case isModelUnsupportedText(errType, errCode, msg):
 		return &responsesFailureError{
@@ -265,6 +268,55 @@ func classifyResponsesError(errType, errCode, msg string) *responsesFailureError
 			Message:            msg,
 		}
 	}
+}
+
+func isContextTooLargeError(parts ...string) bool {
+	return containsAnyInParts(parts,
+		"context_length",
+		"context_too_large",
+		"context window",
+		"max_tokens",
+		"max_input_tokens",
+		"max_output_tokens",
+		"token limit",
+		"too many tokens",
+		"request_too_large",
+		"payload too large",
+		"request entity too large",
+		"message too big",
+		"status 413",
+		"http 413",
+		" 413",
+	)
+}
+
+func contextTooLargeStatus(parts ...string) int {
+	if containsAnyInParts(parts,
+		"request_too_large",
+		"payload too large",
+		"request entity too large",
+		"message too big",
+		"status 413",
+		"http 413",
+		" 413",
+	) {
+		return http.StatusRequestEntityTooLarge
+	}
+	return http.StatusBadRequest
+}
+
+func containsAnyInParts(parts []string, keywords ...string) bool {
+	text := strings.ToLower(strings.Join(parts, " "))
+	if strings.TrimSpace(text) == "" {
+		return false
+	}
+	for _, keyword := range keywords {
+		keyword = strings.ToLower(strings.TrimSpace(keyword))
+		if keyword != "" && strings.Contains(text, keyword) {
+			return true
+		}
+	}
+	return false
 }
 
 func isEncryptedContentVerificationError(parts ...string) bool {

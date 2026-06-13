@@ -1614,6 +1614,12 @@ func TestReceiveWSResponseTreatsMessageTooBigAsClientFailure(t *testing.T) {
 	if failure.Kind != responsesFailureKindClient {
 		t.Fatalf("Kind = %q, want client", failure.Kind)
 	}
+	if failure.Code != "context_too_large" {
+		t.Fatalf("Code = %q, want context_too_large", failure.Code)
+	}
+	if failure.Message != contextTooLargeMessage {
+		t.Fatalf("Message = %q, want context too large message", failure.Message)
+	}
 }
 
 func TestBuildImagesToolCreateMsg_Edit_ShrinksLargeInputImage(t *testing.T) {
