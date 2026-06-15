@@ -565,9 +565,10 @@ func (h *responsesSilentHandler) OnRawEvent(eventType string, data []byte) {
 
 // buildNonStreamResponses 从 WSResult 聚合出 Responses API 非流式响应体。
 //
-// Responses API 非流式响应的 JSON 结构就是最终 `response.completed` SSE 事件里
-// `response` 字段的那坨对象——直接抽出来返回即可，无需自己拼装。拼装反而会丢失
-// 上游新加字段（OpenAI 常常悄悄扩展 Responses 的 output / tool_usage 等字段）。
+// Responses API 非流式响应的 JSON 结构通常就是最终 `response.completed` SSE 事件里
+// `response` 字段的那坨对象——优先直接抽出来返回，避免丢失上游新加字段。
+// ChatGPT Codex WS 偶尔只在 delta 事件里给文本，completed.response.output 为空；
+// 这种情况下用 WSResult 里已聚合的内容补齐 output。
 //
 // 上游没给 `response.completed`（典型：被中途 cancel）时回退到一个最小占位对象，
 // 避免空体返回。
@@ -591,15 +592,19 @@ func buildNonStreamResponses(result WSResult) []byte {
 	if result.Model != "" {
 		fallback["model"] = result.Model
 	}
-	if len(result.ImageGenCalls) > 0 {
-		fallback["output"] = synthesizeResponsesImageGenOutput(result)
+	if output := synthesizeResponsesOutput(result); len(output) > 0 {
+		fallback["output"] = output
 	}
 	b, _ := json.Marshal(fallback)
 	return b
 }
 
 func patchResponsesOutput(raw string, result WSResult) []byte {
-	if strings.TrimSpace(raw) == "" || len(result.ImageGenCalls) == 0 {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	patchedOutput := synthesizeResponsesOutput(result)
+	if len(patchedOutput) == 0 {
 		return nil
 	}
 	var response map[string]any
@@ -610,12 +615,35 @@ func patchResponsesOutput(raw string, result WSResult) []byte {
 	if len(output) > 0 {
 		return nil
 	}
-	response["output"] = synthesizeResponsesImageGenOutput(result)
+	response["output"] = patchedOutput
 	b, err := json.Marshal(response)
 	if err != nil {
 		return nil
 	}
 	return b
+}
+
+func synthesizeResponsesOutput(result WSResult) []map[string]any {
+	if len(result.ImageGenCalls) > 0 {
+		return synthesizeResponsesImageGenOutput(result)
+	}
+	if result.Text != "" {
+		return synthesizeResponsesTextOutput(result.Text)
+	}
+	return nil
+}
+
+func synthesizeResponsesTextOutput(text string) []map[string]any {
+	return []map[string]any{{
+		"type":   "message",
+		"status": "completed",
+		"role":   "assistant",
+		"content": []map[string]any{{
+			"type":        "output_text",
+			"text":        text,
+			"annotations": []any{},
+		}},
+	}}
 }
 
 func synthesizeResponsesImageGenOutput(result WSResult) []map[string]any {

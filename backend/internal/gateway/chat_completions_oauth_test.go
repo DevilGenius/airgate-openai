@@ -367,6 +367,46 @@ func TestBuildNonStreamResponses_PatchesEmptyOutputFromImageCalls(t *testing.T) 
 	}
 }
 
+func TestBuildNonStreamResponses_PatchesEmptyOutputFromTextDelta(t *testing.T) {
+	completedEvent := []byte(`{"type":"response.completed","response":{"id":"resp_text","object":"response","status":"completed","output":[],"usage":{"input_tokens":7,"output_tokens":11,"total_tokens":18}}}`)
+	result := WSResult{
+		CompletedEventRaw: completedEvent,
+		Text:              "Hi there.",
+	}
+
+	body := buildNonStreamResponses(result)
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("body not valid JSON: %v", err)
+	}
+
+	output, ok := got["output"].([]any)
+	if !ok {
+		t.Fatalf("output missing or wrong type: %#v", got["output"])
+	}
+	if len(output) != 1 {
+		t.Fatalf("output len = %d, want 1", len(output))
+	}
+	item := output[0].(map[string]any)
+	if item["type"] != "message" {
+		t.Fatalf("output[0].type = %v, want message", item["type"])
+	}
+	if item["role"] != "assistant" {
+		t.Fatalf("output[0].role = %v, want assistant", item["role"])
+	}
+	content := item["content"].([]any)
+	if len(content) != 1 {
+		t.Fatalf("content len = %d, want 1", len(content))
+	}
+	part := content[0].(map[string]any)
+	if part["type"] != "output_text" {
+		t.Fatalf("content[0].type = %v, want output_text", part["type"])
+	}
+	if part["text"] != "Hi there." {
+		t.Fatalf("content[0].text = %v, want Hi there.", part["text"])
+	}
+}
+
 // 上游没给 response.completed 时用兜底占位
 func TestBuildNonStreamResponses_Fallback(t *testing.T) {
 	result := WSResult{ResponseID: "resp_xyz", Model: "gpt-5.4"}
