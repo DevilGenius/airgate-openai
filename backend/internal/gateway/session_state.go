@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tidwall/gjson"
 )
@@ -50,6 +51,20 @@ func deterministicUUIDFromSeed(seed string) string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x",
 		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16],
 	)
+}
+
+const maxUpstreamPromptCacheKeyLength = 64
+
+func upstreamPromptCacheKey(key string) string {
+	key = normalizeSessionValue(key)
+	if key == "" {
+		return ""
+	}
+	if utf8.RuneCountInString(key) <= maxUpstreamPromptCacheKeyLength {
+		return key
+	}
+	sum := sha256.Sum256([]byte(key))
+	return fmt.Sprintf("%x", sum[:])
 }
 
 func sessionStateKeyFromValues(sessionID, conversationID, promptCacheKey string) string {

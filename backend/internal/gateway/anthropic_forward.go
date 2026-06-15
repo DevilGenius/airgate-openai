@@ -273,15 +273,15 @@ func defaultAnthropicUsageServiceTier(_ *sdk.ForwardRequest) string {
 
 func injectAnthropicPromptCacheKey(responsesBody []byte, strategy anthropicUpstreamStrategy, session openAISessionResolution) []byte {
 	if strategy == anthropicStrategyOAuth {
-		return responsesBody
+		return normalizePromptCacheKeyForUpstream(responsesBody)
 	}
 	if strings.TrimSpace(session.PromptCacheKey) == "" {
-		return responsesBody
+		return normalizePromptCacheKeyForUpstream(responsesBody)
 	}
 	if gjson.GetBytes(responsesBody, "prompt_cache_key").Exists() {
-		return responsesBody
+		return normalizePromptCacheKeyForUpstream(responsesBody)
 	}
-	next, err := sjson.SetBytes(responsesBody, "prompt_cache_key", session.PromptCacheKey)
+	next, err := sjson.SetBytes(responsesBody, "prompt_cache_key", upstreamPromptCacheKey(session.PromptCacheKey))
 	if err != nil {
 		return responsesBody
 	}

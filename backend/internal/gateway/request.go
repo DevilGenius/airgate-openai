@@ -243,6 +243,30 @@ func preprocessRequestBody(body []byte, model, reqPath string) []byte {
 	return result
 }
 
+func normalizePromptCacheKeyForUpstream(body []byte) []byte {
+	if len(body) == 0 || !bytes.Contains(body, []byte("prompt_cache_key")) {
+		return body
+	}
+	node := gjson.GetBytes(body, "prompt_cache_key")
+	if !node.Exists() || node.Type != gjson.String {
+		return body
+	}
+	normalized := upstreamPromptCacheKey(node.String())
+	if normalized == "" {
+		if modified, err := sjson.DeleteBytes(body, "prompt_cache_key"); err == nil {
+			return modified
+		}
+		return body
+	}
+	if normalized == node.String() {
+		return body
+	}
+	if modified, err := sjson.SetBytes(body, "prompt_cache_key", normalized); err == nil {
+		return modified
+	}
+	return body
+}
+
 const openAICompactModelSuffix = "-openai-compact"
 
 func openAICompactWireModel(modelID string) string {
@@ -594,8 +618,8 @@ func applySessionFields(reqData map[string]any, session openAISessionResolution)
 	if reqData == nil {
 		return reqData
 	}
-	if session.PromptCacheKey != "" {
-		reqData["prompt_cache_key"] = session.PromptCacheKey
+	if key := upstreamPromptCacheKey(session.PromptCacheKey); key != "" {
+		reqData["prompt_cache_key"] = key
 	}
 	return reqData
 }

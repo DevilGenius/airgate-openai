@@ -161,9 +161,10 @@ func (g *OpenAIGateway) forwardOAuthCompact(ctx context.Context, req *sdk.Forwar
 	logger := sdk.LoggerFromContext(ctx)
 	session := resolveOpenAISession(req.Headers, req.Body, account.ID)
 	updateSessionStateFromRequest(session, account.ID)
+	upstreamBody := normalizePromptCacheKeyForUpstream(req.Body)
 
 	targetURL := strings.TrimRight(ChatGPTSSEURL, "/") + "/compact"
-	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(req.Body))
+	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(upstreamBody))
 	if err != nil {
 		reason := fmt.Sprintf("构建上游请求失败: %v", err)
 		logger.Warn("upstream_request_build_failed",
@@ -527,6 +528,10 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 ) (sdk.ForwardOutcome, error) {
 	account := req.Account
 	logger := sdk.LoggerFromContext(ctx)
+
+	if !isImagesRequest(reqPath) {
+		body = normalizePromptCacheKeyForUpstream(body)
+	}
 
 	var bodyReader io.Reader
 	if methodAllowsBody(reqMethod) && len(body) > 0 {

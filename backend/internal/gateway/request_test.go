@@ -262,6 +262,66 @@ func TestPreprocessRequestBodyCompactKeepsExplicitCompactModel(t *testing.T) {
 	}
 }
 
+func TestNormalizePromptCacheKeyForUpstreamHashesLongKey(t *testing.T) {
+	key := strings.Repeat("k", maxUpstreamPromptCacheKeyLength+6)
+	body := []byte(fmt.Sprintf(`{"model":"gpt-5.5","input":"hi","prompt_cache_key":%q}`, key))
+
+	got := normalizePromptCacheKeyForUpstream(body)
+	normalized := gjson.GetBytes(got, "prompt_cache_key").String()
+
+	if normalized == key {
+		t.Fatalf("expected long prompt_cache_key to be normalized")
+	}
+	if len(normalized) != maxUpstreamPromptCacheKeyLength {
+		t.Fatalf("prompt_cache_key length = %d, want %d; body=%s", len(normalized), maxUpstreamPromptCacheKeyLength, got)
+	}
+	if normalized != upstreamPromptCacheKey(key) {
+		t.Fatalf("prompt_cache_key = %q, want %q", normalized, upstreamPromptCacheKey(key))
+	}
+}
+
+func TestNormalizePromptCacheKeyForUpstreamKeepsShortKey(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","input":"hi","prompt_cache_key":"cache-key-123"}`)
+
+	got := normalizePromptCacheKeyForUpstream(body)
+
+	if normalized := gjson.GetBytes(got, "prompt_cache_key").String(); normalized != "cache-key-123" {
+		t.Fatalf("prompt_cache_key = %q, want cache-key-123; body=%s", normalized, got)
+	}
+}
+
+func TestApplySessionFieldsHashesLongPromptCacheKey(t *testing.T) {
+	key := strings.Repeat("s", maxUpstreamPromptCacheKeyLength+6)
+	reqData := applySessionFields(map[string]any{}, openAISessionResolution{PromptCacheKey: key})
+
+	normalized, _ := reqData["prompt_cache_key"].(string)
+	if normalized != upstreamPromptCacheKey(key) {
+		t.Fatalf("prompt_cache_key = %q, want %q", normalized, upstreamPromptCacheKey(key))
+	}
+}
+
+func TestInjectAnthropicPromptCacheKeyHashesLongKey(t *testing.T) {
+	key := strings.Repeat("a", maxUpstreamPromptCacheKeyLength+6)
+	body := []byte(`{"model":"gpt-5.5","input":[]}`)
+
+	got := injectAnthropicPromptCacheKey(body, anthropicStrategyGenericAPIKey, openAISessionResolution{PromptCacheKey: key})
+
+	if normalized := gjson.GetBytes(got, "prompt_cache_key").String(); normalized != upstreamPromptCacheKey(key) {
+		t.Fatalf("prompt_cache_key = %q, want %q; body=%s", normalized, upstreamPromptCacheKey(key), got)
+	}
+}
+
+func TestInjectAnthropicPromptCacheKeyNormalizesExistingOAuthKey(t *testing.T) {
+	key := strings.Repeat("o", maxUpstreamPromptCacheKeyLength+6)
+	body := []byte(fmt.Sprintf(`{"model":"gpt-5.5","input":[],"prompt_cache_key":%q}`, key))
+
+	got := injectAnthropicPromptCacheKey(body, anthropicStrategyOAuth, openAISessionResolution{})
+
+	if normalized := gjson.GetBytes(got, "prompt_cache_key").String(); normalized != upstreamPromptCacheKey(key) {
+		t.Fatalf("prompt_cache_key = %q, want %q; body=%s", normalized, upstreamPromptCacheKey(key), got)
+	}
+}
+
 func TestPluginRouteDefinitionsIncludesResponsesCompact(t *testing.T) {
 	routes := PluginRouteDefinitions()
 	want := map[string]bool{

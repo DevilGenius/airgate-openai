@@ -1,7 +1,10 @@
 package gateway
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -13,6 +16,26 @@ func TestResolveOpenAISessionUsesPromptCacheKeyAsFallback(t *testing.T) {
 	}
 	if resolution.SessionID != "pcache_123" {
 		t.Fatalf("expected session_id fallback from prompt_cache_key, got %q", resolution.SessionID)
+	}
+}
+
+func TestUpstreamPromptCacheKeyKeepsMaxLengthKey(t *testing.T) {
+	key := strings.Repeat("a", maxUpstreamPromptCacheKeyLength)
+	if got := upstreamPromptCacheKey(key); got != key {
+		t.Fatalf("upstreamPromptCacheKey changed max-length key: got %q", got)
+	}
+}
+
+func TestUpstreamPromptCacheKeyHashesLongKey(t *testing.T) {
+	key := strings.Repeat("a", maxUpstreamPromptCacheKeyLength+6)
+	got := upstreamPromptCacheKey(key)
+	sum := sha256.Sum256([]byte(key))
+	want := fmt.Sprintf("%x", sum[:])
+	if got != want {
+		t.Fatalf("upstreamPromptCacheKey = %q, want %q", got, want)
+	}
+	if len(got) != maxUpstreamPromptCacheKeyLength {
+		t.Fatalf("hashed prompt_cache_key length = %d, want %d", len(got), maxUpstreamPromptCacheKeyLength)
 	}
 }
 
