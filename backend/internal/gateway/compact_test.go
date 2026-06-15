@@ -19,7 +19,7 @@ func TestForwardHTTPAPIKeyCompactUsesCompactEndpoint(t *testing.T) {
 		gotPath = r.URL.Path
 		gotBody, _ = io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response.compaction","model":"gpt-5.4","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}`))
+		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response.compaction","model":"gpt-5.4-openai-compact","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}`))
 	}))
 	defer server.Close()
 
@@ -50,11 +50,23 @@ func TestForwardHTTPAPIKeyCompactUsesCompactEndpoint(t *testing.T) {
 	if gjson.GetBytes(gotBody, "stream").Exists() {
 		t.Fatalf("stream should be removed before upstream compact request: %s", gotBody)
 	}
+	if model := gjson.GetBytes(gotBody, "model").String(); model != "gpt-5.4-openai-compact" {
+		t.Fatalf("upstream compact model = %q, want gpt-5.4-openai-compact; body=%s", model, gotBody)
+	}
 	if input := gjson.GetBytes(gotBody, "input"); input.Type != gjson.String || input.String() != "hello" {
 		t.Fatalf("compact input should stay unchanged, got %s in %s", input.Raw, gotBody)
 	}
 	if object := gjson.GetBytes(outcome.Upstream.Body, "object").String(); object != "response.compaction" {
 		t.Fatalf("response object = %q, want response.compaction; body=%s", object, outcome.Upstream.Body)
+	}
+	if outcome.Usage == nil {
+		t.Fatalf("usage is nil")
+	}
+	if outcome.Usage.Model != "gpt-5.4" {
+		t.Fatalf("usage model = %q, want gpt-5.4", outcome.Usage.Model)
+	}
+	if got := outcome.Usage.Metadata["openai.wire_model"]; got != "gpt-5.4-openai-compact" {
+		t.Fatalf("wire model metadata = %q, want gpt-5.4-openai-compact", got)
 	}
 }
 

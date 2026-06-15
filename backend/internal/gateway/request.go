@@ -194,7 +194,7 @@ func buildAPIKeyURL(account *sdk.Account, reqPath string) string {
 //
 // 在 forwardHTTP 入口调用，保证 API Key / OAuth / Anthropic 等所有路径
 // 拿到的 body 格式一致。当前处理步骤：
-//  1. model 同步（body 中的 model 与 core 传入的 model 对齐）
+//  1. model 同步（普通请求与 Core 传入 model 对齐；compact 请求使用上游 wire model）
 //  2. data:image 输入保持原样（对齐 Codex，不在网关内重采样用户图片）
 //  3. 保留 previous_response_id（Core 已按 response_id 做账号粘连）
 //  4. 上下文守卫（/v1/chat/completions 超长 messages 裁剪）
@@ -214,10 +214,15 @@ func preprocessRequestBody(body []byte, model, reqPath string) []byte {
 	}
 
 	result := body
-	if model != "" {
+	isCompactRequest := isResponsesCompactRequestPath(reqPath)
+	targetModel := model
+	if isCompactRequest {
+		targetModel = openAICompactWireModel(model)
+	}
+	if targetModel != "" {
 		bodyModel := gjson.GetBytes(result, "model").String()
-		if bodyModel != model {
-			if modified, err := sjson.SetBytes(result, "model", model); err == nil {
+		if bodyModel != targetModel {
+			if modified, err := sjson.SetBytes(result, "model", targetModel); err == nil {
 				result = modified
 			}
 		}
@@ -225,7 +230,7 @@ func preprocessRequestBody(body []byte, model, reqPath string) []byte {
 
 	result = preserveOpenAIConversationImages(result)
 
-	if isResponsesCompactRequestPath(reqPath) {
+	if isCompactRequest {
 		if modified, err := sjson.DeleteBytes(result, "stream"); err == nil {
 			result = modified
 		}
@@ -236,6 +241,31 @@ func preprocessRequestBody(body []byte, model, reqPath string) []byte {
 	result = normalizeResponsesInput(result, reqPath)
 	result = forceResponsesStoreFalse(result, reqPath)
 	return result
+}
+
+const openAICompactModelSuffix = "-openai-compact"
+
+func openAICompactWireModel(modelID string) string {
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		return ""
+	}
+	if _, ok := openAICompactBaseModel(modelID); ok {
+		return modelID
+	}
+	return modelID + openAICompactModelSuffix
+}
+
+func openAICompactBaseModel(modelID string) (string, bool) {
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" || !strings.HasSuffix(strings.ToLower(modelID), openAICompactModelSuffix) {
+		return "", false
+	}
+	base := strings.TrimSpace(modelID[:len(modelID)-len(openAICompactModelSuffix)])
+	if base == "" {
+		return "", false
+	}
+	return base, true
 }
 
 func preserveOpenAIConversationImages(body []byte) []byte {

@@ -24,6 +24,7 @@ const (
 	usageAttrServiceTier  = "service_tier"
 	usageAttrImageSize    = "openai.image.size"
 	usageAttrResponseID   = "openai.response_id"
+	usageAttrWireModel    = "openai.wire_model"
 	usageDefaultImageSize = "1024x1024"
 
 	usageMetricInputTokens           = "input_tokens"
@@ -110,14 +111,26 @@ func forwardErrForOutcome(outcome sdk.ForwardOutcome, err error) error {
 }
 
 func newTokenUsage(modelID, serviceTier string, inputTokens, outputTokens, cachedInputTokens, reasoningOutputTokens int, firstTokenMs int64) *sdk.Usage {
+	billingModel, wireModel := usageBillingModel(modelID)
 	usage := &sdk.Usage{
-		Model:        modelID,
+		Model:        billingModel,
 		Currency:     usageCurrencyUSD,
 		FirstTokenMs: firstTokenMs,
+	}
+	if wireModel != "" {
+		setUsageMetadata(usage, usageAttrWireModel, wireModel)
 	}
 	setUsageServiceTier(usage, serviceTier)
 	setUsageTokens(usage, inputTokens, outputTokens, cachedInputTokens, reasoningOutputTokens)
 	return usage
+}
+
+func usageBillingModel(modelID string) (string, string) {
+	modelID = strings.TrimSpace(modelID)
+	if base, ok := openAICompactBaseModel(modelID); ok {
+		return base, modelID
+	}
+	return modelID, ""
 }
 
 func setUsageReasoningEffort(usage *sdk.Usage, effort string) {

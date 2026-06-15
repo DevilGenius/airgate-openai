@@ -238,6 +238,9 @@ func TestPreprocessRequestBodyCompactDeletesStreamOnly(t *testing.T) {
 
 	got := preprocessRequestBody(body, "gpt-5.4", "/v1/responses/compact")
 
+	if model := gjson.GetBytes(got, "model").String(); model != "gpt-5.4-openai-compact" {
+		t.Fatalf("compact model = %q, want gpt-5.4-openai-compact; body=%s", model, got)
+	}
 	if gjson.GetBytes(got, "stream").Exists() {
 		t.Fatalf("stream should be removed for compact request: %s", got)
 	}
@@ -246,6 +249,16 @@ func TestPreprocessRequestBodyCompactDeletesStreamOnly(t *testing.T) {
 	}
 	if gjson.GetBytes(got, "store").Exists() {
 		t.Fatalf("store should not be injected for compact request: %s", got)
+	}
+}
+
+func TestPreprocessRequestBodyCompactKeepsExplicitCompactModel(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5-openai-compact","stream":false,"input":"hello"}`)
+
+	got := preprocessRequestBody(body, "gpt-5.5-openai-compact", "/v1/responses/compact")
+
+	if model := gjson.GetBytes(got, "model").String(); model != "gpt-5.5-openai-compact" {
+		t.Fatalf("compact model = %q, want gpt-5.5-openai-compact; body=%s", model, got)
 	}
 }
 
