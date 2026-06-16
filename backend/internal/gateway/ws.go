@@ -24,8 +24,11 @@ const (
 	// WSBetaHeader WebSocket 协议的 OpenAI-Beta 头（仅 WS 模式需要）
 	WSBetaHeader = "responses_websockets=2026-02-06"
 
-	webSocketReadTimeout  = 300 * time.Second
-	webSocketWriteTimeout = 30 * time.Second
+	webSocketReadTimeout         = 300 * time.Second
+	webSocketWriteTimeout        = 30 * time.Second
+	webSocketControlWriteTimeout = 10 * time.Second
+	webSocketKeepAliveInterval   = 30 * time.Second
+	webSocketReadLimitBytes      = 16 << 20
 )
 
 // WSConfig WebSocket 连接配置
@@ -72,6 +75,10 @@ type WSResult struct {
 	FailedEventRaw    []byte
 	Duration          time.Duration
 	Err               error
+	EventCount        int
+	TokenEventCount   int
+	FirstEventType    string
+	LastEventType     string
 
 	imageGenCallIndex map[string]int
 }
@@ -176,6 +183,7 @@ func dialWebSocket(targetURL, proxyURL string, headers http.Header) (*websocket.
 	if err != nil {
 		return nil, resp, formatWebSocketDialError(resp, err)
 	}
+	configureWebSocketConn(conn)
 
 	return conn, resp, nil
 }
@@ -232,6 +240,56 @@ func writeWebSocketMessage(conn *websocket.Conn, messageType int, data []byte) e
 	return conn.WriteMessage(messageType, data)
 }
 
+func configureWebSocketConn(conn *websocket.Conn) {
+	if conn == nil {
+		return
+	}
+	conn.SetReadLimit(webSocketReadLimitBytes)
+	// Keep inbound permessage-deflate support, but avoid gorilla/websocket flate
+	// tail compatibility issues on outbound frames seen with some upstreams.
+	conn.EnableWriteCompression(false)
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(webSocketReadTimeout))
+	})
+	conn.SetPingHandler(func(appData string) error {
+		if err := conn.SetReadDeadline(time.Now().Add(webSocketReadTimeout)); err != nil {
+			return err
+		}
+		return conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(webSocketControlWriteTimeout))
+	})
+}
+
+func startWebSocketKeepAlive(ctx context.Context, conn *websocket.Conn) func() {
+	if conn == nil {
+		return func() {}
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	keepAliveCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(webSocketKeepAliveInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-keepAliveCtx.Done():
+				return
+			case <-ticker.C:
+				if err := conn.WriteControl(websocket.PingMessage, []byte("ping"), time.Now().Add(webSocketControlWriteTimeout)); err != nil {
+					_ = conn.Close()
+					return
+				}
+			}
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
 func cloneHTTPHeader(headers http.Header) http.Header {
 	if headers == nil {
 		return nil
@@ -250,6 +308,9 @@ func ReceiveWSResponse(ctx context.Context, conn *websocket.Conn, handler WSEven
 	result := WSResult{}
 	var textBuilder strings.Builder
 	var reasoningBuilder strings.Builder
+	configureWebSocketConn(conn)
+	stopKeepAlive := startWebSocketKeepAlive(ctx, conn)
+	defer stopKeepAlive()
 
 	for {
 		// 检查 context
@@ -288,6 +349,16 @@ func ReceiveWSResponse(ctx context.Context, conn *websocket.Conn, handler WSEven
 		}
 
 		eventType, _ := ev["type"].(string)
+		if eventType != "" {
+			result.EventCount++
+			if result.FirstEventType == "" {
+				result.FirstEventType = eventType
+			}
+			result.LastEventType = eventType
+			if isWebSocketTokenEvent(eventType) {
+				result.TokenEventCount++
+			}
+		}
 
 		// 通知 handler 原始事件
 		if handler != nil {
@@ -405,6 +476,19 @@ func ReceiveWSResponse(ctx context.Context, conn *websocket.Conn, handler WSEven
 
 	finalizeWSResult(&result, &textBuilder, &reasoningBuilder, start)
 	return result
+}
+
+func isWebSocketTokenEvent(eventType string) bool {
+	switch eventType {
+	case "response.output_text.delta",
+		"response.reasoning_summary_text.delta",
+		"response.refusal.delta",
+		"response.function_call_arguments.delta",
+		"response.image_generation_call.partial_image":
+		return true
+	default:
+		return false
+	}
 }
 
 func finalizeWSResult(result *WSResult, textBuilder, reasoningBuilder *strings.Builder, start time.Time) {

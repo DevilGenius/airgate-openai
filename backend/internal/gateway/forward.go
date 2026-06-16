@@ -1020,6 +1020,11 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 			sdk.LogFieldDurationMs, elapsed.Milliseconds(),
 			sdk.LogFieldReason, message,
 			"phase", "ws_response",
+			"ws_event_count", result.EventCount,
+			"ws_token_event_count", result.TokenEventCount,
+			"ws_first_event", result.FirstEventType,
+			"ws_last_event", result.LastEventType,
+			"stream_output_started", streamOutputStarted(),
 		)
 		outcome := sdk.ForwardOutcome{
 			Kind:       kind,
