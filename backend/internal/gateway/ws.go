@@ -308,7 +308,6 @@ func ReceiveWSResponse(ctx context.Context, conn *websocket.Conn, handler WSEven
 	result := WSResult{}
 	var textBuilder strings.Builder
 	var reasoningBuilder strings.Builder
-	configureWebSocketConn(conn)
 	stopKeepAlive := startWebSocketKeepAlive(ctx, conn)
 	defer stopKeepAlive()
 
