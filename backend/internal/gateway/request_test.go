@@ -799,8 +799,8 @@ func TestOpenAIReasoningEffortFromRequestAfterHint(t *testing.T) {
 
 func TestEnsureResponsesDefaultsNormalizesExistingReasoningEffortLowcaseAlias(t *testing.T) {
 	tests := []struct {
-		name     string
-		body     []byte
+		name       string
+		body       []byte
 		wantEffort string
 	}{
 		{"reasoning.effort extrahigh → xhigh", []byte(`{"model":"gpt-5.5","input":"hi","reasoning":{"effort":"extrahigh"}}`), "xhigh"},
