@@ -1,11 +1,19 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+)
+
+var (
+	jsonEffortKey          = []byte(`"effort"`)
+	jsonReasoningKey       = []byte(`"reasoning"`)
+	jsonReasoningEffortKey = []byte(`"reasoning_effort"`)
+	jsonOutputConfigKey    = []byte(`"output_config"`)
 )
 
 func normalizeOpenAIServiceTier(tier string) string {
@@ -55,6 +63,118 @@ func firstNonEmptyTier(tiers ...string) string {
 	return ""
 }
 
+func normalizeOpenAIWireReasoningEffort(effort string) string {
+	trimmed := strings.TrimSpace(effort)
+	if trimmed == "" {
+		return ""
+	}
+
+	switch trimmed {
+	case "none":
+		return "none"
+	case "minimal", "min", "off", "disabled":
+		return "minimal"
+	case "low":
+		return "low"
+	case "medium":
+		return "medium"
+	case "high":
+		return "high"
+	case "xhigh", "extrahigh", "veryhigh", "max", "maximum", "ultra":
+		return "xhigh"
+	}
+
+	normalized := strings.ToLower(trimmed)
+	normalized = strings.ReplaceAll(normalized, "-", "")
+	normalized = strings.ReplaceAll(normalized, "_", "")
+	normalized = strings.ReplaceAll(normalized, " ", "")
+
+	switch normalized {
+	case "none":
+		return "none"
+	case "minimal", "min", "off", "disabled":
+		return "minimal"
+	case "low":
+		return "low"
+	case "medium":
+		return "medium"
+	case "high":
+		return "high"
+	case "xhigh", "extrahigh", "veryhigh", "max", "maximum", "ultra":
+		return "xhigh"
+	default:
+		return trimmed
+	}
+}
+
+func hasJSONKeyToken(body, quotedKey []byte) bool {
+	for offset := 0; offset < len(body); {
+		idx := bytes.Index(body[offset:], quotedKey)
+		if idx < 0 {
+			return false
+		}
+		idx += offset
+		offset = idx + len(quotedKey)
+
+		if isEscapedJSONStringQuote(body, idx) {
+			continue
+		}
+
+		next := idx + len(quotedKey)
+		for next < len(body) && isJSONWhitespace(body[next]) {
+			next++
+		}
+		if next < len(body) && body[next] == ':' {
+			return true
+		}
+	}
+	return false
+}
+
+func isEscapedJSONStringQuote(body []byte, quoteIdx int) bool {
+	backslashes := 0
+	for i := quoteIdx - 1; i >= 0 && body[i] == '\\'; i-- {
+		backslashes++
+	}
+	return backslashes%2 == 1
+}
+
+func isJSONWhitespace(b byte) bool {
+	return b == ' ' || b == '\n' || b == '\r' || b == '\t'
+}
+
+func hasOpenAIReasoningEffortHint(body []byte) bool {
+	return hasJSONKeyToken(body, jsonReasoningEffortKey) ||
+		hasJSONKeyToken(body, jsonOutputConfigKey) ||
+		(hasJSONKeyToken(body, jsonReasoningKey) && hasJSONKeyToken(body, jsonEffortKey))
+}
+
+func hasOpenAIReasoningDefaultsHint(body []byte) bool {
+	return hasJSONKeyToken(body, jsonReasoningKey) ||
+		hasJSONKeyToken(body, jsonReasoningEffortKey) ||
+		hasJSONKeyToken(body, jsonOutputConfigKey)
+}
+
+func openAIReasoningEffortFromRequestAfterHint(body []byte) string {
+	if effort := normalizeOpenAIWireReasoningEffort(gjson.GetBytes(body, "reasoning.effort").String()); effort != "" {
+		return effort
+	}
+	if effort := normalizeOpenAIWireReasoningEffort(gjson.GetBytes(body, "reasoning_effort").String()); effort != "" {
+		return effort
+	}
+	if effort := normalizeOpenAIWireReasoningEffort(gjson.GetBytes(body, "output_config.effort").String()); effort != "" {
+		return effort
+	}
+	return ""
+}
+
+func openAIReasoningEffortFromRequest(body []byte) string {
+	if !hasOpenAIReasoningEffortHint(body) {
+		return ""
+	}
+	return openAIReasoningEffortFromRequestAfterHint(body)
+}
+
 // wrapAsResponsesAPI 将请求包装为 Responses API 格式（模拟客户端模式）
 func wrapAsResponsesAPI(body []byte, model string) ([]byte, error) {
 	return wrapAsResponsesAPIWithTier(body, model, "")
@@ -80,7 +200,7 @@ func wrapAsResponsesAPIWithTier(body []byte, model string, reqServiceTierOverrid
 		if instructions != "" {
 			wrapped["instructions"] = instructions
 		}
-		if effort := strings.TrimSpace(gjson.GetBytes(body, "reasoning_effort").String()); effort != "" {
+		if effort := openAIReasoningEffortFromRequest(body); effort != "" {
 			wrapped["reasoning"] = map[string]any{
 				"effort":  effort,
 				"summary": "auto",
@@ -126,18 +246,25 @@ func ensureResponsesDefaultsWithTier(body []byte, reqServiceTierOverride string)
 	if modified, err := sjson.SetBytes(result, "parallel_tool_calls", true); err == nil {
 		result = modified
 	}
-	if gjson.GetBytes(result, "reasoning").Exists() {
-		if !gjson.GetBytes(result, "reasoning.summary").Exists() {
+	if hasOpenAIReasoningDefaultsHint(result) {
+		if reasoning := gjson.GetBytes(result, "reasoning"); reasoning.Exists() {
+			if effort := normalizeOpenAIWireReasoningEffort(reasoning.Get("effort").String()); effort != "" {
+				if modified, err := sjson.SetBytes(result, "reasoning.effort", effort); err == nil {
+					result = modified
+				}
+			}
+			if !reasoning.Get("summary").Exists() {
+				if modified, err := sjson.SetBytes(result, "reasoning.summary", "auto"); err == nil {
+					result = modified
+				}
+			}
+		} else if effort := openAIReasoningEffortFromRequestAfterHint(result); effort != "" {
+			if modified, err := sjson.SetBytes(result, "reasoning.effort", effort); err == nil {
+				result = modified
+			}
 			if modified, err := sjson.SetBytes(result, "reasoning.summary", "auto"); err == nil {
 				result = modified
 			}
-		}
-	} else if effort := strings.TrimSpace(gjson.GetBytes(result, "reasoning_effort").String()); effort != "" {
-		if modified, err := sjson.SetBytes(result, "reasoning.effort", effort); err == nil {
-			result = modified
-		}
-		if modified, err := sjson.SetBytes(result, "reasoning.summary", "auto"); err == nil {
-			result = modified
 		}
 	}
 	if modified, err := sjson.SetBytes(result, "include", []string{"reasoning.encrypted_content"}); err == nil {
@@ -165,6 +292,7 @@ func ensureResponsesDefaultsWithTier(body []byte, reqServiceTierOverride string)
 		"temperature",
 		"top_p",
 		"user",
+		"output_config",
 	} {
 		if gjson.GetBytes(result, field).Exists() {
 			result, _ = sjson.DeleteBytes(result, field)

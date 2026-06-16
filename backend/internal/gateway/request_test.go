@@ -366,6 +366,471 @@ func TestEnsureResponsesDefaultsWithTier_FastIgnored(t *testing.T) {
 	}
 }
 
+func TestEnsureResponsesDefaultsNormalizesMaxReasoningEffort(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","input":"hi","reasoning_effort":"max"}`)
+	result := ensureResponsesDefaultsWithTier(body, "")
+
+	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "xhigh" {
+		t.Fatalf("reasoning.effort = %q, want xhigh; body=%s", got, result)
+	}
+}
+
+func TestEnsureResponsesDefaultsNormalizesExistingMaxReasoningEffort(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","input":"hi","reasoning":{"effort":"maximum"}}`)
+	result := ensureResponsesDefaultsWithTier(body, "")
+
+	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "xhigh" {
+		t.Fatalf("reasoning.effort = %q, want xhigh; body=%s", got, result)
+	}
+}
+
+func TestEnsureResponsesDefaultsUsesOutputConfigMaxEffort(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","input":"hi","output_config":{"effort":"max"}}`)
+	result := ensureResponsesDefaultsWithTier(body, "")
+
+	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "xhigh" {
+		t.Fatalf("reasoning.effort = %q, want xhigh; body=%s", got, result)
+	}
+	if gjson.GetBytes(result, "output_config").Exists() {
+		t.Fatalf("output_config should be stripped from upstream body: %s", result)
+	}
+}
+
+func TestEnsureResponsesDefaultsPreservesReasoningEffortNone(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","input":"hi","reasoning_effort":"none"}`)
+	result := ensureResponsesDefaultsWithTier(body, "")
+
+	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "none" {
+		t.Fatalf("reasoning.effort = %q, want none; body=%s", got, result)
+	}
+}
+
+func TestOpenAIReasoningHintMatchesSpacedKeys(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","input":"hi","reasoning" : {"effort" : "maximum"}}`)
+
+	if !hasOpenAIReasoningDefaultsHint(body) {
+		t.Fatal("expected reasoning defaults hint")
+	}
+	if got := openAIReasoningEffortFromRequest(body); got != "xhigh" {
+		t.Fatalf("openAIReasoningEffortFromRequest = %q, want xhigh", got)
+	}
+}
+
+func TestOpenAIReasoningHintIgnoresEscapedJSONInStringValue(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","input":"{\"reasoning\":{\"effort\":\"max\"},\"output_config\":{\"effort\":\"max\"},\"reasoning_effort\":\"max\"}"}`)
+
+	if hasOpenAIReasoningDefaultsHint(body) {
+		t.Fatal("reasoning defaults hint should ignore escaped JSON in string values")
+	}
+	if hasOpenAIReasoningEffortHint(body) {
+		t.Fatal("reasoning effort hint should ignore escaped JSON in string values")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// normalizeOpenAIWireReasoningEffort — 所有别名、大小写变体、分隔符变体、边界
+// ---------------------------------------------------------------------------
+
+func TestNormalizeOpenAIWireReasoningEffort_AllAliases(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		// 规范值 — Phase 1 精确命中
+		{"none", "none"},
+		{"low", "low"},
+		{"medium", "medium"},
+		{"high", "high"},
+
+		// xhigh 精确别名 — Phase 1 精确命中
+		{"xhigh", "xhigh"},
+		{"extrahigh", "xhigh"},
+		{"veryhigh", "xhigh"},
+		{"max", "xhigh"},
+		{"maximum", "xhigh"},
+		{"ultra", "xhigh"},
+
+		// minimal 精确别名 — Phase 1 精确命中
+		{"minimal", "minimal"},
+		{"min", "minimal"},
+		{"off", "minimal"},
+		{"disabled", "minimal"},
+
+		// 大小写变体 — Phase 2 ToLower
+		{"None", "none"},
+		{"NONE", "none"},
+		{"Low", "low"},
+		{"Medium", "medium"},
+		{"High", "high"},
+		{"Xhigh", "xhigh"},
+		{"XHIGH", "xhigh"},
+		{"Max", "xhigh"},
+		{"MAX", "xhigh"},
+		{"Maximum", "xhigh"},
+		{"ExtraHigh", "xhigh"},
+		{"VeryHigh", "xhigh"},
+		{"Ultra", "xhigh"},
+		{"Minimal", "minimal"},
+		{"Min", "minimal"},
+		{"Off", "minimal"},
+		{"Disabled", "minimal"},
+		{"DISABLED", "minimal"},
+
+		// 带下划线变体 — Phase 2 去 _
+		{"extra_high", "xhigh"},
+		{"very_high", "xhigh"},
+		{"EXTRA_HIGH", "xhigh"},
+
+		// 带空格变体 — Phase 2 去空格
+		{"extra high", "xhigh"},
+		{"very high", "xhigh"},
+
+		// 前后空白
+		{"  none  ", "none"},
+		{"  high\t", "high"},
+		{"\tmax\n", "xhigh"},
+
+		// 不可识别 — 原样返回 trimmed
+		{"unknown", "unknown"},
+		{"extreme", "extreme"},
+
+		// 空 / 纯空白
+		{"", ""},
+		{"   ", ""},
+		{"\t\n", ""},
+	}
+	for _, tc := range cases {
+		if got := normalizeOpenAIWireReasoningEffort(tc.input); got != tc.want {
+			t.Errorf("normalizeOpenAIWireReasoningEffort(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// hasJSONKeyToken — JSON key 精确匹配 vs string value / 转义
+// ---------------------------------------------------------------------------
+
+func TestHasJSONKeyToken_SimpleKey(t *testing.T) {
+	body := []byte(`{"reasoning":{"effort":"high"}}`)
+	if !hasJSONKeyToken(body, jsonReasoningKey) {
+		t.Fatal(`expected "reasoning" key to be found`)
+	}
+}
+
+func TestHasJSONKeyToken_KeyWithSpaceBeforeColon(t *testing.T) {
+	body := []byte(`{"reasoning" : {"effort":"high"}}`)
+	if !hasJSONKeyToken(body, jsonReasoningKey) {
+		t.Fatal(`expected "reasoning" key with space before colon to be found`)
+	}
+}
+
+func TestHasJSONKeyToken_KeyWithNewlineBeforeColon(t *testing.T) {
+	body := []byte("{\"reasoning\"\n: {\"effort\":\"high\"}}")
+	if !hasJSONKeyToken(body, jsonReasoningKey) {
+		t.Fatal(`expected "reasoning" key with newline before colon to be found`)
+	}
+}
+
+func TestHasJSONKeyToken_KeyWithTabBeforeColon(t *testing.T) {
+	body := []byte("{\"reasoning\"\t: {\"effort\":\"high\"}}")
+	if !hasJSONKeyToken(body, jsonReasoningKey) {
+		t.Fatal(`expected "reasoning" key with tab before colon to be found`)
+	}
+}
+
+func TestHasJSONKeyToken_MultipleWhitespaceBeforeColon(t *testing.T) {
+	body := []byte("{\"reasoning\"  \t\n: {\"effort\":\"high\"}}")
+	if !hasJSONKeyToken(body, jsonReasoningKey) {
+		t.Fatal(`expected "reasoning" key with mixed whitespace before colon`)
+	}
+}
+
+func TestHasJSONKeyToken_StringValueIgnored(t *testing.T) {
+	// "reasoning" 作为 string value 出现，后面跟的不是 :
+	body := []byte(`{"input":"reasoning"}`)
+	if hasJSONKeyToken(body, jsonReasoningKey) {
+		t.Fatal(`"reasoning" in string value should not be treated as key`)
+	}
+}
+
+func TestHasJSONKeyToken_StringValueWithColonIgnored(t *testing.T) {
+	// "reasoning: x" 整体是 string value 的一部分
+	body := []byte(`{"input":"reasoning: xyz"}`)
+	if hasJSONKeyToken(body, jsonReasoningKey) {
+		t.Fatal(`"reasoning" inside a string value followed by colon should not match`)
+	}
+}
+
+func TestHasJSONKeyToken_EscapedQuoteInStringValue(t *testing.T) {
+	body := []byte(`{"input":"{\"reasoning\":{\"effort\":\"max\"}}"}`)
+	if hasJSONKeyToken(body, jsonReasoningKey) {
+		t.Fatal(`escaped \"reasoning\" inside string value should be ignored`)
+	}
+}
+
+func TestHasJSONKeyToken_EscapedBackslashBeforeKey(t *testing.T) {
+	// \\" (偶数个反斜杠 = 一个字面反斜杠 + 未转义引号)
+	// 在 JSON 中: "input": "\\"reasoning\": ..."
+	// Go 字面量: `{"input":"\\\"reasoning\\\":{}}`
+	body := []byte(`{"input":"\\\"reasoning\\\":{}}"}`)
+	if hasJSONKeyToken(body, jsonReasoningKey) {
+		t.Fatal(`key preceded by even backslashes in string value should not match`)
+	}
+}
+
+func TestHasJSONKeyToken_FirstStringValueSecondKey(t *testing.T) {
+	// 第一个 "reasoning" 在 string value 中，第二个是真正的 key
+	body := []byte(`{"input":"reasoning","reasoning":{"effort":"high"}}`)
+	if !hasJSONKeyToken(body, jsonReasoningKey) {
+		t.Fatal(`second "reasoning" as a real JSON key should be found`)
+	}
+}
+
+func TestHasJSONKeyToken_EmptyBody(t *testing.T) {
+	if hasJSONKeyToken(nil, jsonReasoningKey) {
+		t.Fatal("nil body should return false")
+	}
+	if hasJSONKeyToken([]byte{}, jsonReasoningKey) {
+		t.Fatal("empty body should return false")
+	}
+}
+
+func TestHasJSONKeyToken_NoMatch(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","input":"hi"}`)
+	if hasJSONKeyToken(body, jsonReasoningKey) {
+		t.Fatal("body without target key should return false")
+	}
+}
+
+func TestHasJSONKeyToken_EffortKey(t *testing.T) {
+	body := []byte(`{"effort":"high"}`)
+	if !hasJSONKeyToken(body, jsonEffortKey) {
+		t.Fatal(`expected "effort" key to be found`)
+	}
+}
+
+func TestHasJSONKeyToken_OutputConfigKey(t *testing.T) {
+	body := []byte(`{"output_config":{"effort":"max"}}`)
+	if !hasJSONKeyToken(body, jsonOutputConfigKey) {
+		t.Fatal(`expected "output_config" key to be found`)
+	}
+}
+
+func TestHasJSONKeyToken_ReasoningEffortKey(t *testing.T) {
+	body := []byte(`{"reasoning_effort":"high"}`)
+	if !hasJSONKeyToken(body, jsonReasoningEffortKey) {
+		t.Fatal(`expected "reasoning_effort" key to be found`)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// hasOpenAIReasoningEffortHint / hasOpenAIReasoningDefaultsHint
+// ---------------------------------------------------------------------------
+
+func TestHasOpenAIReasoningEffortHint_Positive(t *testing.T) {
+	cases := []struct {
+		name string
+		body []byte
+	}{
+		{"reasoning_effort flat", []byte(`{"reasoning_effort":"high"}`)},
+		{"output_config", []byte(`{"output_config":{"effort":"max"}}`)},
+		{"reasoning + effort", []byte(`{"reasoning":{"effort":"low"}}`)},
+		{"all three", []byte(`{"reasoning":{"effort":"low"},"reasoning_effort":"high","output_config":{"effort":"max"}}`)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !hasOpenAIReasoningEffortHint(tc.body) {
+				t.Fatalf("expected hint, body=%s", tc.body)
+			}
+		})
+	}
+}
+
+func TestHasOpenAIReasoningEffortHint_Negative(t *testing.T) {
+	cases := []struct {
+		name string
+		body []byte
+	}{
+		{"no reasoning fields", []byte(`{"model":"gpt-5.5","input":"hi"}`)},
+		{"reasoning without effort", []byte(`{"reasoning":{"summary":"auto"}}`)},
+		{"escaped JSON in string value", []byte(`{"input":"{\"reasoning\":{\"effort\":\"max\"},\"output_config\":{\"effort\":\"max\"},\"reasoning_effort\":\"max\"}"}`)},
+		{"effort as string value", []byte(`{"input":"effort"}`)},
+		{"reasoning in string value", []byte(`{"input":"my reasoning about effort"}`)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if hasOpenAIReasoningEffortHint(tc.body) {
+				t.Fatalf("expected no hint, body=%s", tc.body)
+			}
+		})
+	}
+}
+
+func TestHasOpenAIReasoningDefaultsHint_Positive(t *testing.T) {
+	cases := []struct {
+		name string
+		body []byte
+	}{
+		{"reasoning key", []byte(`{"reasoning":{"summary":"auto"}}`)},
+		{"reasoning_effort key", []byte(`{"reasoning_effort":"high"}`)},
+		{"output_config key", []byte(`{"output_config":{}}`)},
+		{"reasoning + effort", []byte(`{"reasoning":{"effort":"low"}}`)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !hasOpenAIReasoningDefaultsHint(tc.body) {
+				t.Fatalf("expected defaults hint, body=%s", tc.body)
+			}
+		})
+	}
+}
+
+func TestHasOpenAIReasoningDefaultsHint_Negative(t *testing.T) {
+	cases := []struct {
+		name string
+		body []byte
+	}{
+		{"no reasoning fields", []byte(`{"model":"gpt-5.5","input":"hi"}`)},
+		{"escaped JSON in string value", []byte(`{"input":"{\"reasoning\":{},\"output_config\":{},\"reasoning_effort\":\"\"}"}`)},
+		{"reasoning as string value not key", []byte(`{"input":"reasoning"}`)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if hasOpenAIReasoningDefaultsHint(tc.body) {
+				t.Fatalf("expected no defaults hint, body=%s", tc.body)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// openAIReasoningEffortFromRequest — 三路径优先级 + FromRequestAfterHint
+// ---------------------------------------------------------------------------
+
+func TestOpenAIReasoningEffortFromRequest_Priority(t *testing.T) {
+	// reasoning.effort > reasoning_effort > output_config.effort
+	t.Run("reasoning.effort over reasoning_effort", func(t *testing.T) {
+		body := []byte(`{"reasoning":{"effort":"high"},"reasoning_effort":"low"}`)
+		if got := openAIReasoningEffortFromRequest(body); got != "high" {
+			t.Fatalf("got %q, want high (reasoning.effort should win)", got)
+		}
+	})
+	t.Run("reasoning.effort over output_config", func(t *testing.T) {
+		body := []byte(`{"reasoning":{"effort":"medium"},"output_config":{"effort":"max"}}`)
+		if got := openAIReasoningEffortFromRequest(body); got != "medium" {
+			t.Fatalf("got %q, want medium (reasoning.effort should win)", got)
+		}
+	})
+	t.Run("reasoning_effort over output_config", func(t *testing.T) {
+		body := []byte(`{"reasoning_effort":"low","output_config":{"effort":"max"}}`)
+		if got := openAIReasoningEffortFromRequest(body); got != "low" {
+			t.Fatalf("got %q, want low (reasoning_effort should win)", got)
+		}
+	})
+}
+
+func TestOpenAIReasoningEffortFromRequest_AllPaths(t *testing.T) {
+	t.Run("reasoning.effort path", func(t *testing.T) {
+		body := []byte(`{"reasoning":{"effort":"high"}}`)
+		if got := openAIReasoningEffortFromRequest(body); got != "high" {
+			t.Fatalf("got %q, want high", got)
+		}
+	})
+	t.Run("reasoning_effort path", func(t *testing.T) {
+		body := []byte(`{"reasoning_effort":"low"}`)
+		if got := openAIReasoningEffortFromRequest(body); got != "low" {
+			t.Fatalf("got %q, want low", got)
+		}
+	})
+	t.Run("output_config.effort path", func(t *testing.T) {
+		body := []byte(`{"output_config":{"effort":"max"}}`)
+		if got := openAIReasoningEffortFromRequest(body); got != "xhigh" {
+			t.Fatalf("got %q, want xhigh", got)
+		}
+	})
+	t.Run("no reasoning at all", func(t *testing.T) {
+		body := []byte(`{"model":"gpt-5.5","input":"hi"}`)
+		if got := openAIReasoningEffortFromRequest(body); got != "" {
+			t.Fatalf("got %q, want empty", got)
+		}
+	})
+}
+
+func TestOpenAIReasoningEffortFromRequest_NormalizesAliases(t *testing.T) {
+	cases := []struct {
+		name string
+		body []byte
+		want string
+	}{
+		{"max → xhigh", []byte(`{"reasoning_effort":"max"}`), "xhigh"},
+		{"maximum → xhigh", []byte(`{"reasoning_effort":"maximum"}`), "xhigh"},
+		{"ultra → xhigh", []byte(`{"reasoning_effort":"ultra"}`), "xhigh"},
+		{"min → minimal", []byte(`{"reasoning":{"effort":"min"}}`), "minimal"},
+		{"off → minimal", []byte(`{"reasoning":{"effort":"off"}}`), "minimal"},
+		{"disabled → minimal", []byte(`{"output_config":{"effort":"disabled"}}`), "minimal"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := openAIReasoningEffortFromRequest(tc.body); got != tc.want {
+				t.Fatalf("got %q, want %q; body=%s", got, tc.want, tc.body)
+			}
+		})
+	}
+}
+
+func TestOpenAIReasoningEffortFromRequestAfterHint(t *testing.T) {
+	// AfterHint 不检查 hint 直接解析 — 用于 hint 已检查过的热路径
+	t.Run("reasoning.effort found", func(t *testing.T) {
+		body := []byte(`{"reasoning":{"effort":"high"}}`)
+		if got := openAIReasoningEffortFromRequestAfterHint(body); got != "high" {
+			t.Fatalf("got %q, want high", got)
+		}
+	})
+	t.Run("empty body", func(t *testing.T) {
+		if got := openAIReasoningEffortFromRequestAfterHint([]byte{}); got != "" {
+			t.Fatalf("got %q, want empty", got)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// ensureResponsesDefaultsWithTier — 集成：已存在的 reasoning.effort 也被标准化
+// ---------------------------------------------------------------------------
+
+func TestEnsureResponsesDefaultsNormalizesExistingReasoningEffortLowcaseAlias(t *testing.T) {
+	tests := []struct {
+		name     string
+		body     []byte
+		wantEffort string
+	}{
+		{"reasoning.effort extrahigh → xhigh", []byte(`{"model":"gpt-5.5","input":"hi","reasoning":{"effort":"extrahigh"}}`), "xhigh"},
+		{"reasoning.effort veryhigh → xhigh", []byte(`{"model":"gpt-5.5","input":"hi","reasoning":{"effort":"veryhigh"}}`), "xhigh"},
+		{"reasoning.effort min → minimal", []byte(`{"model":"gpt-5.5","input":"hi","reasoning":{"effort":"min"}}`), "minimal"},
+		{"reasoning.effort disabled → minimal", []byte(`{"model":"gpt-5.5","input":"hi","reasoning":{"effort":"disabled"}}`), "minimal"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := ensureResponsesDefaultsWithTier(tc.body, "")
+			if got := gjson.GetBytes(result, "reasoning.effort").String(); got != tc.wantEffort {
+				t.Fatalf("reasoning.effort = %q, want %q; body=%s", got, tc.wantEffort, result)
+			}
+		})
+	}
+}
+
+func TestEnsureResponsesDefaultsNoopsWhenNoReasoningFields(t *testing.T) {
+	// 没有 reasoning 相关字段时，不应该注入 reasoning
+	body := []byte(`{"model":"gpt-5.5","input":"hi"}`)
+	result := ensureResponsesDefaultsWithTier(body, "")
+	if gjson.GetBytes(result, "reasoning").Exists() {
+		t.Fatalf("reasoning should not be injected when no hint; body=%s", result)
+	}
+	// 但 include 应该仍然被设置
+	if include := gjson.GetBytes(result, "include"); !include.Exists() {
+		t.Fatal("include should still be set even without reasoning")
+	}
+}
+
 func TestApplyOpenAIWireServiceTier_FastRemoved(t *testing.T) {
 	result := applyOpenAIWireServiceTier([]byte(`{"model":"gpt-5.5","input":"hi","service_tier":"fast"}`))
 
@@ -478,6 +943,21 @@ func TestWrapAsResponsesAPIToolResultOutputIsString(t *testing.T) {
 	}
 	if output.String() != "sunny" {
 		t.Fatalf("function_call_output.output = %q, want sunny", output.String())
+	}
+}
+
+func TestWrapAsResponsesAPIUsesOutputConfigMaxEffort(t *testing.T) {
+	body := []byte(`{"messages":[{"role":"user","content":"hi"}],"output_config":{"effort":"max"}}`)
+	result, err := wrapAsResponsesAPI(body, "gpt-5.4")
+	if err != nil {
+		t.Fatalf("wrapAsResponsesAPI: %v", err)
+	}
+
+	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "xhigh" {
+		t.Fatalf("reasoning.effort = %q, want xhigh; body=%s", got, result)
+	}
+	if gjson.GetBytes(result, "output_config").Exists() {
+		t.Fatalf("output_config should not be forwarded: %s", result)
 	}
 }
 
