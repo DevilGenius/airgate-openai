@@ -19,6 +19,99 @@ func TestResolveOpenAISessionUsesPromptCacheKeyAsFallback(t *testing.T) {
 	}
 }
 
+func TestResolveOpenAISessionUsesMetadataUserIDSession(t *testing.T) {
+	body := []byte(`{"metadata":{"user_id":"{\"device_id\":\"device-a\",\"session_id\":\"session-abc\"}"}}`)
+	resolution := resolveOpenAISession(http.Header{}, body, 101)
+
+	if resolution.SessionKey != "sid:claude:session-abc" {
+		t.Fatalf("SessionKey = %q, want sid:claude:session-abc", resolution.SessionKey)
+	}
+	if resolution.SessionID != "claude:session-abc" {
+		t.Fatalf("SessionID = %q, want claude:session-abc", resolution.SessionID)
+	}
+	if resolution.SessionSource != "metadata_user_id" {
+		t.Fatalf("SessionSource = %q, want metadata_user_id", resolution.SessionSource)
+	}
+}
+
+func TestResolveOpenAISessionMetadataUserIDJSONWithoutSessionFallsBackToHeader(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("Session-Id", "header-session")
+	body := []byte(`{"metadata":{"user_id":"{\"device_id\":\"device-a\"}"}}`)
+	resolution := resolveOpenAISession(headers, body, 101)
+
+	if resolution.SessionID != "header-session" {
+		t.Fatalf("SessionID = %q, want header-session", resolution.SessionID)
+	}
+	if resolution.SessionSource != "header_session_id" {
+		t.Fatalf("SessionSource = %q, want header_session_id", resolution.SessionSource)
+	}
+}
+
+func TestResolveOpenAISessionMetadataUserIDJSONWithoutSessionFallsBackToPromptCache(t *testing.T) {
+	body := []byte(`{"metadata":{"user_id":"{\"device_id\":\"device-a\"}"},"prompt_cache_key":"pcache-1"}`)
+	resolution := resolveOpenAISession(http.Header{}, body, 101)
+
+	if resolution.SessionKey != "pcache:pcache-1" {
+		t.Fatalf("SessionKey = %q, want pcache:pcache-1", resolution.SessionKey)
+	}
+	if resolution.SessionID != "pcache-1" {
+		t.Fatalf("SessionID = %q, want pcache-1", resolution.SessionID)
+	}
+	if resolution.SessionSource != "prompt_cache_key" {
+		t.Fatalf("SessionSource = %q, want prompt_cache_key", resolution.SessionSource)
+	}
+}
+
+func TestResolveOpenAISessionUsesLegacyMetadataUserIDSession(t *testing.T) {
+	body := []byte(`{"metadata":{"user_id":"user_xxx_account__session_ac980658-63bd-4fb3-97ba-8da64cb1e344"}}`)
+	resolution := resolveOpenAISession(http.Header{}, body, 101)
+
+	if resolution.SessionID != "claude:ac980658-63bd-4fb3-97ba-8da64cb1e344" {
+		t.Fatalf("SessionID = %q, want legacy Claude session", resolution.SessionID)
+	}
+}
+
+func TestResolveOpenAISessionMetadataSessionOverridesHeader(t *testing.T) {
+	headers := http.Header{"Session-Id": []string{"header-session"}}
+	body := []byte(`{"metadata":{"user_id":"{\"session_id\":\"body-session\"}"}}`)
+	resolution := resolveOpenAISession(headers, body, 101)
+
+	if resolution.SessionID != "claude:body-session" {
+		t.Fatalf("SessionID = %q, want claude:body-session", resolution.SessionID)
+	}
+	if resolution.SessionSource != "metadata_user_id" {
+		t.Fatalf("SessionSource = %q, want metadata_user_id", resolution.SessionSource)
+	}
+}
+
+func TestResolveOpenAISessionUsesHeaderSessionFallback(t *testing.T) {
+	headers := http.Header{"Session-Id": []string{"header-session"}}
+	resolution := resolveOpenAISession(headers, nil, 101)
+
+	if resolution.SessionID != "header-session" {
+		t.Fatalf("SessionID = %q, want header-session", resolution.SessionID)
+	}
+	if resolution.SessionSource != "header_session_id" {
+		t.Fatalf("SessionSource = %q, want header_session_id", resolution.SessionSource)
+	}
+}
+
+func TestResolveOpenAISessionUsesBodyConversationID(t *testing.T) {
+	body := []byte(`{"conversation_id":"conv-123"}`)
+	resolution := resolveOpenAISession(http.Header{}, body, 101)
+
+	if resolution.SessionKey != "cid:conv-123" {
+		t.Fatalf("SessionKey = %q, want cid:conv-123", resolution.SessionKey)
+	}
+	if resolution.SessionID != "conv-123" {
+		t.Fatalf("SessionID = %q, want conv-123", resolution.SessionID)
+	}
+	if resolution.SessionSource != "body_conversation_id" {
+		t.Fatalf("SessionSource = %q, want body_conversation_id", resolution.SessionSource)
+	}
+}
+
 func TestUpstreamPromptCacheKeyKeepsMaxLengthKey(t *testing.T) {
 	key := strings.Repeat("a", maxUpstreamPromptCacheKeyLength)
 	if got := upstreamPromptCacheKey(key); got != key {

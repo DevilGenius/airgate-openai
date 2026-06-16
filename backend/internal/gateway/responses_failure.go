@@ -20,7 +20,7 @@ const (
 	responsesFailureKindRateLimited        responsesFailureKind = "rate_limited"
 	responsesFailureKindServer             responsesFailureKind = "server"
 
-	contextTooLargeMessage = "上下文过长，请压缩对话、减少历史或开启新会话后重试"
+	contextTooLargeMessage = "Your input exceeds the context window of this model. Please adjust your input and try again."
 )
 
 type responsesFailureError struct {

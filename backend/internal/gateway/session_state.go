@@ -93,6 +93,73 @@ func resolvePromptCacheKeyFromBody(body []byte) string {
 	return ""
 }
 
+func resolveSessionIDFromHeaders(headers http.Header) string {
+	if headers == nil {
+		return ""
+	}
+	return firstNonEmptyString(
+		headers.Get("X-Session-ID"),
+		headers.Get("Session-Id"),
+		headers.Get("Session_id"),
+	)
+}
+
+func resolveConversationIDFromHeaders(headers http.Header) string {
+	if headers == nil {
+		return ""
+	}
+	return firstNonEmptyString(
+		headers.Get("Conversation-Id"),
+		headers.Get("conversation_id"),
+	)
+}
+
+func resolveSessionIDFromBody(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	if userID := strings.TrimSpace(gjson.GetBytes(body, "metadata.user_id").String()); userID != "" {
+		if sid := sessionIDFromMetadataUserID(userID); sid != "" {
+			return sid
+		}
+		if !looksLikeJSONObject(userID) {
+			return userID
+		}
+	}
+	return ""
+}
+
+func resolveConversationIDFromBody(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(gjson.GetBytes(body, "conversation_id").String())
+}
+
+func looksLikeJSONObject(value string) bool {
+	return strings.HasPrefix(strings.TrimSpace(value), "{")
+}
+
+func sessionIDFromMetadataUserID(userID string) string {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return ""
+	}
+	if strings.HasPrefix(userID, "{") {
+		if sid := strings.TrimSpace(gjson.Get(userID, "session_id").String()); sid != "" {
+			return "claude:" + sid
+		}
+		return ""
+	}
+	const marker = "_session_"
+	if idx := strings.LastIndex(userID, marker); idx >= 0 {
+		if sid := strings.TrimSpace(userID[idx+len(marker):]); sid != "" {
+			return "claude:" + sid
+		}
+	}
+	return ""
+}
+
 func deriveAnthropicPromptCacheKey(body []byte) string {
 	root := gjson.ParseBytes(body)
 	if !root.Get("messages").IsArray() {
@@ -296,18 +363,20 @@ func sessionStateLastActivity(state *openAISessionState) time.Time {
 
 func resolveOpenAISession(headers http.Header, body []byte, accountID int64) openAISessionResolution {
 	promptCacheKey := resolvePromptCacheKeyFromBody(body)
-	sessionID := ""
-	conversationID := ""
+	bodySessionID := resolveSessionIDFromBody(body)
+	bodyConversationID := resolveConversationIDFromBody(body)
+	headerSessionID := resolveSessionIDFromHeaders(headers)
+	headerConversationID := resolveConversationIDFromHeaders(headers)
+	sessionID := bodySessionID
+	if sessionID == "" {
+		sessionID = headerSessionID
+	}
+	conversationID := bodyConversationID
+	if conversationID == "" {
+		conversationID = headerConversationID
+	}
 	previousResponseID := ""
 	if headers != nil {
-		sessionID = strings.TrimSpace(headers.Get("session_id"))
-		if sessionID == "" {
-			sessionID = strings.TrimSpace(headers.Get("Session_ID"))
-		}
-		conversationID = strings.TrimSpace(headers.Get("conversation_id"))
-		if conversationID == "" {
-			conversationID = strings.TrimSpace(headers.Get("Conversation_ID"))
-		}
 		previousResponseID = strings.TrimSpace(headers.Get("x-openai-previous-response-id"))
 	}
 
@@ -320,9 +389,13 @@ func resolveOpenAISession(headers http.Header, body []byte, accountID int64) ope
 		AccountID:      accountID,
 	}
 	switch {
-	case sessionID != "":
+	case bodySessionID != "":
+		resolution.SessionSource = "metadata_user_id"
+	case headerSessionID != "":
 		resolution.SessionSource = "header_session_id"
-	case conversationID != "":
+	case bodyConversationID != "":
+		resolution.SessionSource = "body_conversation_id"
+	case headerConversationID != "":
 		resolution.SessionSource = "header_conversation_id"
 	case promptCacheKey != "":
 		resolution.SessionSource = "prompt_cache_key"
