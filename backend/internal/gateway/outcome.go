@@ -61,7 +61,8 @@ func failureOutcome(statusCode int, body []byte, headers http.Header, message st
 		reason = fmt.Sprintf("HTTP %d: %s", statusCode, message)
 	}
 	return sdk.ForwardOutcome{
-		Kind: kind,
+		Kind:          kind,
+		FailoverScope: failoverScopeForHTTPFailure(kind, message),
 		Upstream: sdk.UpstreamResponse{
 			StatusCode: statusCode,
 			Headers:    headers,
@@ -70,6 +71,13 @@ func failureOutcome(statusCode int, body []byte, headers http.Header, message st
 		Reason:     reason,
 		RetryAfter: retryAfter,
 	}
+}
+
+func failoverScopeForHTTPFailure(kind sdk.OutcomeKind, message string) sdk.FailoverScope {
+	if kind == sdk.OutcomeClientError && isModelUnsupportedText(message) {
+		return sdk.FailoverScopeDispatchCandidate
+	}
+	return sdk.FailoverScopeNone
 }
 
 func applyImageRateLimitPolicy(outcome *sdk.ForwardOutcome) {

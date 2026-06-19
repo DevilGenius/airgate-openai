@@ -798,12 +798,13 @@ done:
 			}
 			errBody := anthropicErrorJSONWithCode(failure.AnthropicErrorType, failure.Code, failure.Message)
 			return sdk.ForwardOutcome{
-				Kind:       kind,
-				Upstream:   sdk.UpstreamResponse{StatusCode: failure.StatusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
-				Reason:     failure.Message,
-				RetryAfter: failure.RetryAfter,
-				Duration:   elapsed,
-				Usage:      abortUsage(),
+				Kind:          kind,
+				FailoverScope: failure.failoverScopeForKind(kind),
+				Upstream:      sdk.UpstreamResponse{StatusCode: failure.StatusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
+				Reason:        failure.Message,
+				RetryAfter:    failure.RetryAfter,
+				Duration:      elapsed,
+				Usage:         abortUsage(),
 			}, nil
 		}
 		errBody := anthropicErrorJSON("api_error", streamErr.Error())

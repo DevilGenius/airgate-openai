@@ -275,6 +275,26 @@ func TestClassifyGenericSSEErrorEventTopLevelModelNotFound(t *testing.T) {
 	if kind := failure.outcomeKind(); kind != sdk.OutcomeClientError {
 		t.Fatalf("expected OutcomeClientError, got %v", kind)
 	}
+	if scope := failure.failoverScopeForKind(failure.outcomeKind()); scope != sdk.FailoverScopeDispatchCandidate {
+		t.Fatalf("expected dispatch candidate failover scope, got %q", scope)
+	}
+}
+
+func TestFailureOutcomeModelNotFoundRequestsDispatchCandidateFailover(t *testing.T) {
+	outcome := failureOutcome(
+		http.StatusBadRequest,
+		[]byte(`{"error":{"message":"The model gpt-5.3-codex-spark does not exist.","code":"model_not_found"}}`),
+		http.Header{"Content-Type": []string{"application/json"}},
+		"The model gpt-5.3-codex-spark does not exist.",
+		0,
+	)
+
+	if outcome.Kind != sdk.OutcomeClientError {
+		t.Fatalf("Kind = %v, want OutcomeClientError", outcome.Kind)
+	}
+	if outcome.FailoverScope != sdk.FailoverScopeDispatchCandidate {
+		t.Fatalf("FailoverScope = %q, want dispatch candidate", outcome.FailoverScope)
+	}
 }
 
 func TestHandleStreamResponseSanitizesFirstSSEError(t *testing.T) {

@@ -452,13 +452,15 @@ func (g *OpenAIGateway) handleAnthropicNonStreamFromResponses(
 	if wsResult.Err != nil {
 		var failure *responsesFailureError
 		if errors.As(wsResult.Err, &failure) {
+			kind := failure.outcomeKind()
 			body := anthropicErrorJSONWithCode(failure.AnthropicErrorType, failure.Code, failure.Message)
 			return sdk.ForwardOutcome{
-				Kind:       failure.outcomeKind(),
-				Upstream:   sdk.UpstreamResponse{StatusCode: failure.StatusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: body},
-				Reason:     failure.Message,
-				RetryAfter: failure.RetryAfter,
-				Duration:   time.Since(start),
+				Kind:          kind,
+				FailoverScope: failure.failoverScopeForKind(kind),
+				Upstream:      sdk.UpstreamResponse{StatusCode: failure.StatusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: body},
+				Reason:        failure.Message,
+				RetryAfter:    failure.RetryAfter,
+				Duration:      time.Since(start),
 			}, nil
 		}
 		// 非 *responsesFailureError 的 err（典型：SSE EOF 提前断流）→ UpstreamTransient，可 failover。

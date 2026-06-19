@@ -1873,11 +1873,12 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 			if errors.As(wsResult.Err, &failure) {
 				errBody := openAIErrorJSON(openAIErrorTypeForStatus(failure.StatusCode), failure.codeOrKind(), failure.Message)
 				retryOutcome = sdk.ForwardOutcome{
-					Kind:       failure.outcomeKind(),
-					Upstream:   sdk.UpstreamResponse{StatusCode: failure.StatusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
-					Reason:     failure.Error(),
-					RetryAfter: failure.RetryAfter,
-					Duration:   elapsed,
+					Kind:          failure.outcomeKind(),
+					FailoverScope: failure.failoverScopeForKind(failure.outcomeKind()),
+					Upstream:      sdk.UpstreamResponse{StatusCode: failure.StatusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
+					Reason:        failure.Error(),
+					RetryAfter:    failure.RetryAfter,
+					Duration:      elapsed,
 				}
 				applyImageRateLimitPolicy(&retryOutcome)
 			}
@@ -1895,10 +1896,11 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 			if failure := classifyImageGenCallFailures(wsResult.ImageGenCallFailures, reason); failure != nil {
 				body := buildImagesErrorBodyWithCode(failure.StatusCode, failure.Code, failure.Message)
 				retryOutcome = sdk.ForwardOutcome{
-					Kind:     failure.outcomeKind(),
-					Upstream: sdk.UpstreamResponse{StatusCode: failure.StatusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: body},
-					Reason:   failure.Message,
-					Duration: elapsed,
+					Kind:          failure.outcomeKind(),
+					FailoverScope: failure.failoverScopeForKind(failure.outcomeKind()),
+					Upstream:      sdk.UpstreamResponse{StatusCode: failure.StatusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: body},
+					Reason:        failure.Message,
+					Duration:      elapsed,
 				}
 				applyImageRateLimitPolicy(&retryOutcome)
 			}
@@ -1943,7 +1945,8 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 					writeSSEErrorIfStarted(req.Writer, sseKA, clientMsg)
 				}
 				outcome := sdk.ForwardOutcome{
-					Kind: sdk.OutcomeClientError,
+					Kind:          sdk.OutcomeClientError,
+					FailoverScope: failure.failoverScopeForKind(sdk.OutcomeClientError),
 					Upstream: sdk.UpstreamResponse{
 						StatusCode: failure.StatusCode,
 						Headers:    http.Header{"Content-Type": []string{"application/json"}},
@@ -1966,11 +1969,12 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 			}
 			errBody := openAIErrorJSON(openAIErrorTypeForStatus(failure.StatusCode), failure.codeOrKind(), failure.Message)
 			outcome := sdk.ForwardOutcome{
-				Kind:       failure.outcomeKind(),
-				Upstream:   sdk.UpstreamResponse{StatusCode: failure.StatusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
-				Reason:     failure.Error(),
-				RetryAfter: failure.RetryAfter,
-				Duration:   elapsed,
+				Kind:          failure.outcomeKind(),
+				FailoverScope: failure.failoverScopeForKind(failure.outcomeKind()),
+				Upstream:      sdk.UpstreamResponse{StatusCode: failure.StatusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
+				Reason:        failure.Error(),
+				RetryAfter:    failure.RetryAfter,
+				Duration:      elapsed,
 			}
 			applyImageRateLimitPolicy(&outcome)
 			return outcome, wsResult.Err

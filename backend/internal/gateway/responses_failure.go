@@ -30,6 +30,7 @@ type responsesFailureError struct {
 	Code               string
 	Message            string
 	RetryAfter         time.Duration
+	FailoverScope      sdk.FailoverScope
 }
 
 // outcomeKind 把内部 responsesFailureKind 映射到 SDK 的 OutcomeKind。
@@ -76,6 +77,13 @@ func (e *responsesFailureError) shouldReturnClientError() bool {
 
 func (e *responsesFailureError) isContinuationAnchorError() bool {
 	return e != nil && e.Kind == responsesFailureKindContinuationAnchor
+}
+
+func (e *responsesFailureError) failoverScopeForKind(kind sdk.OutcomeKind) sdk.FailoverScope {
+	if e == nil || kind != sdk.OutcomeClientError {
+		return sdk.FailoverScopeNone
+	}
+	return e.FailoverScope
 }
 
 func (e *responsesFailureError) codeOrKind() string {
@@ -236,6 +244,7 @@ func classifyResponsesError(errType, errCode, msg string) *responsesFailureError
 			StatusCode:         http.StatusBadRequest,
 			AnthropicErrorType: "invalid_model_error",
 			Message:            msg,
+			FailoverScope:      sdk.FailoverScopeDispatchCandidate,
 		}
 	case isSafetyRejectionText(errType, errCode, msg):
 		return &responsesFailureError{

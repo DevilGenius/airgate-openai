@@ -1007,17 +1007,20 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		message := result.Err.Error()
 		var retryAfter time.Duration
 		code := kind.String()
+		failoverScope := sdk.FailoverScopeNone
 		if errors.As(result.Err, &failure) {
 			kind = failure.outcomeKind()
 			statusCode = failure.StatusCode
 			message = failure.Message
 			retryAfter = failure.RetryAfter
 			code = failure.codeOrKind()
+			failoverScope = failure.failoverScopeForKind(kind)
 		}
 		// 只有已经向客户端写过可见输出时才视为流中断；首包前错误仍交给 Core failover。
 		if req.Stream && streamOutputStarted() && kind != sdk.OutcomeClientError {
 			kind = sdk.OutcomeStreamAborted
 			code = kind.String()
+			failoverScope = sdk.FailoverScopeNone
 		}
 		errBody := openAIErrorJSON(openAIErrorTypeForStatus(statusCode), code, message)
 		logger.Warn("upstream_request_non_2xx",
@@ -1034,11 +1037,12 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 			"stream_output_started", streamOutputStarted(),
 		)
 		outcome := sdk.ForwardOutcome{
-			Kind:       kind,
-			Upstream:   sdk.UpstreamResponse{StatusCode: statusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
-			Reason:     message,
-			RetryAfter: retryAfter,
-			Duration:   elapsed,
+			Kind:          kind,
+			FailoverScope: failoverScope,
+			Upstream:      sdk.UpstreamResponse{StatusCode: statusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
+			Reason:        message,
+			RetryAfter:    retryAfter,
+			Duration:      elapsed,
 		}
 		// 即使请求失败，上游可能已消耗 token（如 response.failed / response.incomplete），
 		// 仍需计费避免漏洞。
