@@ -236,7 +236,7 @@ func TestPreviousResponseNotFoundRecoveryBodyRejectsEncryptedContent(t *testing.
 func TestPreprocessRequestBodyCompactDeletesStreamOnly(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.4","stream":false,"input":"hello"}`)
 
-	got := preprocessRequestBody(body, "gpt-5.4", "/v1/responses/compact")
+	got := preprocessRequestBody(body, "gpt-5.4-openai-compact", "/v1/responses/compact")
 
 	if model := gjson.GetBytes(got, "model").String(); model != "gpt-5.4-openai-compact" {
 		t.Fatalf("compact model = %q, want gpt-5.4-openai-compact; body=%s", model, got)

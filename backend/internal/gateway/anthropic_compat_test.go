@@ -62,7 +62,7 @@ func TestIsModelFallbackErrorRejectsOrdinaryClientErrors(t *testing.T) {
 	}
 }
 
-func TestForwardAnthropicMessageFallsBackOnContextWindowError(t *testing.T) {
+func TestForwardAnthropicMessageUsesDispatchPlanModel(t *testing.T) {
 	var models []string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -71,20 +71,12 @@ func TestForwardAnthropicMessageFallsBackOnContextWindowError(t *testing.T) {
 		}
 		model := gjson.GetBytes(body, "model").String()
 		models = append(models, model)
-		if len(models) == 1 {
-			if model != sparkTargetModel {
-				t.Fatalf("first request model = %q, want Spark %q", model, sparkTargetModel)
-			}
-			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = fmt.Fprint(w, `data: {"type":"response.failed","response":{"error":{"type":"invalid_request_error","code":"context_length_exceeded","message":"Your input exceeds the context window of this model."}}}`+"\n\n")
-			return
-		}
-		if model != sonnetTargetModel {
-			t.Fatalf("fallback request model = %q, want %q", model, sonnetTargetModel)
+		if model != sparkTargetModel {
+			t.Fatalf("upstream model = %q, want Spark %q", model, sparkTargetModel)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = fmt.Fprint(w, `data: {"type":"response.output_text.delta","delta":"ok"}`+"\n")
-		_, _ = fmt.Fprint(w, `data: {"type":"response.completed","response":{"id":"resp_fallback","model":"`+sonnetTargetModel+`","usage":{"input_tokens":3,"output_tokens":1}}}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.completed","response":{"id":"resp_dispatch_plan","model":"`+sparkTargetModel+`","usage":{"input_tokens":3,"output_tokens":1}}}`+"\n\n")
 	}))
 	defer ts.Close()
 
@@ -95,8 +87,9 @@ func TestForwardAnthropicMessageFallsBackOnContextWindowError(t *testing.T) {
 			"api_key":  "test-key",
 			"base_url": ts.URL,
 		}},
-		Writer: w,
-		Body:   body,
+		Writer:       w,
+		Body:         body,
+		DispatchPlan: sdk.DispatchPlan{SchedulingModel: sparkTargetModel, WireModel: sparkTargetModel},
 	}
 	gateway := &OpenAIGateway{transportPool: NewTransportPool()}
 	outcome, err := gateway.forwardAnthropicMessage(context.Background(), req)
@@ -106,8 +99,8 @@ func TestForwardAnthropicMessageFallsBackOnContextWindowError(t *testing.T) {
 	if outcome.Kind != sdk.OutcomeSuccess {
 		t.Fatalf("outcome kind = %v, want success; reason=%s", outcome.Kind, outcome.Reason)
 	}
-	if len(models) != 2 {
-		t.Fatalf("upstream request count = %d, want 2; models=%v", len(models), models)
+	if len(models) != 1 {
+		t.Fatalf("upstream request count = %d, want 1; models=%v", len(models), models)
 	}
 	if got := gjson.Get(w.Body.String(), "content.0.text").String(); got != "ok" {
 		t.Fatalf("response text = %q, want ok; body=%s", got, w.Body.String())
@@ -127,7 +120,8 @@ func TestForwardAnthropicMessageNonStreamReturnsBodyForGRPC(t *testing.T) {
 			"api_key":  "test-key",
 			"base_url": ts.URL,
 		}},
-		Body: []byte(`{"model":"claude-sonnet-4-6","max_tokens":128,"messages":[{"role":"user","content":[{"type":"text","text":"ping"}]}]}`),
+		Body:         []byte(`{"model":"claude-sonnet-4-6","max_tokens":128,"messages":[{"role":"user","content":[{"type":"text","text":"ping"}]}]}`),
+		DispatchPlan: sdk.DispatchPlan{SchedulingModel: sonnetTargetModel, WireModel: sonnetTargetModel},
 	}
 
 	gateway := &OpenAIGateway{transportPool: NewTransportPool()}

@@ -32,9 +32,10 @@ func TestForwardHTTPAPIKeyCompactUsesCompactEndpoint(t *testing.T) {
 				"base_url": server.URL,
 			},
 		},
-		Body:    []byte(`{"model":"gpt-5.4","stream":false,"input":"hello"}`),
-		Headers: http.Header{"X-Forwarded-Path": []string{"/v1/responses/compact"}},
-		Model:   "gpt-5.4",
+		Body:         []byte(`{"model":"gpt-5.4","stream":false,"input":"hello"}`),
+		Headers:      http.Header{"X-Forwarded-Path": []string{"/v1/responses/compact"}},
+		Model:        "gpt-5.4",
+		DispatchPlan: sdk.DispatchPlan{SchedulingModel: "gpt-5.4", WireModel: "gpt-5.4-openai-compact", RuleID: "responses-compact"},
 	}
 
 	outcome, err := g.forwardHTTP(context.Background(), req)
@@ -77,10 +78,11 @@ func TestForwardHTTPCompactRejectsStreaming(t *testing.T) {
 			ID:          1,
 			Credentials: map[string]string{"api_key": "sk-test"},
 		},
-		Body:    []byte(`{"model":"gpt-5.4","stream":true}`),
-		Headers: http.Header{"X-Forwarded-Path": []string{"/v1/responses/compact"}},
-		Model:   "gpt-5.4",
-		Stream:  true,
+		Body:         []byte(`{"model":"gpt-5.4","stream":true}`),
+		Headers:      http.Header{"X-Forwarded-Path": []string{"/v1/responses/compact"}},
+		Model:        "gpt-5.4",
+		DispatchPlan: sdk.DispatchPlan{SchedulingModel: "gpt-5.4", WireModel: "gpt-5.4-openai-compact", RuleID: "responses-compact"},
+		Stream:       true,
 	}
 
 	outcome, err := g.forwardHTTP(context.Background(), req)
