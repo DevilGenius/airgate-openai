@@ -3,7 +3,7 @@ module github.com/DevilGenius/airgate-openai/backend
 go 1.26.3
 
 require (
-	github.com/DevilGenius/airgate-sdk v0.2.2
+	github.com/DevilGenius/airgate-sdk v0.2.3
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/lib/pq v1.10.9
