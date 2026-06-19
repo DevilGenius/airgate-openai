@@ -175,7 +175,28 @@ func (g *OpenAIGateway) listHostTasks(ctx context.Context, userID int64, taskTyp
 	return out, nil
 }
 
-func (g *OpenAIGateway) forwardViaHost(ctx context.Context, userID, groupID, apiKeyID int64, modelID, method, path string, headers http.Header, body []byte, stream bool) (*hostForwardResponse, error) {
+type hostForwardOption func(*hostForwardOptions)
+
+type hostForwardOptions struct {
+	taskID         int64
+	upstreamTaskID string
+}
+
+func withHostForwardTask(taskID int64, upstreamTaskID string) hostForwardOption {
+	return func(opts *hostForwardOptions) {
+		opts.taskID = taskID
+		opts.upstreamTaskID = upstreamTaskID
+	}
+}
+
+func hostForwardPayload(userID, groupID, apiKeyID int64, modelID, method, path string, headers http.Header, body []byte, stream bool, options ...hostForwardOption) map[string]interface{} {
+	var opts hostForwardOptions
+	for _, option := range options {
+		if option != nil {
+			option(&opts)
+		}
+	}
+
 	req := map[string]interface{}{
 		"user_id":  userID,
 		"group_id": groupID,
@@ -189,6 +210,17 @@ func (g *OpenAIGateway) forwardViaHost(ctx context.Context, userID, groupID, api
 	if apiKeyID > 0 {
 		req["api_key_id"] = apiKeyID
 	}
+	if opts.taskID > 0 {
+		req["task_id"] = opts.taskID
+	}
+	if upstreamTaskID := strings.TrimSpace(opts.upstreamTaskID); upstreamTaskID != "" {
+		req["upstream_task_id"] = upstreamTaskID
+	}
+	return req
+}
+
+func (g *OpenAIGateway) forwardViaHost(ctx context.Context, userID, groupID, apiKeyID int64, modelID, method, path string, headers http.Header, body []byte, stream bool, options ...hostForwardOption) (*hostForwardResponse, error) {
+	req := hostForwardPayload(userID, groupID, apiKeyID, modelID, method, path, headers, body, stream, options...)
 	payload, err := g.hostInvoke(ctx, hostMethodGatewayForward, req)
 	if err != nil {
 		return nil, err

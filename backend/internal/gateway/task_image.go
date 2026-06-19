@@ -175,19 +175,18 @@ func executeImageTask(ctx context.Context, g *OpenAIGateway, task sdk.HostTask, 
 	headers.Set("Content-Type", "application/json")
 	headers.Set("Accept", "application/json")
 	headers.Set(taskExecHeader, "true")
-	headers.Set(taskIDHeader, strconv.FormatInt(task.ID, 10))
 
+	upstreamTaskID := ""
 	if hasUpstreamID {
-		uid := task.Execution["upstream_task_id"].(string)
-		headers.Set(upstreamTaskIDHeader, uid)
-		rt.logger.Info("task_retry_with_upstream_id", "upstream_task_id", uid)
+		upstreamTaskID = task.Execution["upstream_task_id"].(string)
+		rt.logger.Info("task_retry_with_upstream_id", "upstream_task_id", upstreamTaskID)
 	}
 
 	if err := rt.SetProgress(ctx, 30); err != nil {
 		return err
 	}
 
-	resp, err := g.forwardViaHost(ctx, task.UserID, groupID, apiKeyID, model, http.MethodPost, defaultPath, headers, reqBody, false)
+	resp, err := g.forwardViaHost(ctx, task.UserID, groupID, apiKeyID, model, http.MethodPost, defaultPath, headers, reqBody, false, withHostForwardTask(task.ID, upstreamTaskID))
 	if err != nil {
 		// err 这里只来自 gRPC host-invoke 自身失败（断开 / 序列化错误），上游
 		// 4xx 安全拒绝走的是 resp.StatusCode + resp.Body，由下方 classifyUpstreamTaskError
