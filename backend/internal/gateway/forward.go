@@ -54,9 +54,16 @@ func (g *OpenAIGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest
 		return buildLocalModelsResponse(), nil
 	}
 
+	if wireModel := req.DispatchPlan.UpstreamModel(); wireModel != "" {
+		req.Model = wireModel
+	}
+
 	// 统一预处理请求体。multipart 请求（images/edits 上传图片）body 是二进制，
 	// 不能按 JSON 处理否则会被 sjson 覆盖丢失数据。
 	_, reqPath := resolveAPIKeyRoute(req)
+	if denied, ok := enforceOperationPolicies(req, reqPath); ok {
+		return denied, nil
+	}
 	if isResponsesCompactRequestPath(reqPath) && (req.Stream || gjson.GetBytes(req.Body, "stream").Bool()) {
 		body := openAIErrorJSON("invalid_request_error", "invalid_request", "streaming not supported for /responses/compact")
 		return sdk.ForwardOutcome{

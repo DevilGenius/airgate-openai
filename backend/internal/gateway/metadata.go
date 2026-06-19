@@ -46,6 +46,7 @@ func BuildPluginInfo() sdk.PluginInfo {
 			sdk.CapabilityForHostMethod(hostMethodAssetsStore),
 			sdk.CapabilityForHostMethod(hostMethodAssetsStoreURL),
 		},
+		DispatchDSL: openAIDispatchDSL(),
 		Metadata: map[string]string{
 			"account.oauth_plans": `[
 				{"key":"free","label":"Free","credential_key":"plan_type","matches":["free"]},

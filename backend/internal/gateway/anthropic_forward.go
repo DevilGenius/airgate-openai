@@ -20,7 +20,7 @@ import (
 // ──────────────────────────────────────────────────────
 
 // forwardAnthropicMessage 处理 Anthropic Messages API 请求
-// 流程：原始 JSON → 验证 → 模型映射 → 一步直转 Responses API → 转发上游（含模型降级重试）
+// 流程：原始 JSON → 验证 → 使用 Core 选中的 DispatchPlan → 一步直转 Responses API → 转发上游
 func (g *OpenAIGateway) forwardAnthropicMessage(ctx context.Context, req *sdk.ForwardRequest) (sdk.ForwardOutcome, error) {
 	start := time.Now()
 	body := req.Body
@@ -72,37 +72,27 @@ func (g *OpenAIGateway) forwardAnthropicMessage(ctx context.Context, req *sdk.Fo
 		body, _ = sjson.SetBytes(body, "stream", true)
 	}
 
-	// 3. 模型映射
+	// 3. 使用 Core 选中的上游模型；Claude -> OpenAI 的映射由 DispatchDSL 在 Core 内执行。
 	originalModel := gjson.GetBytes(body, "model").String()
-	var mapping *anthropicModelMapping
 	var mappingEffort string
-	if mapping = resolveAnthropicModelMapping(originalModel); mapping != nil {
-		logger.Debug("anthropic_model_mapped",
-			"from", originalModel,
-			"to", mapping.OpenAIModel,
-			"fallback", mapping.FallbackModel,
-			"reasoning_effort", mapping.ReasoningEffort)
+	if mapping := resolveAnthropicModelMapping(originalModel); mapping != nil {
 		mappingEffort = mapping.ReasoningEffort
-		body, _ = sjson.SetBytes(body, "model", mapping.OpenAIModel)
 	}
-	modelName := gjson.GetBytes(body, "model").String()
-
-	// 3.5 简单操作 → Spark 模型加速路由
-	// 当最后一轮是 Grep/Glob/Search 等搜索类工具结果处理时，
-	// 用 Spark 快速模型替代主模型，失败时回退到原始映射模型
-	// 注：Read/Fetch 返回完整内容可能需要深度分析，不走 Spark
-	sparkOverride := false
-	originalMappedModel := modelName
-	if sparkTargetModel != "" && sparkTargetModel != modelName &&
-		isSparkEligibleToolTurn(body) {
-		logger.Debug("spark_route_applied",
-			"original", modelName,
-			"spark", sparkTargetModel,
-			"body_size", len(body))
-		modelName = sparkTargetModel
-		mappingEffort = "medium"
-		sparkOverride = true
+	modelName := strings.TrimSpace(req.DispatchPlan.UpstreamModel())
+	if modelName == "" {
+		body := openAIErrorJSON("invalid_request_error", "invalid_request", "dispatch_plan is required")
+		return sdk.ForwardOutcome{
+			Kind: sdk.OutcomeClientError,
+			Upstream: sdk.UpstreamResponse{
+				StatusCode: http.StatusBadRequest,
+				Headers:    http.Header{"Content-Type": []string{"application/json"}},
+				Body:       body,
+			},
+			Reason:   "dispatch_plan is required",
+			Duration: time.Since(start),
+		}, nil
 	}
+	body, _ = sjson.SetBytes(body, "model", modelName)
 
 	// 4. 一步直转为 Responses API JSON
 	// 注: Anthropic 的 cache_control 在转换为 Responses API 后不再适用，
@@ -132,8 +122,8 @@ func (g *OpenAIGateway) forwardAnthropicMessage(ctx context.Context, req *sdk.Fo
 
 	// 5. 按需注入 web_search 工具
 	explicitServiceTier := explicitAnthropicRequestServiceTier(req)
-	responsesBody = finalizeAnthropicResponsesBody(responsesBody, body, explicitServiceTier, sparkOverride)
-	fullResponsesBody = finalizeAnthropicResponsesBody(fullResponsesBody, body, explicitServiceTier, sparkOverride)
+	responsesBody = finalizeAnthropicResponsesBody(responsesBody, body, explicitServiceTier)
+	fullResponsesBody = finalizeAnthropicResponsesBody(fullResponsesBody, body, explicitServiceTier)
 	responsesBody = injectAnthropicPromptCacheKey(responsesBody, strategy, session)
 	fullResponsesBody = injectAnthropicPromptCacheKey(fullResponsesBody, strategy, session)
 
@@ -147,7 +137,7 @@ func (g *OpenAIGateway) forwardAnthropicMessage(ctx context.Context, req *sdk.Fo
 		"client_thinking_budget", gjson.GetBytes(body, "thinking.budget_tokens").Int(),
 		"client_max_tokens", gjson.GetBytes(body, "max_tokens").Int(),
 		"verbosity", gjson.GetBytes(responsesBody, "text.verbosity").String(),
-		"spark_override", sparkOverride,
+		"dispatch_rule_id", req.DispatchPlan.RuleID,
 		"request_mode", requestMode,
 		"request_reason", requestReason,
 		"session_key", session.SessionKey,
@@ -168,28 +158,20 @@ func (g *OpenAIGateway) forwardAnthropicMessage(ctx context.Context, req *sdk.Fo
 		"digest_matched", session.MatchedDigest,
 	)
 
-	// 6. 转发上游（含模型降级重试）
-	fallbackModel := ""
-	if sparkOverride {
-		// Spark 路由：失败时回退到原始映射模型
-		fallbackModel = originalMappedModel
-	} else if mapping != nil && mapping.FallbackModel != "" && mapping.FallbackModel != mapping.OpenAIModel {
-		fallbackModel = mapping.FallbackModel
-	}
-
+	// 6. 转发上游。模型降级由 Core 在下一次 failover 中选择下一个 DispatchPlan。
 	replayBody := []byte(nil)
 	if requestMode == "continuation" {
 		replayBody = fullResponsesBody
 	}
 
-	outcome, err := g.doAnthropicForward(ctx, req, responsesBody, replayBody, originalModel, modelName, fallbackModel, start, session)
+	outcome, err := g.doAnthropicForward(ctx, req, responsesBody, replayBody, originalModel, modelName, start, session)
 	if mappingEffort != "" {
 		setUsageReasoningEffort(outcome.Usage, mappingEffort)
 	}
 	return outcome, err
 }
 
-// doAnthropicForward 执行 Anthropic 转发，支持模型降级重试。
+// doAnthropicForward 执行 Anthropic 转发。
 // mappedModel: 映射后的 GPT 模型名，用于 Core 计费（写入 Usage.Model）。
 func (g *OpenAIGateway) doAnthropicForward(
 	ctx context.Context,
@@ -198,13 +180,10 @@ func (g *OpenAIGateway) doAnthropicForward(
 	replayBody []byte,
 	originalModel string,
 	mappedModel string,
-	fallbackModel string,
 	start time.Time,
 	session openAISessionResolution,
 ) (sdk.ForwardOutcome, error) {
-	hasFallback := fallbackModel != ""
-
-	outcome, errBody, err := g.forwardAnthropicResponses(ctx, req, responsesBody, originalModel, mappedModel, start, req.Writer, hasFallback, session)
+	outcome, _, err := g.forwardAnthropicResponses(ctx, req, responsesBody, originalModel, mappedModel, start, req.Writer, false, session)
 	if err != nil {
 		if len(replayBody) > 0 {
 			var failure *responsesFailureError
@@ -213,45 +192,21 @@ func (g *OpenAIGateway) doAnthropicForward(
 					"session", session.SessionKey,
 					"digest_chain", session.DigestChain)
 				clearSessionStateResponseID(session.SessionKey)
-				outcome, errBody, err = g.forwardAnthropicResponses(ctx, req, replayBody, originalModel, mappedModel, start, req.Writer, hasFallback, session)
-				if err == nil {
-					goto fallbackCheck
-				}
+				outcome, _, err = g.forwardAnthropicResponses(ctx, req, replayBody, originalModel, mappedModel, start, req.Writer, false, session)
 			}
 		}
 		return outcome, err
 	}
-
-fallbackCheck:
-	if hasFallback && errBody != nil {
-		if isModelFallbackError(outcome.Upstream.StatusCode, errBody) {
-			sdk.LoggerFromContext(ctx).Warn("model_fallback_retry",
-				"primary", gjson.GetBytes(responsesBody, "model").String(),
-				"fallback", fallbackModel,
-				sdk.LogFieldStatus, outcome.Upstream.StatusCode)
-
-			responsesBody, _ = sjson.SetBytes(responsesBody, "model", fallbackModel)
-			fallbackStart := time.Now()
-			outcome, _, err = g.forwardAnthropicResponses(ctx, req, responsesBody, originalModel, fallbackModel, fallbackStart, req.Writer, false, session)
-			return outcome, err
-		}
-		// 非模型错误：写回原始错误
-		return g.writeAnthropicUpstreamError(req.Writer, outcome.Upstream.StatusCode, errBody, start)
-	}
-
 	return outcome, nil
 }
 
-func finalizeAnthropicResponsesBody(responsesBody []byte, originalBody []byte, serviceTier string, sparkOverride bool) []byte {
+func finalizeAnthropicResponsesBody(responsesBody []byte, originalBody []byte, serviceTier string) []byte {
 	result := responsesBody
 	if tier := normalizeOpenAIWireServiceTier(serviceTier); tier != "" {
 		result, _ = sjson.SetBytes(result, "service_tier", tier)
 	}
 	if hasWebSearchTool(originalBody) {
 		result = injectWebSearchToolJSON(result)
-	}
-	if sparkOverride {
-		result, _ = sjson.SetBytes(result, "text.verbosity", "low")
 	}
 	return result
 }
