@@ -316,8 +316,8 @@ func (c *Client) extractImageRefs(msg map[string]any, seen map[string]bool, refs
 		if !ok {
 			if s, ok := part.(string); ok {
 				for _, prefix := range []string{"file-service://", "sediment://"} {
-					for _, seg := range strings.Split(s, prefix) {
-						if seg == s {
+					for i, seg := range strings.Split(s, prefix) {
+						if i == 0 {
 							continue
 						}
 						end := strings.IndexAny(seg, " \n\t\"')")
