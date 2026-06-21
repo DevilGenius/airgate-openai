@@ -1,4 +1,4 @@
 allowBuilds:
   esbuild: true
 minimumReleaseAgeExclude:
-  - '@devilgenius/airgate-theme@0.2.3'
+  - '@devilgenius/airgate-theme@0.2.4'
