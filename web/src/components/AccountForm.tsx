@@ -63,8 +63,9 @@ const cardStyle: React.CSSProperties = {
   borderStyle: 'solid',
   borderColor: cssVar('border'),
   borderRadius: cssVar('radiusLg'),
-  padding: '1rem',
+  padding: '0.5rem 0.75rem',
   cursor: 'pointer',
+  lineHeight: 1.2,
   transition: 'border-color 0.2s, background-color 0.2s',
 };
 
@@ -73,10 +74,25 @@ const cardActiveStyle: React.CSSProperties = {
   borderStyle: 'solid',
   borderColor: cssVar('primary'),
   borderRadius: cssVar('radiusLg'),
-  padding: '1rem',
+  padding: '0.5rem 0.75rem',
   cursor: 'pointer',
+  lineHeight: 1.2,
   transition: 'border-color 0.2s, background-color 0.2s',
   backgroundColor: cssVar('primarySubtle'),
+};
+
+const accountTypeTitleStyle: React.CSSProperties = {
+  fontSize: '0.8125rem',
+  fontWeight: 500,
+  color: cssVar('text'),
+  lineHeight: 1.2,
+};
+
+const accountTypeDescStyle: React.CSSProperties = {
+  fontSize: '0.6875rem',
+  color: cssVar('textTertiary'),
+  lineHeight: 1.2,
+  marginTop: '0.125rem',
 };
 
 const descStyle: React.CSSProperties = {
@@ -527,8 +543,8 @@ export function AccountForm({
             }}
             onClick={mode === 'create' ? () => handleTypeChange('apikey') : undefined}
           >
-            <div style={{ fontSize: '0.875rem', fontWeight: 500, color: cssVar('text') }}>API Key</div>
-            <div style={descStyle}>支持所有 Responses 标准接口</div>
+            <div style={accountTypeTitleStyle}>API Key</div>
+            <div style={accountTypeDescStyle}>支持所有 Responses 标准接口</div>
           </div>
           <div
             style={{
@@ -537,8 +553,8 @@ export function AccountForm({
             }}
             onClick={mode === 'create' ? () => handleTypeChange('oauth') : undefined}
           >
-            <div style={{ fontSize: '0.875rem', fontWeight: 500, color: cssVar('text') }}>OAuth 登录</div>
-            <div style={descStyle}>支持浏览器授权 / Refresh Token / Session 导入</div>
+            <div style={accountTypeTitleStyle}>OAuth 登录</div>
+            <div style={accountTypeDescStyle}>支持浏览器授权 / Refresh Token / Session 导入</div>
           </div>
         </div>
       </div>
@@ -584,14 +600,14 @@ export function AccountForm({
               borderStyle: 'solid',
               borderColor: cssVar('border'),
               borderRadius: cssVar('radiusLg'),
-              padding: '0.875rem 1rem',
+              padding: '0.5rem 0.75rem',
               backgroundColor: cssVar('surfaceSecondary'),
               display: 'flex',
               alignItems: 'center',
-              gap: '0.75rem',
+              gap: '0.5rem',
               flexWrap: 'wrap',
             }}>
-              <div style={{ fontSize: '0.75rem', fontWeight: 500, color: cssVar('textSecondary'), textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              <div style={{ fontSize: '0.6875rem', fontWeight: 500, color: cssVar('textSecondary'), textTransform: 'uppercase', letterSpacing: '0.05em', lineHeight: 1.2 }}>
                 订阅
               </div>
               {planType && (() => {
@@ -599,10 +615,11 @@ export function AccountForm({
                 return (
                   <span style={{
                     display: 'inline-block',
-                    padding: '0.125rem 0.5rem',
+                    padding: '0.0625rem 0.375rem',
                     borderRadius: '9999px',
-                    fontSize: '0.75rem',
+                    fontSize: '0.6875rem',
                     fontWeight: 600,
+                    lineHeight: 1.2,
                     color: plan.color,
                     backgroundColor: plan.bg,
                   }}>
@@ -611,7 +628,7 @@ export function AccountForm({
                 );
               })()}
               {subscriptionUntil && (
-                <span style={{ fontSize: '0.75rem', color: cssVar('textTertiary') }}>
+                <span style={{ fontSize: '0.6875rem', color: cssVar('textTertiary'), lineHeight: 1.2 }}>
                   有效期至 {subscriptionUntil}
                 </span>
               )}
