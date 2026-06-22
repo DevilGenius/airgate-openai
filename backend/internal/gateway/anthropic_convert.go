@@ -57,7 +57,9 @@ func convertAnthropicRequestToResponses(rawJSON []byte, modelName, mappingEffort
 	messagesResult := root.Get("messages")
 	if messagesResult.IsArray() {
 		for _, msgResult := range messagesResult.Array() {
-			msgRole := msgResult.Get("role").String()
+			rawMsgRole := msgResult.Get("role").String()
+			msgRole := normalizeAnthropicMessageRole(rawMsgRole)
+			isSystemMessage := strings.EqualFold(strings.TrimSpace(rawMsgRole), "system")
 
 			newMessage := func() string {
 				msg := `{"type":"message","role":"","content":[]}`
@@ -79,6 +81,9 @@ func convertAnthropicRequestToResponses(rawJSON []byte, modelName, mappingEffort
 			}
 
 			appendTextContent := func(text string) {
+				if isSystemMessage && strings.HasPrefix(text, "x-anthropic-billing-header: ") {
+					return
+				}
 				partType := "input_text"
 				if msgRole == "assistant" {
 					partType = "output_text"
@@ -303,7 +308,7 @@ func convertAnthropicRequestToResponses(rawJSON []byte, modelName, mappingEffort
 	// 优先级：
 	//   1. output_config.effort         （Claude Code Effort 滑块，最高优先级，任何 thinking 形态都识别）
 	//   2. thinking.budget_tokens       （Anthropic 原生 extended thinking 预算）
-	//   3. thinking.type=disabled       （显式关闭 → minimal）
+	//   3. thinking.type=disabled       （显式关闭 → none）
 	//   4. mappingEffort                （模型映射默认）
 	//   5. "medium"                     （全局兜底）
 	reasoningEffort := "medium"
@@ -332,7 +337,7 @@ func convertAnthropicRequestToResponses(rawJSON []byte, modelName, mappingEffort
 				// adaptive 已在第 1 步消费 output_config.effort；
 				// 走到这里说明客户端没传，让模型映射默认（如 Opus→xhigh）生效
 			case "disabled":
-				reasoningEffort = "minimal"
+				reasoningEffort = "none"
 				clientEffortSet = true
 			}
 		}
@@ -360,6 +365,21 @@ func convertAnthropicRequestToResponses(rawJSON []byte, modelName, mappingEffort
 	// Anthropic 的 max_tokens 在此被静默丢弃。如果以后切到原生 OpenAI Responses API，再恢复此映射。
 
 	return []byte(template)
+}
+
+func normalizeAnthropicMessageRole(role string) string {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "system":
+		return "developer"
+	case "developer":
+		return "developer"
+	case "assistant":
+		return "assistant"
+	case "user":
+		return "user"
+	default:
+		return role
+	}
 }
 
 // convertAnthropicRequestToResponsesContinuation 将 Anthropic 请求压缩为 continuation 形式：

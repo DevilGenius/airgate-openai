@@ -73,7 +73,7 @@ func normalizeOpenAIWireReasoningEffort(effort string) string {
 	case "none":
 		return "none"
 	case "minimal", "min", "off", "disabled":
-		return "minimal"
+		return "none"
 	case "low":
 		return "low"
 	case "medium":
@@ -93,7 +93,7 @@ func normalizeOpenAIWireReasoningEffort(effort string) string {
 	case "none":
 		return "none"
 	case "minimal", "min", "off", "disabled":
-		return "minimal"
+		return "none"
 	case "low":
 		return "low"
 	case "medium":

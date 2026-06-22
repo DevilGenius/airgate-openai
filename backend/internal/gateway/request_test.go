@@ -450,11 +450,11 @@ func TestNormalizeOpenAIWireReasoningEffort_AllAliases(t *testing.T) {
 		{"maximum", "xhigh"},
 		{"ultra", "xhigh"},
 
-		// minimal 精确别名 — Phase 1 精确命中
-		{"minimal", "minimal"},
-		{"min", "minimal"},
-		{"off", "minimal"},
-		{"disabled", "minimal"},
+		// 禁用思考别名 — Phase 1 精确命中
+		{"minimal", "none"},
+		{"min", "none"},
+		{"off", "none"},
+		{"disabled", "none"},
 
 		// 大小写变体 — Phase 2 ToLower
 		{"None", "none"},
@@ -470,11 +470,11 @@ func TestNormalizeOpenAIWireReasoningEffort_AllAliases(t *testing.T) {
 		{"ExtraHigh", "xhigh"},
 		{"VeryHigh", "xhigh"},
 		{"Ultra", "xhigh"},
-		{"Minimal", "minimal"},
-		{"Min", "minimal"},
-		{"Off", "minimal"},
-		{"Disabled", "minimal"},
-		{"DISABLED", "minimal"},
+		{"Minimal", "none"},
+		{"Min", "none"},
+		{"Off", "none"},
+		{"Disabled", "none"},
+		{"DISABLED", "none"},
 
 		// 带下划线变体 — Phase 2 去 _
 		{"extra_high", "xhigh"},
@@ -765,9 +765,9 @@ func TestOpenAIReasoningEffortFromRequest_NormalizesAliases(t *testing.T) {
 		{"max → xhigh", []byte(`{"reasoning_effort":"max"}`), "xhigh"},
 		{"maximum → xhigh", []byte(`{"reasoning_effort":"maximum"}`), "xhigh"},
 		{"ultra → xhigh", []byte(`{"reasoning_effort":"ultra"}`), "xhigh"},
-		{"min → minimal", []byte(`{"reasoning":{"effort":"min"}}`), "minimal"},
-		{"off → minimal", []byte(`{"reasoning":{"effort":"off"}}`), "minimal"},
-		{"disabled → minimal", []byte(`{"output_config":{"effort":"disabled"}}`), "minimal"},
+		{"min → none", []byte(`{"reasoning":{"effort":"min"}}`), "none"},
+		{"off → none", []byte(`{"reasoning":{"effort":"off"}}`), "none"},
+		{"disabled → none", []byte(`{"output_config":{"effort":"disabled"}}`), "none"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -805,8 +805,8 @@ func TestEnsureResponsesDefaultsNormalizesExistingReasoningEffortLowcaseAlias(t 
 	}{
 		{"reasoning.effort extrahigh → xhigh", []byte(`{"model":"gpt-5.5","input":"hi","reasoning":{"effort":"extrahigh"}}`), "xhigh"},
 		{"reasoning.effort veryhigh → xhigh", []byte(`{"model":"gpt-5.5","input":"hi","reasoning":{"effort":"veryhigh"}}`), "xhigh"},
-		{"reasoning.effort min → minimal", []byte(`{"model":"gpt-5.5","input":"hi","reasoning":{"effort":"min"}}`), "minimal"},
-		{"reasoning.effort disabled → minimal", []byte(`{"model":"gpt-5.5","input":"hi","reasoning":{"effort":"disabled"}}`), "minimal"},
+		{"reasoning.effort min → none", []byte(`{"model":"gpt-5.5","input":"hi","reasoning":{"effort":"min"}}`), "none"},
+		{"reasoning.effort disabled → none", []byte(`{"model":"gpt-5.5","input":"hi","reasoning":{"effort":"disabled"}}`), "none"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

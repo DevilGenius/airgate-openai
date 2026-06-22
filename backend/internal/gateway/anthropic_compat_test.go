@@ -24,6 +24,36 @@ func TestEstimateAnthropicInputTokensCountsSystemMessagesAndTools(t *testing.T) 
 	}
 }
 
+func TestConvertAnthropicRequestToResponsesMapsMessageSystemRoleToDeveloper(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-4-8","max_tokens":8,"messages":[{"role":"system","content":"Reply with exactly OK."},{"role":"user","content":"test"}]}`)
+
+	got := convertAnthropicRequestToResponses(body, "gpt-5.5", "xhigh")
+	if strings.Contains(string(got), `"role":"system"`) {
+		t.Fatalf("converted Responses body still contains system role: %s", got)
+	}
+	if role := gjson.GetBytes(got, "input.0.role").String(); role != "developer" {
+		t.Fatalf("first input role = %q, want developer; body=%s", role, got)
+	}
+	if text := gjson.GetBytes(got, "input.0.content.0.text").String(); text != "Reply with exactly OK." {
+		t.Fatalf("developer text = %q; body=%s", text, got)
+	}
+	if role := gjson.GetBytes(got, "input.1.role").String(); role != "user" {
+		t.Fatalf("second input role = %q, want user; body=%s", role, got)
+	}
+	if effort := gjson.GetBytes(got, "reasoning.effort").String(); effort != "xhigh" {
+		t.Fatalf("reasoning effort = %q, want xhigh; body=%s", effort, got)
+	}
+}
+
+func TestConvertAnthropicRequestToResponsesMapsDisabledThinkingToNone(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":8,"thinking":{"type":"disabled"},"messages":[{"role":"user","content":"Reply exactly OK."}]}`)
+
+	got := convertAnthropicRequestToResponses(body, "gpt-5.5", "high")
+	if effort := gjson.GetBytes(got, "reasoning.effort").String(); effort != "none" {
+		t.Fatalf("reasoning effort = %q, want none; body=%s", effort, got)
+	}
+}
+
 func TestIsModelFallbackErrorIncludesContextWindowErrors(t *testing.T) {
 	cases := []struct {
 		name       string
