@@ -199,6 +199,13 @@ func TestClassifyHTTPFailureTreatsUsageLimit400AsRateLimited(t *testing.T) {
 	}
 }
 
+func TestClassifyHTTPFailureTreatsOverloaded429AsFamilyTransient(t *testing.T) {
+	got := classifyHTTPFailure(429, "Our servers are currently overloaded. Please try again later.")
+	if got != sdk.OutcomeFamilyTransient {
+		t.Fatalf("expected FamilyTransient, got %v", got)
+	}
+}
+
 func TestClassifyHTTPFailureKeepsDisabled403AsAccountDead(t *testing.T) {
 	got := classifyHTTPFailure(403, "Organization disabled due to policy violation")
 	if got != sdk.OutcomeAccountDead {
@@ -243,6 +250,23 @@ func TestClassifyWSErrorEventUsageLimitReached(t *testing.T) {
 	}
 	if failure.RetryAfter < 59*time.Minute || failure.RetryAfter > 61*time.Minute {
 		t.Fatalf("expected RetryAfter~=1h from resets_in_seconds, got %s", failure.RetryAfter)
+	}
+}
+
+func TestClassifyResponsesFailureOverloadedIsFamilyTransient(t *testing.T) {
+	raw := []byte(`{"type":"response.failed","response":{"error":{"type":"server_error","code":"server_overloaded","message":"Our servers are currently overloaded. Please try again later."}}}`)
+	failure := classifyResponsesFailure(raw)
+	if failure == nil {
+		t.Fatalf("expected failure")
+	}
+	if failure.Kind != responsesFailureKindFamilyTransient {
+		t.Fatalf("expected family_transient kind, got %q", failure.Kind)
+	}
+	if failure.StatusCode != http.StatusBadGateway {
+		t.Fatalf("expected HTTP 502, got %d", failure.StatusCode)
+	}
+	if kind := failure.outcomeKind(); kind != sdk.OutcomeFamilyTransient {
+		t.Fatalf("expected OutcomeFamilyTransient, got %v", kind)
 	}
 }
 

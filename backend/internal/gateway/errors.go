@@ -27,9 +27,13 @@ const maxErrorResponseBodyBytes = 1 << 20
 //	403 → AccountUnavailable（明确 disabled/deactivated/suspended 仍升级为 AccountDead）
 //	400 + 消息含限流关键词 → AccountRateLimited（部分上游用 400 返回 usage_limit_reached）
 //	400 + 消息含 disabled/deactivated → AccountDead
+//	overloaded 语义 → FamilyTransient（走 Core 的 family 级短退避）
 //	5xx → UpstreamTransient
 //	其它 4xx → ClientError（客户端请求自己的问题，账号无辜）
 func classifyHTTPFailure(statusCode int, message string) sdk.OutcomeKind {
+	if isOverloadedText(message) {
+		return sdk.OutcomeFamilyTransient
+	}
 	if isTemporaryRateLimitText(message) && (statusCode == 400 || statusCode == 403 || statusCode == 429) {
 		return sdk.OutcomeAccountRateLimited
 	}
@@ -80,6 +84,14 @@ func isTemporaryRateLimitText(parts ...string) bool {
 		strings.Contains(combined, "try again later") ||
 		strings.Contains(combined, "try again in") ||
 		strings.Contains(combined, "retry after")
+}
+
+func isOverloadedText(parts ...string) bool {
+	combined := strings.ToLower(strings.Join(parts, " "))
+	if combined == "" {
+		return false
+	}
+	return strings.Contains(combined, "overloaded")
 }
 
 func isDisabledAccountText(parts ...string) bool {

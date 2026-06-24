@@ -256,6 +256,8 @@ func classifyUpstreamTaskError(statusCode int, body []byte) *TaskError {
 	}
 
 	switch {
+	case isOverloadedText(errType, errCode, msg):
+		return &TaskError{Type: "upstream_error", Code: "server_error", Message: msg, Retryable: true}
 	case statusCode == 429 || isTemporaryRateLimitText(msg):
 		return &TaskError{Type: "rate_limited", Code: "rate_limited", Message: msg, Retryable: true}
 	case statusCode == 401 || statusCode == 403:

@@ -1082,6 +1082,20 @@ func TestClassifyUpstreamTaskErrorSafetyRejected(t *testing.T) {
 	}
 }
 
+func TestClassifyUpstreamTaskErrorOverloadedIsUpstreamError(t *testing.T) {
+	body := []byte(`{"error":{"message":"Our servers are currently overloaded. Please try again later.","type":"server_error","code":"server_overloaded"}}`)
+	taskErr := classifyUpstreamTaskError(http.StatusTooManyRequests, body)
+	if taskErr.Type != "upstream_error" {
+		t.Fatalf("Type = %q, want upstream_error", taskErr.Type)
+	}
+	if taskErr.Code != "server_error" {
+		t.Fatalf("Code = %q, want server_error", taskErr.Code)
+	}
+	if !taskErr.Retryable {
+		t.Fatalf("Retryable = false, want true")
+	}
+}
+
 func TestImageTaskQualityEcho(t *testing.T) {
 	input, attrs, err := imageGenerateHandler{}.BuildInput(&sdk.ForwardRequest{
 		Body:    []byte(`{"model":"gpt-image-2","prompt":"a shiba","size":"1024x1024","quality":"high"}`),

@@ -18,6 +18,7 @@ const (
 	responsesFailureKindClient             responsesFailureKind = "client"
 	responsesFailureKindContinuationAnchor responsesFailureKind = "continuation_anchor"
 	responsesFailureKindRateLimited        responsesFailureKind = "rate_limited"
+	responsesFailureKindFamilyTransient    responsesFailureKind = "family_transient"
 	responsesFailureKindServer             responsesFailureKind = "server"
 
 	contextTooLargeMessage = "Your input exceeds the context window of this model. Please adjust your input and try again."
@@ -45,6 +46,8 @@ func (e *responsesFailureError) outcomeKind() sdk.OutcomeKind {
 		return sdk.OutcomeClientError
 	case responsesFailureKindRateLimited:
 		return sdk.OutcomeAccountRateLimited
+	case responsesFailureKindFamilyTransient:
+		return sdk.OutcomeFamilyTransient
 	case responsesFailureKindServer:
 		return sdk.OutcomeUpstreamTransient
 	default:
@@ -66,6 +69,8 @@ func (e *responsesFailureError) Error() string {
 			return fmt.Sprintf("上游速率限制(建议 %s 后重试): %s", e.RetryAfter, e.Message)
 		}
 		return "上游速率限制: " + e.Message
+	case responsesFailureKindFamilyTransient:
+		return "上游模型家族暂时过载: " + e.Message
 	default:
 		return "上游错误: " + e.Message
 	}
@@ -259,6 +264,14 @@ func classifyResponsesError(errType, errCode, msg string) *responsesFailureError
 			Kind:               responsesFailureKindClient,
 			StatusCode:         http.StatusBadRequest,
 			AnthropicErrorType: "invalid_request_error",
+			Message:            msg,
+		}
+	case isOverloadedText(errType, errCode, msg):
+		return &responsesFailureError{
+			Kind:               responsesFailureKindFamilyTransient,
+			StatusCode:         http.StatusBadGateway,
+			AnthropicErrorType: "overloaded_error",
+			Code:               "overloaded",
 			Message:            msg,
 		}
 	case isTemporaryRateLimitText(errType, errCode, msg) || containsAny(errType, errCode, msg, "usage_limit_reached", "rate_limit_exceeded"):

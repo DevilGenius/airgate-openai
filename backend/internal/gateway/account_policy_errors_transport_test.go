@@ -217,6 +217,10 @@ func TestOutcomeConstructorsAndPolicies(t *testing.T) {
 	if outcome.RetryAfter != imageRateLimitMinRetryAfter {
 		t.Fatalf("image rate limit RetryAfter = %v", outcome.RetryAfter)
 	}
+	outcome = failureOutcome(http.StatusTooManyRequests, []byte("overloaded"), headers, "Our servers are currently overloaded. Please try again later.", 0)
+	if outcome.Kind != sdk.OutcomeFamilyTransient {
+		t.Fatalf("failureOutcome overloaded = %#v", outcome)
+	}
 	applyImageRateLimitPolicy(nil)
 	success := successOutcome(http.StatusOK, nil, nil, nil)
 	applyImageRateLimitPolicy(&success)
