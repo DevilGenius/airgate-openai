@@ -13,7 +13,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@devilgenius/airgate-theme": "https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.4/airgate-theme-v0.2.4.tgz",
+    "@devilgenius/airgate-theme": "https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.5/airgate-theme-v0.2.5.tgz",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

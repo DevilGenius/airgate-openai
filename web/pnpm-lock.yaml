@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@devilgenius/airgate-theme':
-        specifier: https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.4/airgate-theme-v0.2.4.tgz
-        version: https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.4/airgate-theme-v0.2.4.tgz(react@19.2.6)
+        specifier: https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.5/airgate-theme-v0.2.5.tgz
+        version: https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.5/airgate-theme-v0.2.5.tgz(react@19.2.6)
       react:
         specifier: ^19.0.0
         version: 19.2.6
@@ -150,9 +150,9 @@ packages:
     resolution: {integrity: sha512-QxULHAm7cNu72w97JUNCBFODFaXpbDg+dP8b/oWFAZ2MTRppA3U00Y2L1HqaS4J6yBqxwa/Y3nMBaxVKbB/NsA==}
     engines: {node: '>=20.19.0'}
 
-  '@devilgenius/airgate-theme@https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.4/airgate-theme-v0.2.4.tgz':
-    resolution: {integrity: sha512-0s8ekKXOH3h/JXjHlQU8sbY6qHU4ciYM3shzieBH7xIOzl3hGbTCqNLgZGbkvqtSZz/5lU0MyAKQQvdbmxC8NQ==, tarball: https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.4/airgate-theme-v0.2.4.tgz}
-    version: 0.2.4
+  '@devilgenius/airgate-theme@https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.5/airgate-theme-v0.2.5.tgz':
+    resolution: {integrity: sha512-GqUhUuyqDKRfeyvkxXnXHPqBYAGippbBrAa/G1M5L6rxCXcShRsajia6D55Gm2hIY9WWF+xDcyIU8bg/hd39og==, tarball: https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.5/airgate-theme-v0.2.5.tgz}
+    version: 0.2.5
     peerDependencies:
       react: ^19.0.0
 
@@ -1313,7 +1313,7 @@ snapshots:
 
   '@csstools/css-tokenizer@4.0.0': {}
 
-  '@devilgenius/airgate-theme@https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.4/airgate-theme-v0.2.4.tgz(react@19.2.6)':
+  '@devilgenius/airgate-theme@https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.5/airgate-theme-v0.2.5.tgz(react@19.2.6)':
     dependencies:
       react: 19.2.6
 

@@ -204,12 +204,16 @@ func TestPreviousResponseNotFoundRecoveryBodyAllowsModelBudgetFullContext(t *tes
 	}
 }
 
-func TestPreviousResponseNotFoundRecoveryBodyRejectsOversizedFullContext(t *testing.T) {
+func TestPreviousResponseNotFoundRecoveryBodyAllowsOversizedFullContext(t *testing.T) {
 	largeText := strings.Repeat("x", 1<<20)
 	body := []byte(`{"model":"gpt-5.4-mini","previous_response_id":"resp_old","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"` + largeText + `"}]}]}`)
 
-	if _, ok := previousResponseNotFoundRecoveryBody(body); ok {
-		t.Fatalf("expected oversized recovery to be rejected")
+	got, ok := previousResponseNotFoundRecoveryBody(body)
+	if !ok {
+		t.Fatalf("expected oversized recovery to be delegated to upstream")
+	}
+	if gjson.GetBytes(got, "previous_response_id").Exists() {
+		t.Fatalf("previous_response_id was not removed: %s", got)
 	}
 }
 
@@ -230,6 +234,52 @@ func TestPreviousResponseNotFoundRecoveryBodyRejectsEncryptedContent(t *testing.
 
 	if _, ok := previousResponseNotFoundRecoveryBody(body); ok {
 		t.Fatalf("expected recovery to be rejected for encrypted reasoning content")
+	}
+}
+
+func TestPreprocessRequestBodyAppliesDelegatedContinuationRecovery(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.4","previous_response_id":"resp_old","input":[{"type":"reasoning","id":"rs_1","encrypted_content":"sealed"},{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}]}`)
+	headers := http.Header{airgateContinuationRecoveryHeader: []string{airgateContinuationRecoveryDropPrevious}}
+
+	got := preprocessRequestBody(body, "gpt-5.4", "/v1/responses", headers)
+
+	if gjson.GetBytes(got, "previous_response_id").Exists() {
+		t.Fatalf("previous_response_id was not removed: %s", got)
+	}
+	if bytes.Contains(got, []byte("encrypted_content")) {
+		t.Fatalf("encrypted reasoning content was not removed: %s", got)
+	}
+	if count := gjson.GetBytes(got, "input.#").Int(); count != 1 {
+		t.Fatalf("input item count = %d, want 1; body=%s", count, got)
+	}
+	if text := gjson.GetBytes(got, "input.0.content.0.text").String(); text != "continue" {
+		t.Fatalf("input text = %q, want continue; body=%s", text, got)
+	}
+	if !delegatedContinuationRecoveryApplied(got, headers) {
+		t.Fatalf("expected delegated recovery to be marked applied: %s", got)
+	}
+}
+
+func TestPreprocessRequestBodySkipsDelegatedContinuationRecoveryForUnsafeToolOutput(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.4","previous_response_id":"resp_old","input":[{"type":"function_call_output","call_id":"call_1","output":"ok"}]}`)
+	headers := http.Header{airgateContinuationRecoveryHeader: []string{airgateContinuationRecoveryDropPrevious}}
+
+	got := preprocessRequestBody(body, "gpt-5.4", "/v1/responses", headers)
+
+	if previous := gjson.GetBytes(got, "previous_response_id").String(); previous != "resp_old" {
+		t.Fatalf("previous_response_id = %q, want resp_old; body=%s", previous, got)
+	}
+	if delegatedContinuationRecoveryApplied(got, headers) {
+		t.Fatalf("unsafe tool output must not be treated as delegated full replay: %s", got)
+	}
+}
+
+func TestDelegatedContinuationRecoveryAppliedAllowsHeaderOnlyReplay(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.4","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}]}`)
+	headers := http.Header{airgateContinuationRecoveryHeader: []string{airgateContinuationRecoveryDropPrevious}}
+
+	if !delegatedContinuationRecoveryApplied(body, headers) {
+		t.Fatalf("expected header-only delegated recovery to be treated as full replay")
 	}
 }
 

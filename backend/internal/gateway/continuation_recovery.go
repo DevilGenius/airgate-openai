@@ -3,13 +3,18 @@ package gateway
 import (
 	"encoding/json"
 	"errors"
+	"net/http"
 	"strings"
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
-	"github.com/DevilGenius/airgate-openai/backend/internal/model"
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
+)
+
+const (
+	airgateContinuationRecoveryHeader       = "X-Airgate-Continuation-Recovery"
+	airgateContinuationRecoveryDropPrevious = "drop_previous_response_id"
 )
 
 type previousResponseRecoverySignals struct {
@@ -19,11 +24,64 @@ type previousResponseRecoverySignals struct {
 	hasCompactionReplay bool
 }
 
-const (
-	previousResponseRecoveryBytesPerToken = 6
-	previousResponseRecoveryMinBodyBytes  = 512 << 10
-	previousResponseRecoveryMaxBodyBytes  = 10 << 20
-)
+func applyAirgateContinuationRecovery(body []byte, headers http.Header) []byte {
+	if !airgateContinuationRecoveryRequested(headers) {
+		return body
+	}
+	patched, ok := delegatedContinuationRecoveryBody(body)
+	if !ok {
+		return body
+	}
+	return patched
+}
+
+func airgateContinuationRecoveryRequested(headers http.Header) bool {
+	if headers == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(headers.Get(airgateContinuationRecoveryHeader)), airgateContinuationRecoveryDropPrevious)
+}
+
+func delegatedContinuationRecoveryBody(body []byte) ([]byte, bool) {
+	var reqData map[string]any
+	if err := json.Unmarshal(body, &reqData); err != nil {
+		return nil, false
+	}
+	signals := analyzePreviousResponseRecoverySignals(reqData)
+	if signals.hasToolOutput && !signals.hasToolCallContext && !signals.hasCompactionReplay {
+		return nil, false
+	}
+
+	changed := false
+	if _, ok := reqData["previous_response_id"]; ok {
+		delete(reqData, "previous_response_id")
+		changed = true
+	}
+	if sanitizeEncryptedReasoningItems(reqData) {
+		changed = true
+	}
+	if !changed {
+		return body, true
+	}
+
+	patched, err := json.Marshal(reqData)
+	if err != nil {
+		return nil, false
+	}
+	return patched, true
+}
+
+func delegatedContinuationRecoveryApplied(body []byte, headers http.Header) bool {
+	if !airgateContinuationRecoveryRequested(headers) || gjson.GetBytes(body, "previous_response_id").Exists() {
+		return false
+	}
+	var reqData map[string]any
+	if err := json.Unmarshal(body, &reqData); err != nil {
+		return false
+	}
+	signals := analyzePreviousResponseRecoverySignals(reqData)
+	return !signals.hasToolOutput || signals.hasToolCallContext || signals.hasCompactionReplay
+}
 
 func previousResponseNotFoundRecoveryBody(body []byte) ([]byte, bool) {
 	if !requestCanRecoverPreviousResponseNotFound(body) {
@@ -46,27 +104,81 @@ func requestCanRecoverPreviousResponseNotFound(body []byte) bool {
 		return false
 	}
 	signals := analyzePreviousResponseRecoverySignals(reqData)
-	return len(body) <= previousResponseRecoveryMaxBytesForBody(body, signals) &&
-		!signals.hasEncryptedContent &&
+	return !signals.hasEncryptedContent &&
 		(!signals.hasToolOutput || signals.hasToolCallContext || signals.hasCompactionReplay)
 }
 
-func previousResponseRecoveryMaxBytesForBody(body []byte, signals previousResponseRecoverySignals) int {
-	if signals.hasCompactionReplay {
-		return previousResponseRecoveryMaxBodyBytes
+func sanitizeEncryptedReasoningItems(reqData map[string]any) bool {
+	if len(reqData) == 0 {
+		return false
 	}
-	contextWindow := model.Lookup(gjson.GetBytes(body, "model").String()).ContextWindow
-	if contextWindow <= 0 {
-		contextWindow = model.DefaultSpec.ContextWindow
+	changed := false
+	if input, ok := reqData["input"]; ok {
+		next, inputChanged, keep := sanitizeEncryptedReasoningValue(input)
+		if inputChanged {
+			changed = true
+			if keep {
+				reqData["input"] = next
+			} else {
+				delete(reqData, "input")
+			}
+		}
 	}
-	limit := contextWindow * previousResponseRecoveryBytesPerToken
-	if limit < previousResponseRecoveryMinBodyBytes {
-		return previousResponseRecoveryMinBodyBytes
+	if messages, ok := reqData["messages"]; ok {
+		next, messagesChanged, keep := sanitizeEncryptedReasoningValue(messages)
+		if messagesChanged {
+			changed = true
+			if keep {
+				reqData["messages"] = next
+			} else {
+				delete(reqData, "messages")
+			}
+		}
 	}
-	if limit > previousResponseRecoveryMaxBodyBytes {
-		return previousResponseRecoveryMaxBodyBytes
+	return changed
+}
+
+func sanitizeEncryptedReasoningValue(value any) (next any, changed bool, keep bool) {
+	switch v := value.(type) {
+	case []any:
+		filtered := v[:0]
+		changed := false
+		for _, item := range v {
+			nextItem, itemChanged, keepItem := sanitizeEncryptedReasoningItem(item)
+			if itemChanged {
+				changed = true
+			}
+			if keepItem {
+				filtered = append(filtered, nextItem)
+			}
+		}
+		if !changed {
+			return value, false, true
+		}
+		if len(filtered) == 0 {
+			return nil, true, false
+		}
+		return filtered, true, true
+	case map[string]any:
+		return sanitizeEncryptedReasoningItem(v)
+	default:
+		return value, false, true
 	}
-	return limit
+}
+
+func sanitizeEncryptedReasoningItem(item any) (next any, changed bool, keep bool) {
+	itemMap, ok := item.(map[string]any)
+	if !ok {
+		return item, false, true
+	}
+	if strings.TrimSpace(jsonString(itemMap["type"])) != "reasoning" {
+		return item, false, true
+	}
+	if strings.TrimSpace(jsonString(itemMap["encrypted_content"])) == "" {
+		return item, false, true
+	}
+
+	return nil, true, false
 }
 
 func analyzePreviousResponseRecoverySignals(reqData map[string]any) previousResponseRecoverySignals {
@@ -199,6 +311,23 @@ func isPreviousResponseNotFoundError(err error) bool {
 	return errors.As(err, &failure) && isPreviousResponseNotFoundFailure(failure)
 }
 
+func isContextTooLargeFailure(failure *responsesFailureError) bool {
+	return failure != nil &&
+		failure.Kind == responsesFailureKindClient &&
+		strings.TrimSpace(failure.Code) == "context_too_large"
+}
+
+func isContextTooLargeErrorResult(err error) bool {
+	if err == nil {
+		return false
+	}
+	var failure *responsesFailureError
+	if errors.As(err, &failure) {
+		return isContextTooLargeFailure(failure)
+	}
+	return isContextTooLargeError(err.Error())
+}
+
 func outcomeIsPreviousResponseNotFound(outcome sdk.ForwardOutcome) bool {
 	if outcome.Kind != sdk.OutcomeClientError && outcome.Upstream.StatusCode < 400 {
 		return false
@@ -212,10 +341,43 @@ func outcomeIsPreviousResponseNotFound(outcome sdk.ForwardOutcome) bool {
 	return false
 }
 
+func outcomeIsContextTooLarge(outcome sdk.ForwardOutcome) bool {
+	if outcome.Kind != sdk.OutcomeClientError && outcome.Upstream.StatusCode < 400 {
+		return false
+	}
+	if failure := classifyOpenAIErrorBody(outcome.Upstream.Body); isContextTooLargeFailure(failure) {
+		return true
+	}
+	if reason := strings.TrimSpace(outcome.Reason); reason != "" {
+		if isContextTooLargeFailure(classifyResponsesError("", "", reason)) {
+			return true
+		}
+		return isContextTooLargeError(reason)
+	}
+	return false
+}
+
+func markContextTooLargeDispatchCandidateFailover(outcome *sdk.ForwardOutcome) bool {
+	if outcome == nil || !outcomeIsContextTooLarge(*outcome) {
+		return false
+	}
+	outcome.FailoverScope = sdk.FailoverScopeDispatchCandidate
+	return true
+}
+
 func classifyOpenAIErrorBody(body []byte) *responsesFailureError {
 	errNode := gjson.GetBytes(body, "error")
 	if !errNode.Exists() {
-		return nil
+		msg := strings.TrimSpace(gjson.GetBytes(body, "detail").String())
+		if msg == "" {
+			msg = strings.TrimSpace(gjson.GetBytes(body, "message").String())
+		}
+		code := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "code").String()))
+		errType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "type").String()))
+		if msg == "" && errType == "" && code == "" {
+			return nil
+		}
+		return classifyResponsesError(errType, code, msg)
 	}
 	msg := strings.TrimSpace(errNode.Get("message").String())
 	errType := strings.ToLower(strings.TrimSpace(errNode.Get("type").String()))

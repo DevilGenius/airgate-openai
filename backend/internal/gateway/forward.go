@@ -78,7 +78,7 @@ func (g *OpenAIGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest
 	}
 	var reqServiceTier string
 	if !strings.HasPrefix(req.Headers.Get("Content-Type"), "multipart/") {
-		req.Body = preprocessRequestBody(req.Body, req.Model, reqPath)
+		req.Body = preprocessRequestBody(req.Body, req.Model, reqPath, req.Headers)
 		req.Body = applyForceInstructions(req.Body, req.Headers)
 		reqServiceTier = normalizeOpenAIServiceTier(gjson.GetBytes(req.Body, "service_tier").String())
 		if req.Account.Credentials["api_key"] != "" && req.Account.Credentials["access_token"] == "" {
@@ -484,16 +484,43 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 		}
 		finalAttempt := idx == len(attempts)-1
 		outcome, err := g.forwardAPIKeyAttempt(ctx, req, reqMethod, reqPath, targetURL, attemptBody, attemptHeaders, attemptOpts, sseKA, start, reqServiceTier, finalAttempt, client)
-		if !isImageReq && !recoveredPreviousResponse && err == nil && outcomeIsPreviousResponseNotFound(outcome) {
-			if retryBody, ok := previousResponseNotFoundRecoveryBody(attemptBody); ok {
-				recoveredPreviousResponse = true
-				logger.Warn("previous_response_not_found_recovery_retry",
+		if !isImageReq && err == nil {
+			delegatedRecoveryApplied := delegatedContinuationRecoveryApplied(attemptBody, baseHeaders)
+			if !recoveredPreviousResponse && outcomeIsPreviousResponseNotFound(outcome) {
+				if retryBody, ok := previousResponseNotFoundRecoveryBody(attemptBody); ok {
+					recoveredPreviousResponse = true
+					logger.Warn("previous_response_not_found_recovery_retry",
+						sdk.LogFieldAccountID, account.ID,
+						sdk.LogFieldModel, req.Model,
+						sdk.LogFieldPath, reqPath,
+						"account_type", "apikey",
+					)
+					outcome, err = g.forwardAPIKeyAttempt(ctx, req, reqMethod, reqPath, targetURL, retryBody, attemptHeaders, attemptOpts, sseKA, start, reqServiceTier, true, client)
+					if err == nil && outcomeIsContextTooLarge(outcome) {
+						markContextTooLargeDispatchCandidateFailover(&outcome)
+						logger.Warn("previous_response_full_replay_context_too_large_dispatch_failover",
+							sdk.LogFieldAccountID, account.ID,
+							sdk.LogFieldModel, req.Model,
+							sdk.LogFieldPath, reqPath,
+							"account_type", "apikey",
+						)
+					}
+				}
+			} else if delegatedRecoveryApplied && outcomeIsContextTooLarge(outcome) {
+				markContextTooLargeDispatchCandidateFailover(&outcome)
+				logger.Warn("delegated_full_replay_context_too_large_dispatch_failover",
 					sdk.LogFieldAccountID, account.ID,
 					sdk.LogFieldModel, req.Model,
 					sdk.LogFieldPath, reqPath,
 					"account_type", "apikey",
 				)
-				outcome, err = g.forwardAPIKeyAttempt(ctx, req, reqMethod, reqPath, targetURL, retryBody, attemptHeaders, attemptOpts, sseKA, start, reqServiceTier, true, client)
+			} else if airgateContinuationRecoveryRequested(baseHeaders) && !delegatedRecoveryApplied && outcomeIsContextTooLarge(outcome) {
+				logger.Warn("delegated_full_replay_context_too_large_not_recoverable",
+					sdk.LogFieldAccountID, account.ID,
+					sdk.LogFieldModel, req.Model,
+					sdk.LogFieldPath, reqPath,
+					"account_type", "apikey",
+				)
 			}
 		}
 		if outcome.Kind == sdk.OutcomeSuccess || finalAttempt || !isImageReq {
@@ -828,6 +855,9 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 	}
 
 	// 构建 response.create 消息
+	if airgateContinuationRecoveryRequested(req.Headers) {
+		session.PreviousRespID = ""
+	}
 	createMsg, err := g.buildWSRequest(req, session)
 	if err != nil {
 		reason := fmt.Sprintf("构建 WebSocket 请求失败: %v", err)
@@ -868,7 +898,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		lastResponsesSilent *responsesSilentHandler
 	)
 
-	runAttempt := func(msg []byte, w http.ResponseWriter) (WSResult, error) {
+	runAttempt := func(msg []byte, w http.ResponseWriter, delayCreated bool) (WSResult, error) {
 		if err := writeWebSocketJSON(conn, json.RawMessage(msg)); err != nil {
 			return WSResult{}, fmt.Errorf("发送 WebSocket 消息失败: %w", err)
 		}
@@ -904,10 +934,11 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		default:
 			// 原生 /v1/responses 流式：SSE 透传
 			sseHandler := &sseEventWriter{
-				w:          w,
-				accountID:  account.ID,
-				sessionKey: session.SessionKey,
-				start:      start,
+				w:            w,
+				accountID:    account.ID,
+				sessionKey:   session.SessionKey,
+				start:        start,
+				delayCreated: delayCreated,
 			}
 			if f, ok := w.(http.Flusher); ok {
 				sseHandler.flusher = f
@@ -929,7 +960,8 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		w.Header().Set("X-Accel-Buffering", "no")
 	}
 
-	result, err := runAttempt(createMsg, w)
+	delegatedRecoveryApplied := delegatedContinuationRecoveryApplied(createMsg, req.Headers)
+	result, err := runAttempt(createMsg, w, delegatedRecoveryApplied)
 	if err != nil {
 		logger.Warn("upstream_request_failed",
 			sdk.LogFieldAccountID, account.ID,
@@ -944,6 +976,23 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		return (lastChatWriter != nil && lastChatWriter.wrote) ||
 			(lastSSEHandler != nil && lastSSEHandler.wrote)
 	}
+	fullReplayContextTooLarge := false
+	if delegatedRecoveryApplied && isContextTooLargeErrorResult(result.Err) && !streamOutputStarted() {
+		fullReplayContextTooLarge = true
+		logger.Warn("delegated_full_replay_context_too_large_dispatch_failover",
+			sdk.LogFieldAccountID, account.ID,
+			sdk.LogFieldModel, req.Model,
+			"account_type", "oauth",
+			"session", session.SessionKey,
+		)
+	} else if airgateContinuationRecoveryRequested(req.Headers) && !delegatedRecoveryApplied && isContextTooLargeErrorResult(result.Err) && !streamOutputStarted() {
+		logger.Warn("delegated_full_replay_context_too_large_not_recoverable",
+			sdk.LogFieldAccountID, account.ID,
+			sdk.LogFieldModel, req.Model,
+			"account_type", "oauth",
+			"session", session.SessionKey,
+		)
+	}
 	if isPreviousResponseNotFoundError(result.Err) && !streamOutputStarted() {
 		if retryMsg, ok := previousResponseNotFoundRecoveryBody(createMsg); ok {
 			logger.Warn("previous_response_not_found_recovery_retry",
@@ -953,7 +1002,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 				"session", session.SessionKey,
 			)
 			clearSessionStateResponseID(session.SessionKey)
-			result, err = runAttempt(retryMsg, w)
+			result, err = runAttempt(retryMsg, w, req.Stream && !isChatCompletions)
 			if err != nil {
 				logger.Warn("upstream_request_failed",
 					sdk.LogFieldAccountID, account.ID,
@@ -963,6 +1012,15 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 					"phase", "ws_recovery_send",
 				)
 				return transientOutcome(err.Error()), err
+			}
+			if isContextTooLargeErrorResult(result.Err) && !streamOutputStarted() {
+				fullReplayContextTooLarge = true
+				logger.Warn("previous_response_full_replay_context_too_large_dispatch_failover",
+					sdk.LogFieldAccountID, account.ID,
+					sdk.LogFieldModel, req.Model,
+					"account_type", "oauth",
+					"session", session.SessionKey,
+				)
 			}
 		}
 	}
@@ -986,7 +1044,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 	}
 
 	usage := newTokenUsage(
-		result.Model,
+		firstNonEmptyString(result.Model, req.Model),
 		normalizeOpenAIServiceTier(gjson.GetBytes(req.Body, "service_tier").String()),
 		result.InputTokens,
 		result.OutputTokens,
@@ -1016,11 +1074,20 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 			code = failure.codeOrKind()
 			failoverScope = failure.failoverScopeForKind(kind)
 		}
-		// 只有已经向客户端写过可见输出时才视为流中断；首包前错误仍交给 Core failover。
-		if req.Stream && streamOutputStarted() && kind != sdk.OutcomeClientError {
-			kind = sdk.OutcomeStreamAborted
-			code = kind.String()
+		// 流已经提交后不能再由 Core 改写 HTTP 状态或切换 dispatch 候选。
+		// 原生 Responses 流如果还没有转发过上游错误事件，则在流内补一个终止错误事件。
+		if req.Stream && streamOutputStarted() {
 			failoverScope = sdk.FailoverScopeNone
+			if kind != sdk.OutcomeClientError {
+				kind = sdk.OutcomeStreamAborted
+				code = kind.String()
+			}
+			if lastSSEHandler != nil {
+				lastSSEHandler.writeTerminalErrorIfNeeded(statusCode, code, message, result.ResponseID)
+			}
+		}
+		if fullReplayContextTooLarge && !streamOutputStarted() && kind == sdk.OutcomeClientError {
+			failoverScope = sdk.FailoverScopeDispatchCandidate
 		}
 		errBody := openAIErrorJSON(openAIErrorTypeForStatus(statusCode), code, message)
 		logger.Warn("upstream_request_non_2xx",
@@ -1062,7 +1129,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		}
 	case isChatCompletions && !req.Stream:
 		if w != nil {
-			body := buildNonStreamChatCompletion(result, req.Model)
+			body := buildNonStreamChatCompletion(result, firstNonEmptyString(result.Model, req.Model))
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(body)
@@ -1078,6 +1145,9 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 	default:
 		// /v1/responses 流式：补 [DONE] 标记
 		if w != nil {
+			if lastSSEHandler != nil {
+				lastSSEHandler.flushPendingCreated()
+			}
 			if _, err := fmt.Fprint(w, "data: [DONE]\n\n"); err == nil {
 				if flusher, ok := w.(http.Flusher); ok {
 					flusher.Flush()
@@ -1112,14 +1182,17 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 
 // sseEventWriter 将 WS 事件转为 SSE 格式写入 http.ResponseWriter
 type sseEventWriter struct {
-	w              http.ResponseWriter
-	flusher        http.Flusher
-	accountID      int64 // 用于存储 Codex 用量快照
-	sessionKey     string
-	start          time.Time // 请求开始时间，用于计算首 token 延迟
-	firstTokenMs   int64     // 首 token 到达时间（毫秒）
-	firstTokenOnce sync.Once // 确保只记录一次
-	wrote          bool
+	w                      http.ResponseWriter
+	flusher                http.Flusher
+	accountID              int64 // 用于存储 Codex 用量快照
+	sessionKey             string
+	start                  time.Time // 请求开始时间，用于计算首 token 延迟
+	firstTokenMs           int64     // 首 token 到达时间（毫秒）
+	firstTokenOnce         sync.Once // 确保只记录一次
+	wrote                  bool
+	delayCreated           bool
+	pendingCreated         string
+	terminalErrorForwarded bool
 }
 
 func (s *sseEventWriter) OnTextDelta(string)      {}
@@ -1137,6 +1210,7 @@ func (s *sseEventWriter) OnRawEvent(eventType string, data []byte) {
 	if s.w == nil || eventType == "" {
 		return
 	}
+	terminalErrorEvent := eventType == "response.failed" || eventType == "error"
 	// 记录首 token 延迟（第一个有效事件到达客户端的时间）
 	s.firstTokenOnce.Do(func() {
 		s.firstTokenMs = time.Since(s.start).Milliseconds()
@@ -1151,7 +1225,13 @@ func (s *sseEventWriter) OnRawEvent(eventType string, data []byte) {
 		}
 		return
 	case "response.failed", "error":
-		if !s.wrote {
+		if s.pendingCreated != "" && isContextTooLargeRawEvent(eventType, data) {
+			return
+		}
+		if !s.wrote && s.pendingCreated == "" {
+			return
+		}
+		if !s.flushPendingCreated() {
 			return
 		}
 	case "response.created", "response.completed", "response.done":
@@ -1160,11 +1240,86 @@ func (s *sseEventWriter) OnRawEvent(eventType string, data []byte) {
 				updateSessionStateResponseID(s.sessionKey, responseID, s.accountID)
 			}
 		}
+		if eventType == "response.created" && s.delayCreated {
+			s.pendingCreated = formatSSEEvent(eventType, data)
+			return
+		}
+		if !s.flushPendingCreated() {
+			return
+		}
+	default:
+		if !s.flushPendingCreated() {
+			return
+		}
 	}
-	if _, err := fmt.Fprintf(s.w, "event: %s\ndata: %s\n\n", eventType, strings.ReplaceAll(string(data), "\n", "")); err != nil {
+	if _, err := fmt.Fprint(s.w, formatSSEEvent(eventType, data)); err != nil {
 		return
 	}
 	s.wrote = true
+	if terminalErrorEvent {
+		s.terminalErrorForwarded = true
+	}
+	if s.flusher != nil {
+		s.flusher.Flush()
+	}
+}
+
+func (s *sseEventWriter) flushPendingCreated() bool {
+	if s == nil || s.w == nil || s.pendingCreated == "" {
+		return true
+	}
+	if _, err := fmt.Fprint(s.w, s.pendingCreated); err != nil {
+		return false
+	}
+	s.pendingCreated = ""
+	s.wrote = true
+	return true
+}
+
+func formatSSEEvent(eventType string, data []byte) string {
+	return fmt.Sprintf("event: %s\ndata: %s\n\n", eventType, strings.ReplaceAll(string(data), "\n", ""))
+}
+
+func isContextTooLargeRawEvent(eventType string, data []byte) bool {
+	switch eventType {
+	case "response.failed":
+		if failure := classifyResponsesFailure(data); failure != nil {
+			return isContextTooLargeFailure(failure)
+		}
+	case "error":
+		if failure := classifyWSErrorEvent(data); failure != nil {
+			return isContextTooLargeFailure(failure)
+		}
+		if failure := classifyGenericSSEErrorEvent(data); failure != nil {
+			return isContextTooLargeFailure(failure)
+		}
+	}
+	return isContextTooLargeError(string(data))
+}
+
+func (s *sseEventWriter) writeTerminalErrorIfNeeded(statusCode int, code, message, responseID string) {
+	if s == nil || s.w == nil || !s.wrote || s.terminalErrorForwarded {
+		return
+	}
+	code = strings.TrimSpace(code)
+	if code == "" {
+		code = "upstream_error"
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = "请求暂时无法完成，请稍后重试"
+	}
+	payload := `{"type":"response.failed","response":{"status":"failed","error":{"message":"","type":"","code":""}}}`
+	payload, _ = sjson.Set(payload, "response.error.message", message)
+	payload, _ = sjson.Set(payload, "response.error.type", openAIErrorTypeForStatus(statusCode))
+	payload, _ = sjson.Set(payload, "response.error.code", code)
+	if responseID = strings.TrimSpace(responseID); responseID != "" {
+		payload, _ = sjson.Set(payload, "response.id", responseID)
+	}
+	if _, err := fmt.Fprintf(s.w, "event: response.failed\ndata: %s\n\n", strings.ReplaceAll(payload, "\n", "")); err != nil {
+		return
+	}
+	s.terminalErrorForwarded = true
 	if s.flusher != nil {
 		s.flusher.Flush()
 	}

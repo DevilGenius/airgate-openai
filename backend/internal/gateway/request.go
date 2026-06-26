@@ -196,11 +196,11 @@ func buildAPIKeyURL(account *sdk.Account, reqPath string) string {
 // 拿到的 body 格式一致。当前处理步骤：
 //  1. model 同步（使用 Core 选出的上游模型）
 //  2. data:image 输入保持原样（对齐 Codex，不在网关内重采样用户图片）
-//  3. 保留 previous_response_id（Core 已按 response_id 做账号粘连）
+//  3. 按 Core 委托恢复信号移除失效续链锚点
 //  4. 上下文守卫（/v1/chat/completions 超长 messages 裁剪）
 //  5. input 规范化（/v1/responses 的 string input → list，messages → input 转换）
 //  6. Responses API 强制禁用上游存储（store=false）
-func preprocessRequestBody(body []byte, model, reqPath string) []byte {
+func preprocessRequestBody(body []byte, model, reqPath string, headers ...http.Header) []byte {
 	if len(body) == 0 {
 		return body
 	}
@@ -226,6 +226,11 @@ func preprocessRequestBody(body []byte, model, reqPath string) []byte {
 	}
 
 	result = preserveOpenAIConversationImages(result)
+	var trustedHeaders http.Header
+	if len(headers) > 0 {
+		trustedHeaders = headers[0]
+	}
+	result = applyAirgateContinuationRecovery(result, trustedHeaders)
 
 	if isCompactRequest {
 		if modified, err := sjson.DeleteBytes(result, "stream"); err == nil {
