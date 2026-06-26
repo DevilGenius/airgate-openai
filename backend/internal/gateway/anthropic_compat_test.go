@@ -803,6 +803,89 @@ func TestConvertResponsesEventToAnthropic_MessageStartEmitsPing(t *testing.T) {
 	}
 }
 
+func TestConvertResponsesEventToAnthropicKeepaliveEmitsPing(t *testing.T) {
+	state := &anthropicStreamState{}
+	out := convertResponsesEventToAnthropic([]byte(`data: {"type":"keepalive","sequence_number":99}`), nil, state, "claude-sonnet-4-6")
+
+	if !strings.Contains(out, "event: ping") {
+		t.Fatalf("keepalive should emit ping event, got: %s", out)
+	}
+	if !strings.Contains(out, `"type":"ping"`) {
+		t.Fatalf("ping payload missing, got: %s", out)
+	}
+	if strings.Contains(out, "message_start") {
+		t.Fatalf("keepalive must not start a message, got: %s", out)
+	}
+}
+
+func TestTranslateResponsesSSEStoresResponseIDOnlyAfterCompletion(t *testing.T) {
+	sessionKey := "sid:test-response-created-only"
+	sessionStateStore.Delete(sessionKey)
+
+	incomplete := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_created_only","model":"gpt-5.4"}}`,
+		"",
+	}, "\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(incomplete)),
+	}
+	_, err := translateResponsesSSEToAnthropicSSE(
+		context.Background(),
+		resp,
+		httptest.NewRecorder(),
+		"claude-sonnet-4-6",
+		"gpt-5.4",
+		[]byte(`{"model":"claude-sonnet-4-6","stream":true,"messages":[{"role":"user","content":"hi"}]}`),
+		"",
+		"",
+		time.Now(),
+		openAISessionResolution{SessionKey: sessionKey, AccountID: 42},
+	)
+	if err == nil {
+		t.Fatalf("expected incomplete stream error")
+	}
+	if state := getSessionState(sessionKey); state != nil && state.LastResponseID != "" {
+		t.Fatalf("incomplete response should not be stored as continuation anchor, got %q", state.LastResponseID)
+	}
+
+	completedKey := "sid:test-response-completed"
+	sessionStateStore.Delete(completedKey)
+	completed := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_done","model":"gpt-5.4"}}`,
+		`data: {"type":"response.completed","response":{"id":"resp_done","model":"gpt-5.4","usage":{"input_tokens":1,"output_tokens":2}}}`,
+		"",
+	}, "\n")
+	resp = &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(completed)),
+	}
+	outcome, err := translateResponsesSSEToAnthropicSSE(
+		context.Background(),
+		resp,
+		httptest.NewRecorder(),
+		"claude-sonnet-4-6",
+		"gpt-5.4",
+		[]byte(`{"model":"claude-sonnet-4-6","stream":true,"messages":[{"role":"user","content":"hi"}]}`),
+		"",
+		"",
+		time.Now(),
+		openAISessionResolution{SessionKey: completedKey, AccountID: 42},
+	)
+	if err != nil {
+		t.Fatalf("completed stream returned error: %v", err)
+	}
+	if outcome.Kind != sdk.OutcomeSuccess {
+		t.Fatalf("outcome kind = %v, want success", outcome.Kind)
+	}
+	state := getSessionState(completedKey)
+	if state == nil || state.LastResponseID != "resp_done" {
+		t.Fatalf("completed response should be stored as continuation anchor, state=%+v", state)
+	}
+}
+
 func TestConvertResponsesEventToAnthropicFunctionCallLifecycleDefersStopForBatching(t *testing.T) {
 	state := &anthropicStreamState{}
 	request := []byte(`{"tools":[{"name":"Skill","input_schema":{"type":"object","properties":{"skill":{"type":"string"}}}}]}`)

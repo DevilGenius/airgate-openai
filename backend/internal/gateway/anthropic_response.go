@@ -83,6 +83,11 @@ func convertResponsesEventToAnthropic(rawLine []byte, originalRequest []byte, st
 		return "event: message_start\n" + fmt.Sprintf("data: %s\n\n", template) +
 			"event: ping\ndata: {\"type\":\"ping\"}\n\n"
 
+	case "keepalive":
+		// ChatGPT/Codex 上游会在长时间无输出时发 keepalive。Anthropic messages
+		// 流式协议对应的是 ping 事件，透传可避免客户端长时间无事件导致读超时或 UI 假死。
+		return "event: ping\ndata: {\"type\":\"ping\"}\n\n"
+
 	case "response.reasoning_summary_part.added":
 		// 若仍有未关闭的 text block，先关闭它
 		closePrefix := closeOpenTextBlock(state)
@@ -769,16 +774,15 @@ func translateResponsesSSEToAnthropicSSE(
 			if rm := gjson.Get(data, "response.model").String(); rm != "" {
 				billingModel = rm
 			}
-			if session.SessionKey != "" {
-				if responseID := gjson.Get(data, "response.id").String(); strings.TrimSpace(responseID) != "" {
-					updateSessionStateResponseID(session.SessionKey, responseID, session.AccountID)
-				}
-			}
-			if id := strings.TrimSpace(gjson.Get(data, "response.id").String()); id != "" {
-				responseID = id
+			eventResponseID := strings.TrimSpace(gjson.Get(data, "response.id").String())
+			if eventResponseID != "" {
+				responseID = eventResponseID
 			}
 			if eventType == "response.completed" || eventType == "response.done" {
 				terminalEventReceived = true
+				if session.SessionKey != "" && eventResponseID != "" {
+					updateSessionStateResponseID(session.SessionKey, eventResponseID, session.AccountID)
+				}
 				if serviceTier == "" {
 					serviceTier = firstNonEmptyTier(gjson.Get(data, "response.service_tier").String(), defaultServiceTier)
 				}
