@@ -50,7 +50,7 @@ func openAIDispatchDSL() sdk.DispatchDSL {
 				},
 				Model: sdk.DispatchModel{StripSuffix: compactModelSuffix},
 				Candidates: []sdk.DispatchCandidate{
-					{Scheduling: "${model.base}", Wire: "${model.base}" + compactModelSuffix},
+					{Scheduling: "${model.base}", Wire: "${model.base}"},
 				},
 			},
 			{

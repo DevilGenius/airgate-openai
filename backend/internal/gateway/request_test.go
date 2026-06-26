@@ -302,13 +302,13 @@ func TestPreprocessRequestBodyCompactDeletesStreamOnly(t *testing.T) {
 	}
 }
 
-func TestPreprocessRequestBodyCompactKeepsExplicitCompactModel(t *testing.T) {
+func TestPreprocessRequestBodyCompactUsesSelectedBaseModel(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.5-openai-compact","stream":false,"input":"hello"}`)
 
-	got := preprocessRequestBody(body, "gpt-5.5-openai-compact", "/v1/responses/compact")
+	got := preprocessRequestBody(body, "gpt-5.5", "/v1/responses/compact")
 
-	if model := gjson.GetBytes(got, "model").String(); model != "gpt-5.5-openai-compact" {
-		t.Fatalf("compact model = %q, want gpt-5.5-openai-compact; body=%s", model, got)
+	if model := gjson.GetBytes(got, "model").String(); model != "gpt-5.5" {
+		t.Fatalf("compact model = %q, want gpt-5.5; body=%s", model, got)
 	}
 }
 

@@ -19,7 +19,7 @@ func TestForwardHTTPAPIKeyCompactUsesCompactEndpoint(t *testing.T) {
 		gotPath = r.URL.Path
 		gotBody, _ = io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response.compaction","model":"gpt-5.4-openai-compact","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}`))
+		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response.compaction","model":"gpt-5.4","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}`))
 	}))
 	defer server.Close()
 
@@ -32,10 +32,10 @@ func TestForwardHTTPAPIKeyCompactUsesCompactEndpoint(t *testing.T) {
 				"base_url": server.URL,
 			},
 		},
-		Body:         []byte(`{"model":"gpt-5.4","stream":false,"input":"hello"}`),
+		Body:         []byte(`{"model":"gpt-5.4-openai-compact","stream":false,"input":"hello"}`),
 		Headers:      http.Header{"X-Forwarded-Path": []string{"/v1/responses/compact"}},
 		Model:        "gpt-5.4",
-		DispatchPlan: sdk.DispatchPlan{SchedulingModel: "gpt-5.4", WireModel: "gpt-5.4-openai-compact", RuleID: "responses-compact"},
+		DispatchPlan: sdk.DispatchPlan{SchedulingModel: "gpt-5.4", WireModel: "gpt-5.4", RuleID: "responses-compact"},
 	}
 
 	outcome, err := g.forwardHTTP(context.Background(), req)
@@ -51,8 +51,8 @@ func TestForwardHTTPAPIKeyCompactUsesCompactEndpoint(t *testing.T) {
 	if gjson.GetBytes(gotBody, "stream").Exists() {
 		t.Fatalf("stream should be removed before upstream compact request: %s", gotBody)
 	}
-	if model := gjson.GetBytes(gotBody, "model").String(); model != "gpt-5.4-openai-compact" {
-		t.Fatalf("upstream compact model = %q, want gpt-5.4-openai-compact; body=%s", model, gotBody)
+	if model := gjson.GetBytes(gotBody, "model").String(); model != "gpt-5.4" {
+		t.Fatalf("upstream compact model = %q, want gpt-5.4; body=%s", model, gotBody)
 	}
 	if input := gjson.GetBytes(gotBody, "input"); input.Type != gjson.String || input.String() != "hello" {
 		t.Fatalf("compact input should stay unchanged, got %s in %s", input.Raw, gotBody)
@@ -66,8 +66,8 @@ func TestForwardHTTPAPIKeyCompactUsesCompactEndpoint(t *testing.T) {
 	if outcome.Usage.Model != "gpt-5.4" {
 		t.Fatalf("usage model = %q, want gpt-5.4", outcome.Usage.Model)
 	}
-	if got := outcome.Usage.Metadata["openai.wire_model"]; got != "gpt-5.4-openai-compact" {
-		t.Fatalf("wire model metadata = %q, want gpt-5.4-openai-compact", got)
+	if got := outcome.Usage.Metadata["openai.wire_model"]; got != "" {
+		t.Fatalf("wire model metadata = %q, want empty", got)
 	}
 }
 
@@ -81,7 +81,7 @@ func TestForwardHTTPCompactRejectsStreaming(t *testing.T) {
 		Body:         []byte(`{"model":"gpt-5.4","stream":true}`),
 		Headers:      http.Header{"X-Forwarded-Path": []string{"/v1/responses/compact"}},
 		Model:        "gpt-5.4",
-		DispatchPlan: sdk.DispatchPlan{SchedulingModel: "gpt-5.4", WireModel: "gpt-5.4-openai-compact", RuleID: "responses-compact"},
+		DispatchPlan: sdk.DispatchPlan{SchedulingModel: "gpt-5.4", WireModel: "gpt-5.4", RuleID: "responses-compact"},
 		Stream:       true,
 	}
 
