@@ -56,10 +56,13 @@ func TestBuildPluginInfoAndRoutes(t *testing.T) {
 		t.Fatal("expected dispatch rules")
 	}
 	var compactRule *sdk.DispatchRule
+	var responsesRule *sdk.DispatchRule
 	for i := range info.DispatchDSL.Rules {
-		if info.DispatchDSL.Rules[i].ID == "responses-compact" {
+		switch info.DispatchDSL.Rules[i].ID {
+		case "responses-compact":
 			compactRule = &info.DispatchDSL.Rules[i]
-			break
+		case "responses-default":
+			responsesRule = &info.DispatchDSL.Rules[i]
 		}
 	}
 	if compactRule == nil {
@@ -72,6 +75,14 @@ func TestBuildPluginInfoAndRoutes(t *testing.T) {
 		compactRule.Candidates[0].Scheduling != "${model.base}" ||
 		compactRule.Candidates[0].Wire != "${model.base}" {
 		t.Fatalf("compact candidates = %#v, want base scheduling and wire", compactRule.Candidates)
+	}
+	if responsesRule == nil {
+		t.Fatal("expected responses-default dispatch rule")
+	}
+	if len(responsesRule.Candidates) != 1 ||
+		responsesRule.Candidates[0].Scheduling != "${model}" ||
+		responsesRule.Candidates[0].Wire != "${model}" {
+		t.Fatalf("responses candidates = %#v, want identity only", responsesRule.Candidates)
 	}
 
 	caps := map[sdk.Capability]bool{}
@@ -104,6 +115,14 @@ func TestBuildPluginInfoAndRoutes(t *testing.T) {
 		if !seen[key] {
 			t.Fatalf("route %q missing", key)
 		}
+	}
+}
+
+func TestResponsesDispatchCompressionFallbackOverride(t *testing.T) {
+	t.Setenv("AIRGATE_MODEL_RESPONSES_COMPRESSION_FALLBACK", "openai/gpt-long")
+
+	if got := responsesCompressionFallbackModel(); got != "gpt-long" {
+		t.Fatalf("responsesCompressionFallbackModel() = %q, want gpt-long", got)
 	}
 }
 

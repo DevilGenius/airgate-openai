@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 const (
 	airgateContinuationRecoveryHeader       = "X-Airgate-Continuation-Recovery"
 	airgateContinuationRecoveryDropPrevious = "drop_previous_response_id"
+	airgateContinuationRecoveryApplied      = "X-Airgate-Continuation-Recovery-Applied"
 )
 
 type previousResponseRecoverySignals struct {
@@ -25,12 +27,20 @@ type previousResponseRecoverySignals struct {
 }
 
 func applyAirgateContinuationRecovery(body []byte, headers http.Header) []byte {
+	if headers != nil {
+		headers.Del(airgateContinuationRecoveryApplied)
+	}
 	if !airgateContinuationRecoveryRequested(headers) {
 		return body
 	}
+	hadPreviousResponseID := gjson.GetBytes(body, "previous_response_id").Exists()
 	patched, ok := delegatedContinuationRecoveryBody(body)
 	if !ok {
 		return body
+	}
+	removedPreviousResponseID := hadPreviousResponseID && !gjson.GetBytes(patched, "previous_response_id").Exists()
+	if headers != nil && removedPreviousResponseID && !bytes.Equal(bytes.TrimSpace(patched), bytes.TrimSpace(body)) {
+		headers.Set(airgateContinuationRecoveryApplied, "true")
 	}
 	return patched
 }
@@ -73,6 +83,9 @@ func delegatedContinuationRecoveryBody(body []byte) ([]byte, bool) {
 
 func delegatedContinuationRecoveryApplied(body []byte, headers http.Header) bool {
 	if !airgateContinuationRecoveryRequested(headers) || gjson.GetBytes(body, "previous_response_id").Exists() {
+		return false
+	}
+	if headers == nil || !strings.EqualFold(strings.TrimSpace(headers.Get(airgateContinuationRecoveryApplied)), "true") {
 		return false
 	}
 	var reqData map[string]any
@@ -357,12 +370,16 @@ func outcomeIsContextTooLarge(outcome sdk.ForwardOutcome) bool {
 	return false
 }
 
-func markContextTooLargeDispatchCandidateFailover(outcome *sdk.ForwardOutcome) bool {
-	if outcome == nil || !outcomeIsContextTooLarge(*outcome) {
-		return false
+func responsesCompressionFallbackBody(body []byte, currentModel string) ([]byte, string, bool) {
+	fallback := strings.TrimSpace(responsesCompressionFallbackModel())
+	if fallback == "" || strings.EqualFold(strings.TrimSpace(currentModel), fallback) {
+		return nil, "", false
 	}
-	outcome.FailoverScope = sdk.FailoverScopeDispatchCandidate
-	return true
+	patched, err := sjson.SetBytes(body, "model", fallback)
+	if err != nil {
+		return nil, "", false
+	}
+	return patched, fallback, true
 }
 
 func classifyOpenAIErrorBody(body []byte) *responsesFailureError {

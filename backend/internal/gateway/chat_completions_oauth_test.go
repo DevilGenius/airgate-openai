@@ -46,7 +46,7 @@ func extractSSEDataLines(raw string) []string {
 
 func TestChatCompletionsStreamWriter_TextOnly(t *testing.T) {
 	w := newFakeWriter()
-	writer := newChatCompletionsStreamWriter(w, "gpt-5.4", 0, "", false, time.Now())
+	writer := newChatCompletionsStreamWriter(w, "gpt-5.4", 0, "", false, time.Now(), false)
 
 	// 模拟 Codex 上游 SSE 事件序列
 	writer.OnRawEvent("response.created", []byte(`{"type":"response.created","response":{"id":"resp_abc","model":"gpt-5.4"}}`))
@@ -112,9 +112,61 @@ func TestChatCompletionsStreamWriter_TextOnly(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsStreamWriterDelaysCreatedUntilOutput(t *testing.T) {
+	w := newFakeWriter()
+	writer := newChatCompletionsStreamWriter(w, "gpt-5.4", 0, "", false, time.Now(), true)
+
+	writer.OnRawEvent("response.created", []byte(`{"type":"response.created","response":{"id":"resp_abc","model":"gpt-5.4"}}`))
+	if got := w.buf.String(); got != "" {
+		t.Fatalf("stream = %q, want empty before output", got)
+	}
+	if writer.wrote {
+		t.Fatal("wrote = true, want false while response.created is pending")
+	}
+
+	writer.OnRawEvent("response.output_text.delta", []byte(`{"type":"response.output_text.delta","delta":"hi"}`))
+	lines := extractSSEDataLines(w.buf.String())
+	if len(lines) != 2 {
+		t.Fatalf("lines = %#v, want role and content chunks", lines)
+	}
+
+	var roleChunk map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &roleChunk); err != nil {
+		t.Fatalf("role chunk JSON: %v", err)
+	}
+	roleDelta := roleChunk["choices"].([]any)[0].(map[string]any)["delta"].(map[string]any)
+	if role, _ := roleDelta["role"].(string); role != "assistant" {
+		t.Fatalf("first delayed chunk delta = %#v, want assistant role", roleDelta)
+	}
+
+	var contentChunk map[string]any
+	if err := json.Unmarshal([]byte(lines[1]), &contentChunk); err != nil {
+		t.Fatalf("content chunk JSON: %v", err)
+	}
+	contentDelta := contentChunk["choices"].([]any)[0].(map[string]any)["delta"].(map[string]any)
+	if content, _ := contentDelta["content"].(string); content != "hi" {
+		t.Fatalf("second delayed chunk delta = %#v, want content hi", contentDelta)
+	}
+}
+
+func TestChatCompletionsStreamWriterDelayedCreatedSuppressesContextTooLarge(t *testing.T) {
+	w := newFakeWriter()
+	writer := newChatCompletionsStreamWriter(w, "gpt-5.4", 0, "", false, time.Now(), true)
+
+	writer.OnRawEvent("response.created", []byte(`{"type":"response.created","response":{"id":"resp_abc","model":"gpt-5.4"}}`))
+	writer.OnRawEvent("response.failed", []byte(`{"type":"response.failed","response":{"id":"resp_abc","status":"failed","error":{"type":"invalid_request_error","code":"context_too_large","message":"too large"}}}`))
+
+	if got := w.buf.String(); got != "" {
+		t.Fatalf("stream = %q, want empty so Core can dispatch-candidate failover", got)
+	}
+	if writer.wrote {
+		t.Fatal("wrote = true, want false when delayed created is followed by context_too_large")
+	}
+}
+
 func TestChatCompletionsStreamWriter_ToolCall(t *testing.T) {
 	w := newFakeWriter()
-	writer := newChatCompletionsStreamWriter(w, "gpt-5.4", 0, "", false, time.Now())
+	writer := newChatCompletionsStreamWriter(w, "gpt-5.4", 0, "", false, time.Now(), false)
 
 	writer.OnRawEvent("response.created", []byte(`{"type":"response.created","response":{"id":"resp_xyz","model":"gpt-5.4"}}`))
 	writer.OnRawEvent("response.output_item.added", []byte(`{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"get_weather"}}`))
@@ -169,7 +221,7 @@ func TestChatCompletionsStreamWriter_ToolCall(t *testing.T) {
 
 func TestChatCompletionsStreamWriter_ToolCallArgumentsDoneOnly(t *testing.T) {
 	w := newFakeWriter()
-	writer := newChatCompletionsStreamWriter(w, "gpt-5.4", 0, "", false, time.Now())
+	writer := newChatCompletionsStreamWriter(w, "gpt-5.4", 0, "", false, time.Now(), false)
 
 	writer.OnRawEvent("response.created", []byte(`{"type":"response.created","response":{"id":"resp_xyz","model":"gpt-5.4"}}`))
 	writer.OnRawEvent("response.output_item.added", []byte(`{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"get_weather"}}`))

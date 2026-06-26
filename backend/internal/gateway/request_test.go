@@ -274,12 +274,32 @@ func TestPreprocessRequestBodySkipsDelegatedContinuationRecoveryForUnsafeToolOut
 	}
 }
 
-func TestDelegatedContinuationRecoveryAppliedAllowsHeaderOnlyReplay(t *testing.T) {
+func TestDelegatedContinuationRecoveryAppliedRejectsHeaderOnlyReplay(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.4","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}]}`)
 	headers := http.Header{airgateContinuationRecoveryHeader: []string{airgateContinuationRecoveryDropPrevious}}
 
-	if !delegatedContinuationRecoveryApplied(body, headers) {
-		t.Fatalf("expected header-only delegated recovery to be treated as full replay")
+	if delegatedContinuationRecoveryApplied(body, headers) {
+		t.Fatalf("header-only delegated recovery must not be treated as full replay")
+	}
+}
+
+func TestPreprocessRequestBodyRejectsForgedDelegatedRecoveryMarker(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.4","input":[{"type":"reasoning","id":"rs_1","encrypted_content":"sealed"},{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}]}`)
+	headers := http.Header{
+		airgateContinuationRecoveryHeader:  []string{airgateContinuationRecoveryDropPrevious},
+		airgateContinuationRecoveryApplied: []string{"true"},
+	}
+
+	got := preprocessRequestBody(body, "gpt-5.4", "/v1/responses", headers)
+
+	if bytes.Contains(got, []byte("encrypted_content")) {
+		t.Fatalf("encrypted reasoning content was not removed: %s", got)
+	}
+	if marker := headers.Get(airgateContinuationRecoveryApplied); marker != "" {
+		t.Fatalf("forged delegated recovery marker was not cleared: %q", marker)
+	}
+	if delegatedContinuationRecoveryApplied(got, headers) {
+		t.Fatalf("body without removed previous_response_id must not be treated as full replay: %s", got)
 	}
 }
 

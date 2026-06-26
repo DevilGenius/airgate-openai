@@ -497,23 +497,33 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 					)
 					outcome, err = g.forwardAPIKeyAttempt(ctx, req, reqMethod, reqPath, targetURL, retryBody, attemptHeaders, attemptOpts, sseKA, start, reqServiceTier, true, client)
 					if err == nil && outcomeIsContextTooLarge(outcome) {
-						markContextTooLargeDispatchCandidateFailover(&outcome)
-						logger.Warn("previous_response_full_replay_context_too_large_dispatch_failover",
-							sdk.LogFieldAccountID, account.ID,
-							sdk.LogFieldModel, req.Model,
-							sdk.LogFieldPath, reqPath,
-							"account_type", "apikey",
-						)
+						if fallbackBody, fallbackModel, ok := responsesCompressionFallbackBody(retryBody, req.Model); ok && !responseWriterWritten(req.Writer) {
+							fallbackReq := *req
+							fallbackReq.Model = fallbackModel
+							logger.Warn("previous_response_full_replay_context_too_large_compression_retry",
+								sdk.LogFieldAccountID, account.ID,
+								sdk.LogFieldModel, req.Model,
+								sdk.LogFieldPath, reqPath,
+								"fallback_model", fallbackModel,
+								"account_type", "apikey",
+							)
+							outcome, err = g.forwardAPIKeyAttempt(ctx, &fallbackReq, reqMethod, reqPath, targetURL, fallbackBody, attemptHeaders, attemptOpts, sseKA, start, reqServiceTier, true, client)
+						}
 					}
 				}
 			} else if delegatedRecoveryApplied && outcomeIsContextTooLarge(outcome) {
-				markContextTooLargeDispatchCandidateFailover(&outcome)
-				logger.Warn("delegated_full_replay_context_too_large_dispatch_failover",
-					sdk.LogFieldAccountID, account.ID,
-					sdk.LogFieldModel, req.Model,
-					sdk.LogFieldPath, reqPath,
-					"account_type", "apikey",
-				)
+				if fallbackBody, fallbackModel, ok := responsesCompressionFallbackBody(attemptBody, req.Model); ok && !responseWriterWritten(req.Writer) {
+					fallbackReq := *req
+					fallbackReq.Model = fallbackModel
+					logger.Warn("delegated_full_replay_context_too_large_compression_retry",
+						sdk.LogFieldAccountID, account.ID,
+						sdk.LogFieldModel, req.Model,
+						sdk.LogFieldPath, reqPath,
+						"fallback_model", fallbackModel,
+						"account_type", "apikey",
+					)
+					outcome, err = g.forwardAPIKeyAttempt(ctx, &fallbackReq, reqMethod, reqPath, targetURL, fallbackBody, attemptHeaders, attemptOpts, sseKA, start, reqServiceTier, true, client)
+				}
 			} else if airgateContinuationRecoveryRequested(baseHeaders) && !delegatedRecoveryApplied && outcomeIsContextTooLarge(outcome) {
 				logger.Warn("delegated_full_replay_context_too_large_not_recoverable",
 					sdk.LogFieldAccountID, account.ID,
@@ -898,7 +908,8 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		lastResponsesSilent *responsesSilentHandler
 	)
 
-	runAttempt := func(msg []byte, w http.ResponseWriter, delayCreated bool) (WSResult, error) {
+	currentModel := req.Model
+	runAttempt := func(msg []byte, w http.ResponseWriter, delayCreated bool, attemptModel string) (WSResult, error) {
 		if err := writeWebSocketJSON(conn, json.RawMessage(msg)); err != nil {
 			return WSResult{}, fmt.Errorf("发送 WebSocket 消息失败: %w", err)
 		}
@@ -910,7 +921,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		switch {
 		case isChatCompletions && req.Stream:
 			writer := newChatCompletionsStreamWriter(
-				w, req.Model, account.ID, session.SessionKey, chatStreamInclude, start,
+				w, attemptModel, account.ID, session.SessionKey, chatStreamInclude, start, delayCreated,
 			)
 			lastChatWriter = writer
 			handler = writer
@@ -961,7 +972,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 	}
 
 	delegatedRecoveryApplied := delegatedContinuationRecoveryApplied(createMsg, req.Headers)
-	result, err := runAttempt(createMsg, w, delegatedRecoveryApplied)
+	result, err := runAttempt(createMsg, w, delegatedRecoveryApplied, currentModel)
 	if err != nil {
 		logger.Warn("upstream_request_failed",
 			sdk.LogFieldAccountID, account.ID,
@@ -976,15 +987,28 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		return (lastChatWriter != nil && lastChatWriter.wrote) ||
 			(lastSSEHandler != nil && lastSSEHandler.wrote)
 	}
-	fullReplayContextTooLarge := false
 	if delegatedRecoveryApplied && isContextTooLargeErrorResult(result.Err) && !streamOutputStarted() {
-		fullReplayContextTooLarge = true
-		logger.Warn("delegated_full_replay_context_too_large_dispatch_failover",
-			sdk.LogFieldAccountID, account.ID,
-			sdk.LogFieldModel, req.Model,
-			"account_type", "oauth",
-			"session", session.SessionKey,
-		)
+		if fallbackMsg, fallbackModel, ok := responsesCompressionFallbackBody(createMsg, currentModel); ok {
+			logger.Warn("delegated_full_replay_context_too_large_compression_retry",
+				sdk.LogFieldAccountID, account.ID,
+				sdk.LogFieldModel, currentModel,
+				"fallback_model", fallbackModel,
+				"account_type", "oauth",
+				"session", session.SessionKey,
+			)
+			currentModel = fallbackModel
+			result, err = runAttempt(fallbackMsg, w, req.Stream, currentModel)
+			if err != nil {
+				logger.Warn("upstream_request_failed",
+					sdk.LogFieldAccountID, account.ID,
+					sdk.LogFieldModel, currentModel,
+					sdk.LogFieldDurationMs, time.Since(start).Milliseconds(),
+					sdk.LogFieldError, err,
+					"phase", "ws_compression_retry_send",
+				)
+				return transientOutcome(err.Error()), err
+			}
+		}
 	} else if airgateContinuationRecoveryRequested(req.Headers) && !delegatedRecoveryApplied && isContextTooLargeErrorResult(result.Err) && !streamOutputStarted() {
 		logger.Warn("delegated_full_replay_context_too_large_not_recoverable",
 			sdk.LogFieldAccountID, account.ID,
@@ -1002,7 +1026,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 				"session", session.SessionKey,
 			)
 			clearSessionStateResponseID(session.SessionKey)
-			result, err = runAttempt(retryMsg, w, req.Stream && !isChatCompletions)
+			result, err = runAttempt(retryMsg, w, req.Stream, currentModel)
 			if err != nil {
 				logger.Warn("upstream_request_failed",
 					sdk.LogFieldAccountID, account.ID,
@@ -1014,13 +1038,27 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 				return transientOutcome(err.Error()), err
 			}
 			if isContextTooLargeErrorResult(result.Err) && !streamOutputStarted() {
-				fullReplayContextTooLarge = true
-				logger.Warn("previous_response_full_replay_context_too_large_dispatch_failover",
-					sdk.LogFieldAccountID, account.ID,
-					sdk.LogFieldModel, req.Model,
-					"account_type", "oauth",
-					"session", session.SessionKey,
-				)
+				if fallbackMsg, fallbackModel, ok := responsesCompressionFallbackBody(retryMsg, currentModel); ok {
+					logger.Warn("previous_response_full_replay_context_too_large_compression_retry",
+						sdk.LogFieldAccountID, account.ID,
+						sdk.LogFieldModel, currentModel,
+						"fallback_model", fallbackModel,
+						"account_type", "oauth",
+						"session", session.SessionKey,
+					)
+					currentModel = fallbackModel
+					result, err = runAttempt(fallbackMsg, w, req.Stream, currentModel)
+					if err != nil {
+						logger.Warn("upstream_request_failed",
+							sdk.LogFieldAccountID, account.ID,
+							sdk.LogFieldModel, currentModel,
+							sdk.LogFieldDurationMs, time.Since(start).Milliseconds(),
+							sdk.LogFieldError, err,
+							"phase", "ws_compression_retry_send",
+						)
+						return transientOutcome(err.Error()), err
+					}
+				}
 			}
 		}
 	}
@@ -1044,7 +1082,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 	}
 
 	usage := newTokenUsage(
-		firstNonEmptyString(result.Model, req.Model),
+		firstNonEmptyString(result.Model, currentModel),
 		normalizeOpenAIServiceTier(gjson.GetBytes(req.Body, "service_tier").String()),
 		result.InputTokens,
 		result.OutputTokens,
@@ -1085,9 +1123,6 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 			if lastSSEHandler != nil {
 				lastSSEHandler.writeTerminalErrorIfNeeded(statusCode, code, message, result.ResponseID)
 			}
-		}
-		if fullReplayContextTooLarge && !streamOutputStarted() && kind == sdk.OutcomeClientError {
-			failoverScope = sdk.FailoverScopeDispatchCandidate
 		}
 		errBody := openAIErrorJSON(openAIErrorTypeForStatus(statusCode), code, message)
 		logger.Warn("upstream_request_non_2xx",
@@ -1336,6 +1371,20 @@ func methodAllowsBody(method string) bool {
 	default:
 		return false
 	}
+}
+
+type responseWriterWrittenChecker interface {
+	Written() bool
+}
+
+func responseWriterWritten(w http.ResponseWriter) bool {
+	if w == nil {
+		return false
+	}
+	if checker, ok := w.(responseWriterWrittenChecker); ok {
+		return checker.Written()
+	}
+	return false
 }
 
 // requestTimeout 获取插件默认请求超时配置
