@@ -356,6 +356,13 @@ func closeOpenThinkingBlock(state *anthropicStreamState) string {
 	return "event: content_block_stop\n" + fmt.Sprintf("data: %s\n\n", template)
 }
 
+func closeOpenAnthropicContentBlocks(state *anthropicStreamState) string {
+	prefix := closeOpenTextBlock(state)
+	prefix += closeOpenThinkingBlock(state)
+	prefix += closeOpenToolBlocks(state)
+	return prefix
+}
+
 func emitToolArgumentsDelta(blockIndex int, args string) string {
 	template := `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":""}}`
 	template, _ = sjson.Set(template, "index", blockIndex)
@@ -725,6 +732,7 @@ func translateResponsesSSEToAnthropicSSE(
 	skipCurrentOutput := false
 	firstTokenRecorded := false
 	responseID := ""
+	terminalEventReceived := false
 
 	for scanner.Scan() {
 		skipCurrentOutput = false
@@ -770,6 +778,7 @@ func translateResponsesSSEToAnthropicSSE(
 				responseID = id
 			}
 			if eventType == "response.completed" || eventType == "response.done" {
+				terminalEventReceived = true
 				if serviceTier == "" {
 					serviceTier = firstNonEmptyTier(gjson.Get(data, "response.service_tier").String(), defaultServiceTier)
 				}
@@ -787,6 +796,7 @@ func translateResponsesSSEToAnthropicSSE(
 
 			// 检查错误事件 —— 先让 convertResponsesEventToAnthropic 输出错误事件再终止
 			if eventType == "response.failed" {
+				terminalEventReceived = true
 				if failure := classifyResponsesFailure([]byte(data)); failure != nil {
 					streamErr = failure
 					skipCurrentOutput = failure.isContinuationAnchorError()
@@ -799,6 +809,7 @@ func translateResponsesSSEToAnthropicSSE(
 				}
 			}
 			if eventType == "response.incomplete" {
+				terminalEventReceived = true
 				reason := gjson.Get(data, "response.incomplete_details.reason").String()
 				streamErr = fmt.Errorf("响应不完整: %s", reason)
 			}
@@ -841,6 +852,9 @@ done:
 	if err := scanner.Err(); err != nil && streamErr == nil {
 		streamErr = fmt.Errorf("读取上游 SSE 失败: %w", err)
 	}
+	if streamErr == nil && !terminalEventReceived {
+		streamErr = fmt.Errorf("上游 SSE 在完成事件前结束")
+	}
 
 	elapsed := time.Since(start)
 	serviceTier = firstNonEmptyTier(serviceTier, defaultServiceTier)
@@ -864,6 +878,14 @@ done:
 		return nil
 	}
 	if streamErr != nil {
+		if !terminalEventReceived {
+			output := closeOpenAnthropicContentBlocks(state)
+			output += buildAnthropicStreamError("api_error", streamErr.Error())
+			_, _ = fmt.Fprint(w, output)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
 		var failure *responsesFailureError
 		if errors.As(streamErr, &failure) {
 			kind := failure.outcomeKind()

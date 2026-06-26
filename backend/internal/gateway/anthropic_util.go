@@ -222,6 +222,11 @@ func isAnthropicDeferredTool(tool gjson.Result) bool {
 	return tool.Get("defer_loading").Bool() || tool.Get("custom.defer_loading").Bool()
 }
 
+const (
+	anthropicToolReferenceMaxDepth     = 64
+	anthropicToolReferenceMaxScanBytes = 1 << 20
+)
+
 func collectAnthropicDiscoveredToolNames(root gjson.Result) map[string]struct{} {
 	discovered := map[string]struct{}{}
 	messages := root.Get("messages")
@@ -263,36 +268,57 @@ func collectToolReferencesFromText(text string, discovered map[string]struct{}) 
 	if text == "" {
 		return
 	}
-	if gjson.Valid(text) {
-		collectToolReferencesFromParsedJSON(gjson.Parse(text), discovered)
+	if len(text) <= anthropicToolReferenceMaxScanBytes && gjson.Valid(text) {
+		collectToolReferencesFromParsedJSON(gjson.Parse(text), discovered, 0)
 		return
 	}
+	if len(text) > anthropicToolReferenceMaxScanBytes {
+		text = text[:anthropicToolReferenceMaxScanBytes]
+	}
 
-	remaining := text
-	for {
-		start := strings.Index(remaining, "<function>")
-		if start < 0 {
+	collectToolReferencesFromFunctionTags(text, discovered)
+}
+
+func collectToolReferencesFromFunctionTags(text string, discovered map[string]struct{}) {
+	const startTag = "<function>"
+	const endTag = "</function>"
+
+	for i := 0; i < len(text); {
+		if !strings.HasPrefix(text[i:], startTag) {
+			i++
+			continue
+		}
+		contentStart := i + len(startTag)
+		contentEnd := indexTag(text, contentStart, endTag)
+		if contentEnd < 0 {
 			return
 		}
-		remaining = remaining[start+len("<function>"):]
-		end := strings.Index(remaining, "</function>")
-		if end < 0 {
-			return
-		}
-		candidate := strings.TrimSpace(remaining[:end])
+		candidate := strings.TrimSpace(text[contentStart:contentEnd])
 		if gjson.Valid(candidate) {
 			if name := strings.TrimSpace(gjson.Parse(candidate).Get("name").String()); name != "" {
 				discovered[name] = struct{}{}
 			}
 		}
-		remaining = remaining[end+len("</function>"):]
+		i = contentEnd + len(endTag)
 	}
 }
 
-func collectToolReferencesFromParsedJSON(value gjson.Result, discovered map[string]struct{}) {
+func indexTag(text string, start int, tag string) int {
+	for i := start; i+len(tag) <= len(text); i++ {
+		if strings.HasPrefix(text[i:], tag) {
+			return i
+		}
+	}
+	return -1
+}
+
+func collectToolReferencesFromParsedJSON(value gjson.Result, discovered map[string]struct{}, depth int) {
+	if depth > anthropicToolReferenceMaxDepth {
+		return
+	}
 	if value.IsArray() {
 		for _, item := range value.Array() {
-			collectToolReferencesFromParsedJSON(item, discovered)
+			collectToolReferencesFromParsedJSON(item, discovered, depth+1)
 		}
 		return
 	}

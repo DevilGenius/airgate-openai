@@ -151,6 +151,40 @@ func TestConvertAnthropicRequestToResponsesIncludesDiscoveredDeferredToolAndSani
 	}
 }
 
+func TestCollectToolReferencesFromParsedJSONDepthLimit(t *testing.T) {
+	discovered := map[string]struct{}{}
+	collectToolReferencesFromText(`[{"type":"tool_reference","tool_name":"ShallowTool"}]`, discovered)
+	if _, ok := discovered["ShallowTool"]; !ok {
+		t.Fatalf("expected shallow tool_reference to be discovered")
+	}
+
+	deep := strings.Repeat("[", anthropicToolReferenceMaxDepth+8) +
+		`{"type":"tool_reference","tool_name":"TooDeep"}` +
+		strings.Repeat("]", anthropicToolReferenceMaxDepth+8)
+	collectToolReferencesFromText(deep, discovered)
+	if _, ok := discovered["TooDeep"]; ok {
+		t.Fatalf("tool_reference beyond depth limit should not be discovered")
+	}
+}
+
+func TestCollectToolReferencesFromTextScansFunctionTagsWithinLimit(t *testing.T) {
+	discovered := map[string]struct{}{}
+	collectToolReferencesFromText(`prefix <function>{"name":"TaggedTool","parameters":{}}</function> suffix`, discovered)
+	if _, ok := discovered["TaggedTool"]; !ok {
+		t.Fatalf("expected tagged function reference to be discovered")
+	}
+}
+
+func TestCollectToolReferencesFromTextStopsAtScanLimit(t *testing.T) {
+	discovered := map[string]struct{}{}
+	body := strings.Repeat("x", anthropicToolReferenceMaxScanBytes+1) +
+		`<function>{"name":"TooLate","parameters":{}}</function>`
+	collectToolReferencesFromText(body, discovered)
+	if _, ok := discovered["TooLate"]; ok {
+		t.Fatalf("function tag beyond scan limit should not be discovered")
+	}
+}
+
 func TestConvertAnthropicRequestToResponsesSanitizesRegularToolFields(t *testing.T) {
 	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":8,"messages":[{"role":"user","content":"hi"}],"tools":[{"type":"custom","name":"Lookup","description":"Look up project data","custom":{"note":"metadata"},"input_examples":[{"query":"status"}],"cache_control":{"type":"ephemeral"},"input_schema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"query":{"type":"string"}}}}]}`)
 
@@ -438,6 +472,53 @@ func TestTranslateResponsesSSERecordsDefaultPriority(t *testing.T) {
 	}
 	if got := usageServiceTier(outcome.Usage); got != "priority" {
 		t.Fatalf("usage service_tier = %q，期望 priority", got)
+	}
+}
+
+func TestTranslateResponsesSSEClosesOpenToolBlocksOnAbruptEOF(t *testing.T) {
+	sse := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_abort","model":"gpt-5.4"}}`,
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"Read","arguments":""}}`,
+		`data: {"type":"response.function_call_arguments.done","output_index":0,"arguments":"{\"file_path\":\"a.go\"}"}`,
+		"",
+	}, "\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(sse)),
+	}
+	w := httptest.NewRecorder()
+
+	outcome, err := translateResponsesSSEToAnthropicSSE(
+		context.Background(),
+		resp,
+		w,
+		"claude-sonnet-4-6",
+		"gpt-5.4",
+		[]byte(`{"model":"claude-sonnet-4-6","stream":true,"max_tokens":128,"messages":[{"role":"user","content":"ping"}],"tools":[{"name":"Read","input_schema":{"type":"object"}}]}`),
+		"",
+		"",
+		time.Now(),
+		openAISessionResolution{},
+	)
+	if err == nil {
+		t.Fatalf("expected abrupt EOF to return an error")
+	}
+	if outcome.Kind != sdk.OutcomeStreamAborted {
+		t.Fatalf("outcome kind = %v, want stream aborted; reason=%s", outcome.Kind, outcome.Reason)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "event: content_block_stop") {
+		t.Fatalf("stream should close open tool block before error, got: %s", body)
+	}
+	if !strings.Contains(body, "event: error") {
+		t.Fatalf("stream should emit anthropic error event, got: %s", body)
+	}
+	if strings.Index(body, "event: content_block_stop") > strings.Index(body, "event: error") {
+		t.Fatalf("content block stop should precede error event, got: %s", body)
+	}
+	if strings.Contains(body, "event: message_stop") {
+		t.Fatalf("aborted stream must not emit message_stop, got: %s", body)
 	}
 }
 
