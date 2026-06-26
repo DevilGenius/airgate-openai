@@ -372,7 +372,7 @@ func outcomeIsContextTooLarge(outcome sdk.ForwardOutcome) bool {
 
 func responsesCompressionFallbackBody(body []byte, currentModel string) ([]byte, string, bool) {
 	fallback := strings.TrimSpace(responsesCompressionFallbackModel())
-	if fallback == "" || strings.EqualFold(strings.TrimSpace(currentModel), fallback) {
+	if fallback == "" || mappedModelIDsEqual(currentModel, fallback) {
 		return nil, "", false
 	}
 	patched, err := sjson.SetBytes(body, "model", fallback)
@@ -380,6 +380,12 @@ func responsesCompressionFallbackBody(body []byte, currentModel string) ([]byte,
 		return nil, "", false
 	}
 	return patched, fallback, true
+}
+
+func mappedModelIDsEqual(a, b string) bool {
+	left := normalizeMappedModelID(a, "")
+	right := normalizeMappedModelID(b, "")
+	return left != "" && right != "" && strings.EqualFold(left, right)
 }
 
 func classifyOpenAIErrorBody(body []byte) *responsesFailureError {
