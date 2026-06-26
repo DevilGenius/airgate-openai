@@ -157,50 +157,8 @@ func convertAnthropicRequestToResponses(rawJSON []byte, modelName, mappingEffort
 						fcoMsg := `{"type":"function_call_output"}`
 						fcoMsg, _ = sjson.Set(fcoMsg, "call_id", block.Get("tool_use_id").String())
 
-						contentResult := block.Get("content")
-						if contentResult.IsArray() {
-							outputIndex := 0
-							output := `[]`
-							for _, part := range contentResult.Array() {
-								partType := part.Get("type").String()
-								switch partType {
-								case "image":
-									source := part.Get("source")
-									if source.Exists() {
-										data := source.Get("data").String()
-										if data == "" {
-											data = source.Get("base64").String()
-										}
-										if data != "" {
-											mediaType := source.Get("media_type").String()
-											if mediaType == "" {
-												mediaType = source.Get("mime_type").String()
-											}
-											if mediaType == "" {
-												mediaType = "application/octet-stream"
-											}
-											dataURL := fmt.Sprintf("data:%s;base64,%s", mediaType, data)
-											output, _ = sjson.Set(output, fmt.Sprintf("%d.type", outputIndex), "input_image")
-											output, _ = sjson.Set(output, fmt.Sprintf("%d.image_url", outputIndex), dataURL)
-											outputIndex++
-										}
-									}
-								case "text":
-									output, _ = sjson.Set(output, fmt.Sprintf("%d.type", outputIndex), "input_text")
-									output, _ = sjson.Set(output, fmt.Sprintf("%d.text", outputIndex), part.Get("text").String())
-									outputIndex++
-								}
-							}
-							if output != `[]` {
-								fcoMsg, _ = sjson.SetRaw(fcoMsg, "output", output)
-							} else {
-								fcoMsg, _ = sjson.Set(fcoMsg, "output", contentResult.String())
-							}
-						} else if contentResult.Type == gjson.String {
-							fcoMsg, _ = sjson.Set(fcoMsg, "output", contentResult.String())
-						} else {
-							fcoMsg, _ = sjson.Set(fcoMsg, "output", "")
-						}
+						outputText, imageURLs := anthropicToolResultOutput(block.Get("content"))
+						fcoMsg, _ = sjson.Set(fcoMsg, "output", outputText)
 
 						// is_error 标记
 						if block.Get("is_error").Bool() {
@@ -211,6 +169,14 @@ func convertAnthropicRequestToResponses(rawJSON []byte, modelName, mappingEffort
 						}
 
 						template, _ = sjson.SetRaw(template, "input.-1", fcoMsg)
+						if len(imageURLs) > 0 {
+							imageMessage := newMessage()
+							for imageIndex, imageURL := range imageURLs {
+								imageMessage, _ = sjson.Set(imageMessage, fmt.Sprintf("content.%d.type", imageIndex), "input_image")
+								imageMessage, _ = sjson.Set(imageMessage, fmt.Sprintf("content.%d.image_url", imageIndex), imageURL)
+							}
+							template, _ = sjson.SetRaw(template, "input.-1", imageMessage)
+						}
 					}
 				}
 				flushMessage()
@@ -223,6 +189,13 @@ func convertAnthropicRequestToResponses(rawJSON []byte, modelName, mappingEffort
 
 	// ─── tools → tools[] ───
 	toolsResult := root.Get("tools")
+	convertedToolNames := map[string]struct{}{}
+	hasConvertedWebSearchTool := false
+	discoveredDeferredTools := collectAnthropicDiscoveredToolNames(root)
+	forcedToolChoiceName := ""
+	if tc := root.Get("tool_choice"); tc.Exists() && tc.IsObject() && strings.TrimSpace(tc.Get("type").String()) == "tool" {
+		forcedToolChoiceName = tc.Get("name").String()
+	}
 	if toolsResult.IsArray() {
 		template, _ = sjson.SetRaw(template, "tools", `[]`)
 
@@ -239,107 +212,134 @@ func convertAnthropicRequestToResponses(rawJSON []byte, modelName, mappingEffort
 			toolType := toolResult.Get("type").String()
 			if toolType == "web_search_20250305" || toolType == "web_search" {
 				template, _ = sjson.SetRaw(template, "tools.-1", `{"type":"web_search"}`)
+				hasConvertedWebSearchTool = true
 				continue
 			}
 
-			// Claude Code 的 deferred tool 协议：上游 Responses API 没有对应概念，
-			// 直接丢弃 tool_search 元工具，并在下方剥离 function 工具上的 defer_loading 字段。
-			// 这样所有工具都以普通 function tool 声明给上游，Claude Code 本地仍持有完整 schema。
-			if strings.HasPrefix(toolType, "tool_search") {
+			if isAnthropicToolSearchType(toolType) {
+				continue
+			}
+			if toolType != "" && toolType != "custom" && toolType != "function" {
 				continue
 			}
 
-			tool := toolResult.Raw
-			tool, _ = sjson.Set(tool, "type", "function")
-
-			// 应用短名
-			if v := toolResult.Get("name"); v.Exists() {
-				name := v.String()
-				if short, ok := shortMap[name]; ok {
-					name = short
-				} else {
-					name = shortenNameIfNeeded(name)
+			originalName := toolResult.Get("name").String()
+			if originalName == "" {
+				continue
+			}
+			if isAnthropicDeferredTool(toolResult) && originalName != forcedToolChoiceName {
+				if _, ok := discoveredDeferredTools[originalName]; !ok {
+					continue
 				}
-				tool, _ = sjson.Set(tool, "name", name)
 			}
 
-			// input_schema → parameters
-			tool, _ = sjson.SetRaw(tool, "parameters", normalizeToolParametersJSON(toolResult.Get("input_schema").Raw))
-			tool, _ = sjson.Delete(tool, "input_schema")
+			name := originalName
+			if short, ok := shortMap[name]; ok {
+				name = short
+			} else {
+				name = shortenNameIfNeeded(name)
+			}
+
+			tool := `{"type":"function"}`
+			tool, _ = sjson.Set(tool, "name", name)
+			if desc := toolResult.Get("description").String(); desc != "" {
+				tool, _ = sjson.Set(tool, "description", desc)
+			}
+
+			schemaRaw := toolResult.Get("input_schema").Raw
+			if strings.TrimSpace(schemaRaw) == "" {
+				schemaRaw = toolResult.Get("parameters").Raw
+			}
+			tool, _ = sjson.SetRaw(tool, "parameters", normalizeToolParametersJSON(schemaRaw))
 			tool, _ = sjson.Delete(tool, "parameters.$schema")
 			tool, _ = sjson.Set(tool, "strict", false)
 
-			// 清理 Anthropic 特有字段
-			tool, _ = sjson.Delete(tool, "cache_control")
-			tool, _ = sjson.Delete(tool, "defer_loading")
-
 			template, _ = sjson.SetRaw(template, "tools.-1", tool)
+			convertedToolNames[name] = struct{}{}
 		}
 	}
 
 	// ─── tool_choice 转换 ───
 	if tc := root.Get("tool_choice"); tc.Exists() && tc.IsObject() {
-		tcType := tc.Get("type").String()
+		tcType := strings.TrimSpace(tc.Get("type").String())
 		switch tcType {
 		case "auto":
 			template, _ = sjson.Set(template, "tool_choice", "auto")
 		case "none":
 			template, _ = sjson.Set(template, "tool_choice", "none")
 		case "any":
-			template, _ = sjson.Set(template, "tool_choice", "required")
+			if len(convertedToolNames) > 0 || hasConvertedWebSearchTool {
+				template, _ = sjson.Set(template, "tool_choice", "required")
+			} else {
+				template, _ = sjson.Set(template, "tool_choice", "auto")
+			}
 		case "tool":
 			name := tc.Get("name").String()
 			if name == "web_search" || name == "web_search_20250305" {
-				template, _ = sjson.SetRaw(template, "tool_choice", `{"type":"web_search"}`)
+				if hasConvertedWebSearchTool {
+					template, _ = sjson.SetRaw(template, "tool_choice", `{"type":"web_search"}`)
+				} else {
+					template, _ = sjson.Set(template, "tool_choice", "auto")
+				}
 			} else {
 				if short, ok := toolNameMap[name]; ok {
 					name = short
 				} else {
 					name = shortenNameIfNeeded(name)
 				}
-				tcJSON := `{"type":"function","name":""}`
-				tcJSON, _ = sjson.Set(tcJSON, "name", name)
-				template, _ = sjson.SetRaw(template, "tool_choice", tcJSON)
+				if _, ok := convertedToolNames[name]; !ok {
+					template, _ = sjson.Set(template, "tool_choice", "auto")
+				} else {
+					tcJSON := `{"type":"function","name":""}`
+					tcJSON, _ = sjson.Set(tcJSON, "name", name)
+					template, _ = sjson.SetRaw(template, "tool_choice", tcJSON)
+				}
 			}
+		default:
+			template, _ = sjson.Set(template, "tool_choice", "auto")
 		}
+	} else if len(convertedToolNames) > 0 || hasConvertedWebSearchTool {
+		template, _ = sjson.Set(template, "tool_choice", "auto")
 	}
 
 	// ─── thinking / output_config → reasoning_effort ───
 	// 优先级：
-	//   1. output_config.effort         （Claude Code Effort 滑块，最高优先级，任何 thinking 形态都识别）
-	//   2. thinking.budget_tokens       （Anthropic 原生 extended thinking 预算）
-	//   3. thinking.type=disabled       （显式关闭 → none）
+	//   1. thinking.type=disabled       （显式关闭 → none）
+	//   2. output_config.effort         （Claude Code Effort 滑块，thinking 未关闭时识别）
+	//   3. thinking.budget_tokens       （Anthropic 原生 extended thinking 预算）
 	//   4. mappingEffort                （模型映射默认）
 	//   5. "medium"                     （全局兜底）
 	reasoningEffort := "medium"
 	clientEffortSet := false
 
-	// 1. output_config.effort：任何 thinking 形态下都识别（Claude Code 通过此字段传 Effort 滑块）
-	if v := root.Get("output_config.effort"); v.Exists() && v.Type == gjson.String {
-		if e := normalizeReasoningEffort(v.String()); e != "" {
-			reasoningEffort = e
+	thinkingConfig := root.Get("thinking")
+	if thinkingConfig.Exists() && thinkingConfig.IsObject() {
+		if strings.TrimSpace(thinkingConfig.Get("type").String()) == "disabled" {
+			reasoningEffort = "none"
 			clientEffortSet = true
 		}
 	}
 
-	// 2/3. thinking 字段
 	if !clientEffortSet {
-		if thinkingConfig := root.Get("thinking"); thinkingConfig.Exists() && thinkingConfig.IsObject() {
-			switch thinkingConfig.Get("type").String() {
-			case "enabled":
-				if budgetTokens := thinkingConfig.Get("budget_tokens"); budgetTokens.Exists() {
-					if effort := thinkingBudgetToReasoningEffort(budgetTokens.Int()); effort != "" {
-						reasoningEffort = effort
-						clientEffortSet = true
-					}
-				}
-			case "adaptive", "auto":
-				// adaptive 已在第 1 步消费 output_config.effort；
-				// 走到这里说明客户端没传，让模型映射默认（如 Opus→xhigh）生效
-			case "disabled":
-				reasoningEffort = "none"
+		if v := root.Get("output_config.effort"); v.Exists() && v.Type == gjson.String {
+			if e := normalizeReasoningEffort(v.String()); e != "" {
+				reasoningEffort = e
 				clientEffortSet = true
 			}
+		}
+	}
+
+	if !clientEffortSet && thinkingConfig.Exists() && thinkingConfig.IsObject() {
+		switch strings.TrimSpace(thinkingConfig.Get("type").String()) {
+		case "enabled":
+			if budgetTokens := thinkingConfig.Get("budget_tokens"); budgetTokens.Exists() {
+				if effort := thinkingBudgetToReasoningEffort(budgetTokens.Int()); effort != "" {
+					reasoningEffort = effort
+					clientEffortSet = true
+				}
+			}
+		case "adaptive", "auto":
+			// adaptive 已在 output_config.effort 阶段消费；未传 effort 时让映射默认生效。
 		}
 	}
 
@@ -353,7 +353,11 @@ func convertAnthropicRequestToResponses(rawJSON []byte, modelName, mappingEffort
 	}
 
 	// ─── 固定参数（对齐 Codex CLI ResponsesApiRequest）───
-	template, _ = sjson.Set(template, "parallel_tool_calls", true)
+	parallelToolCalls := true
+	if disableParallelToolUse := root.Get("tool_choice.disable_parallel_tool_use"); disableParallelToolUse.Exists() {
+		parallelToolCalls = !disableParallelToolUse.Bool()
+	}
+	template, _ = sjson.Set(template, "parallel_tool_calls", parallelToolCalls)
 	template, _ = sjson.Set(template, "reasoning.effort", reasoningEffort)
 	template, _ = sjson.Set(template, "reasoning.summary", "auto")
 	template, _ = sjson.Set(template, "stream", true)
@@ -365,6 +369,73 @@ func convertAnthropicRequestToResponses(rawJSON []byte, modelName, mappingEffort
 	// Anthropic 的 max_tokens 在此被静默丢弃。如果以后切到原生 OpenAI Responses API，再恢复此映射。
 
 	return []byte(template)
+}
+
+func anthropicToolResultOutput(content gjson.Result) (string, []string) {
+	if !content.Exists() || content.Type == gjson.Null {
+		return "(empty)", nil
+	}
+	if content.Type == gjson.String {
+		text := content.String()
+		if text == "" {
+			text = "(empty)"
+		}
+		return text, nil
+	}
+	if !content.IsArray() {
+		raw := strings.TrimSpace(content.Raw)
+		if raw == "" {
+			raw = "(empty)"
+		}
+		return raw, nil
+	}
+
+	textParts := []string{}
+	imageURLs := []string{}
+	for _, part := range content.Array() {
+		switch part.Get("type").String() {
+		case "text":
+			if text := part.Get("text").String(); text != "" {
+				textParts = append(textParts, text)
+			}
+		case "image":
+			if imageURL := anthropicImageDataURL(part.Get("source")); imageURL != "" {
+				imageURLs = append(imageURLs, imageURL)
+			}
+		case "tool_reference":
+		default:
+			if raw := strings.TrimSpace(part.Raw); raw != "" {
+				textParts = append(textParts, raw)
+			}
+		}
+	}
+
+	text := strings.Join(textParts, "\n\n")
+	if text == "" {
+		text = "(empty)"
+	}
+	return text, imageURLs
+}
+
+func anthropicImageDataURL(source gjson.Result) string {
+	if !source.Exists() {
+		return ""
+	}
+	data := source.Get("data").String()
+	if data == "" {
+		data = source.Get("base64").String()
+	}
+	if data == "" {
+		return ""
+	}
+	mediaType := source.Get("media_type").String()
+	if mediaType == "" {
+		mediaType = source.Get("mime_type").String()
+	}
+	if mediaType == "" {
+		mediaType = "application/octet-stream"
+	}
+	return fmt.Sprintf("data:%s;base64,%s", mediaType, data)
 }
 
 func normalizeAnthropicMessageRole(role string) string {

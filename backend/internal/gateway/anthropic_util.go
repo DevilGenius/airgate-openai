@@ -214,6 +214,99 @@ func hasWebSearchTool(body []byte) bool {
 	return false
 }
 
+func isAnthropicToolSearchType(toolType string) bool {
+	return strings.HasPrefix(strings.TrimSpace(toolType), "tool_search")
+}
+
+func isAnthropicDeferredTool(tool gjson.Result) bool {
+	return tool.Get("defer_loading").Bool() || tool.Get("custom.defer_loading").Bool()
+}
+
+func collectAnthropicDiscoveredToolNames(root gjson.Result) map[string]struct{} {
+	discovered := map[string]struct{}{}
+	messages := root.Get("messages")
+	if !messages.IsArray() {
+		return discovered
+	}
+	for _, msg := range messages.Array() {
+		content := msg.Get("content")
+		if !content.IsArray() {
+			continue
+		}
+		for _, block := range content.Array() {
+			if block.Get("type").String() == "tool_result" {
+				collectToolReferencesFromContent(block.Get("content"), discovered)
+			}
+		}
+	}
+	return discovered
+}
+
+func collectToolReferencesFromContent(content gjson.Result, discovered map[string]struct{}) {
+	if content.IsArray() {
+		for _, item := range content.Array() {
+			if item.Get("type").String() == "tool_reference" {
+				if name := strings.TrimSpace(item.Get("tool_name").String()); name != "" {
+					discovered[name] = struct{}{}
+				}
+				continue
+			}
+			collectToolReferencesFromText(item.String(), discovered)
+		}
+		return
+	}
+	collectToolReferencesFromText(content.String(), discovered)
+}
+
+func collectToolReferencesFromText(text string, discovered map[string]struct{}) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	if gjson.Valid(text) {
+		collectToolReferencesFromParsedJSON(gjson.Parse(text), discovered)
+		return
+	}
+
+	remaining := text
+	for {
+		start := strings.Index(remaining, "<function>")
+		if start < 0 {
+			return
+		}
+		remaining = remaining[start+len("<function>"):]
+		end := strings.Index(remaining, "</function>")
+		if end < 0 {
+			return
+		}
+		candidate := strings.TrimSpace(remaining[:end])
+		if gjson.Valid(candidate) {
+			if name := strings.TrimSpace(gjson.Parse(candidate).Get("name").String()); name != "" {
+				discovered[name] = struct{}{}
+			}
+		}
+		remaining = remaining[end+len("</function>"):]
+	}
+}
+
+func collectToolReferencesFromParsedJSON(value gjson.Result, discovered map[string]struct{}) {
+	if value.IsArray() {
+		for _, item := range value.Array() {
+			collectToolReferencesFromParsedJSON(item, discovered)
+		}
+		return
+	}
+	if value.Get("type").String() == "tool_reference" {
+		if name := strings.TrimSpace(value.Get("tool_name").String()); name != "" {
+			discovered[name] = struct{}{}
+		}
+		return
+	}
+	if name := strings.TrimSpace(value.Get("name").String()); name != "" && value.Get("parameters").Exists() {
+		discovered[name] = struct{}{}
+	}
+}
+
 func estimateAnthropicInputTokens(body []byte) int {
 	if len(body) == 0 {
 		return 0

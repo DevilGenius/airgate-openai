@@ -97,8 +97,7 @@ func (g *OpenAIGateway) forwardAnthropicMessage(ctx context.Context, req *sdk.Fo
 	// 4. 一步直转为 Responses API JSON
 	// 注: Anthropic 的 cache_control 在转换为 Responses API 后不再适用，
 	// Responses API 使用 session_id + include 机制实现缓存，无需预处理断点
-	replaySourceBody, replayTrimmed := applyAnthropicFullReplayGuard(body)
-	fullResponsesBody := convertAnthropicRequestToResponses(replaySourceBody, modelName, mappingEffort)
+	fullResponsesBody := convertAnthropicRequestToResponses(body, modelName, mappingEffort)
 	responsesBody := fullResponsesBody
 	requestMode := "full_replay"
 	requestReason := "no_session_anchor"
@@ -116,10 +115,6 @@ func (g *OpenAIGateway) forwardAnthropicMessage(ctx context.Context, req *sdk.Fo
 	} else if session.PreviousRespID != "" {
 		requestReason = "continuation_disabled"
 	}
-	if requestMode == "full_replay" && replayTrimmed {
-		requestReason = "history_trimmed"
-	}
-
 	// 5. 按需注入 web_search 工具
 	explicitServiceTier := explicitAnthropicRequestServiceTier(req)
 	responsesBody = finalizeAnthropicResponsesBody(responsesBody, body, explicitServiceTier)
@@ -144,7 +139,6 @@ func (g *OpenAIGateway) forwardAnthropicMessage(ctx context.Context, req *sdk.Fo
 		"session_present", session.SessionID != "" || session.ConversationID != "" || session.PromptCacheKey != "",
 		"session_source", session.SessionSource,
 		"previous_response_id", session.PreviousRespID,
-		"history_trimmed", replayTrimmed,
 		"prompt_cache_key", session.PromptCacheKey,
 		"request_body_bytes", len(body),
 		"responses_body_bytes", len(responsesBody),
@@ -207,6 +201,11 @@ func finalizeAnthropicResponsesBody(responsesBody []byte, originalBody []byte, s
 	}
 	if hasWebSearchTool(originalBody) {
 		result = injectWebSearchToolJSON(result)
+	}
+	if !gjson.GetBytes(result, "tools").IsArray() || gjson.GetBytes(result, "tools.#").Int() == 0 {
+		result, _ = sjson.DeleteBytes(result, "tools")
+		result, _ = sjson.DeleteBytes(result, "tool_choice")
+		result, _ = sjson.DeleteBytes(result, "parallel_tool_calls")
 	}
 	return result
 }

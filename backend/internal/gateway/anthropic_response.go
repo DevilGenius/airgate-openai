@@ -23,16 +23,22 @@ import (
 
 // anthropicStreamState 轻量流式状态
 type anthropicStreamState struct {
-	HasToolCall               bool
-	BlockIndex                int
-	HasReceivedArgumentsDelta bool
-	InputTokens               int
-	OutputTokens              int
-	CachedInputTokens         int
-	ReasoningOutputTokens     int
-	TextBlockOpen             bool              // 当前是否已打开 text content block（用于容错上游跳过 content_part.added 的情况）
-	ThinkingBlockOpen         bool              // 当前是否已打开 thinking content block
-	reverseNameMap            map[string]string // 缓存 short→original 工具名映射，避免每次事件重建
+	HasToolCall           bool
+	BlockIndex            int
+	InputTokens           int
+	OutputTokens          int
+	CachedInputTokens     int
+	ReasoningOutputTokens int
+	TextBlockOpen         bool // 当前是否已打开 text content block（用于容错上游跳过 content_part.added 的情况）
+	ThinkingBlockOpen     bool // 当前是否已打开 thinking content block
+	OpenToolBlocks        map[int]*anthropicToolBlock
+	reverseNameMap        map[string]string // 缓存 short→original 工具名映射，避免每次事件重建
+}
+
+type anthropicToolBlock struct {
+	BlockIndex int
+	Args       string
+	HadDelta   bool
 }
 
 // convertResponsesEventToAnthropic 将单条 Responses API SSE 事件转换为 Anthropic SSE 事件字符串
@@ -80,6 +86,7 @@ func convertResponsesEventToAnthropic(rawLine []byte, originalRequest []byte, st
 	case "response.reasoning_summary_part.added":
 		// 若仍有未关闭的 text block，先关闭它
 		closePrefix := closeOpenTextBlock(state)
+		closePrefix += closeOpenToolBlocks(state)
 		template := `{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`
 		template, _ = sjson.Set(template, "index", state.BlockIndex)
 		state.ThinkingBlockOpen = true
@@ -90,6 +97,7 @@ func convertResponsesEventToAnthropic(rawLine []byte, originalRequest []byte, st
 		var prefix string
 		if !state.ThinkingBlockOpen {
 			prefix = closeOpenTextBlock(state)
+			prefix += closeOpenToolBlocks(state)
 			startTpl := `{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`
 			startTpl, _ = sjson.Set(startTpl, "index", state.BlockIndex)
 			prefix += "event: content_block_start\n" + fmt.Sprintf("data: %s\n\n", startTpl)
@@ -113,6 +121,7 @@ func convertResponsesEventToAnthropic(rawLine []byte, originalRequest []byte, st
 	case "response.content_part.added":
 		// 若仍有未关闭的 thinking block，先关闭
 		closePrefix := closeOpenThinkingBlock(state)
+		closePrefix += closeOpenToolBlocks(state)
 		template := `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`
 		template, _ = sjson.Set(template, "index", state.BlockIndex)
 		state.TextBlockOpen = true
@@ -123,6 +132,7 @@ func convertResponsesEventToAnthropic(rawLine []byte, originalRequest []byte, st
 		var prefix string
 		if !state.TextBlockOpen {
 			prefix = closeOpenThinkingBlock(state)
+			prefix += closeOpenToolBlocks(state)
 			startTpl := `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`
 			startTpl, _ = sjson.Set(startTpl, "index", state.BlockIndex)
 			prefix += "event: content_block_start\n" + fmt.Sprintf("data: %s\n\n", startTpl)
@@ -148,9 +158,9 @@ func convertResponsesEventToAnthropic(rawLine []byte, originalRequest []byte, st
 		itemType := item.Get("type").String()
 		if itemType == "function_call" {
 			state.HasToolCall = true
-			state.HasReceivedArgumentsDelta = false
 
-			// 工具调用前若仍有未关闭的 text/thinking 内容块，先关闭，保证事件序列成对
+			// 工具调用前若仍有未关闭的 text/thinking 内容块，先关闭，保证事件序列成对。
+			// 多个 function_call 可以并列打开，参数 delta 通过 output_index 路由。
 			closePrefix := closeOpenTextBlock(state)
 			closePrefix += closeOpenThinkingBlock(state)
 
@@ -163,48 +173,68 @@ func convertResponsesEventToAnthropic(rawLine []byte, originalRequest []byte, st
 				name = orig
 			}
 
+			outputIndex := int(root.Get("output_index").Int())
+			if state.OpenToolBlocks == nil {
+				state.OpenToolBlocks = map[int]*anthropicToolBlock{}
+			}
+			closePrefix += closeOpenToolBlock(state, outputIndex)
+			blockIndex := state.BlockIndex
+			state.BlockIndex++
+			state.OpenToolBlocks[outputIndex] = &anthropicToolBlock{BlockIndex: blockIndex}
+
 			template := `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"","name":"","input":{}}}`
-			template, _ = sjson.Set(template, "index", state.BlockIndex)
+			template, _ = sjson.Set(template, "index", blockIndex)
 			template, _ = sjson.Set(template, "content_block.id", item.Get("call_id").String())
 			template, _ = sjson.Set(template, "content_block.name", name)
 
-			output := closePrefix + "event: content_block_start\n" + fmt.Sprintf("data: %s\n\n", template)
-
-			// 紧跟一个空 input_json_delta
-			deltaTemplate := `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":""}}`
-			deltaTemplate, _ = sjson.Set(deltaTemplate, "index", state.BlockIndex)
-			output += "event: content_block_delta\n" + fmt.Sprintf("data: %s\n\n", deltaTemplate)
-			return output
+			return closePrefix + "event: content_block_start\n" + fmt.Sprintf("data: %s\n\n", template)
 		}
 		// web_search_call 等原生工具：忽略
 		return ""
 
 	case "response.function_call_arguments.delta":
-		state.HasReceivedArgumentsDelta = true
-		template := `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":""}}`
-		template, _ = sjson.Set(template, "index", state.BlockIndex)
-		template, _ = sjson.Set(template, "delta.partial_json", root.Get("delta").String())
-		return "event: content_block_delta\n" + fmt.Sprintf("data: %s\n\n", template)
+		delta := root.Get("delta").String()
+		if delta == "" {
+			return ""
+		}
+		outputIndex := int(root.Get("output_index").Int())
+		block := state.OpenToolBlocks[outputIndex]
+		if block == nil {
+			return ""
+		}
+		block.Args += delta
+		block.HadDelta = true
+		return emitToolArgumentsDelta(block.BlockIndex, delta)
 
 	case "response.function_call_arguments.done":
-		// 某些模型只发 done 不发 delta，补发完整参数
-		if !state.HasReceivedArgumentsDelta {
-			if args := root.Get("arguments").String(); args != "" {
-				template := `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":""}}`
-				template, _ = sjson.Set(template, "index", state.BlockIndex)
-				template, _ = sjson.Set(template, "delta.partial_json", args)
-				return "event: content_block_delta\n" + fmt.Sprintf("data: %s\n\n", template)
-			}
+		outputIndex := int(root.Get("output_index").Int())
+		block := state.OpenToolBlocks[outputIndex]
+		if block == nil {
+			return ""
+		}
+		args := root.Get("arguments").String()
+		if args == "" {
+			args = block.Args
+		}
+		if args != "" && !block.HadDelta {
+			block.HadDelta = true
+			return emitToolArgumentsDelta(block.BlockIndex, args)
 		}
 		return ""
 
 	case "response.output_item.done":
 		itemType := root.Get("item.type").String()
 		if itemType == "function_call" {
-			template := `{"type":"content_block_stop","index":0}`
-			template, _ = sjson.Set(template, "index", state.BlockIndex)
-			state.BlockIndex++
-			return "event: content_block_stop\n" + fmt.Sprintf("data: %s\n\n", template)
+			outputIndex := int(root.Get("output_index").Int())
+			block := state.OpenToolBlocks[outputIndex]
+			if block == nil {
+				return ""
+			}
+			if args := root.Get("item.arguments").String(); args != "" && !block.HadDelta {
+				block.HadDelta = true
+				return emitToolArgumentsDelta(block.BlockIndex, args)
+			}
+			return ""
 		}
 		return ""
 
@@ -219,6 +249,7 @@ func convertResponsesEventToAnthropic(rawLine []byte, originalRequest []byte, st
 		// 先关闭任何未显式关闭的 text/thinking 内容块，避免 SSE 事件序列不成对
 		prefix := closeOpenTextBlock(state)
 		prefix += closeOpenThinkingBlock(state)
+		prefix += closeOpenToolBlocks(state)
 
 		// 构建 message_delta
 		// usage 包含 SDK accumulator 合并时需要的完整字段集（与 message_start 对齐）：
@@ -281,14 +312,20 @@ func convertResponsesEventToAnthropic(rawLine []byte, originalRequest []byte, st
 			errMsg = "upstream response failed"
 		}
 		errType := mapResponsesErrorType(root.Get("response.error.type").String(), root.Get("response.error.code").String())
-		return buildAnthropicStreamError(errType, errMsg)
+		prefix := closeOpenTextBlock(state)
+		prefix += closeOpenThinkingBlock(state)
+		prefix += closeOpenToolBlocks(state)
+		return prefix + buildAnthropicStreamError(errType, errMsg)
 
 	case "response.incomplete":
 		reason := root.Get("response.incomplete_details.reason").String()
 		if reason == "" {
 			reason = "unknown"
 		}
-		return buildAnthropicStreamError("api_error", "response incomplete: "+reason)
+		prefix := closeOpenTextBlock(state)
+		prefix += closeOpenThinkingBlock(state)
+		prefix += closeOpenToolBlocks(state)
+		return prefix + buildAnthropicStreamError("api_error", "response incomplete: "+reason)
 	}
 
 	// 忽略未知事件（web_search_call.* 等）
@@ -317,6 +354,44 @@ func closeOpenThinkingBlock(state *anthropicStreamState) string {
 	state.BlockIndex++
 	state.ThinkingBlockOpen = false
 	return "event: content_block_stop\n" + fmt.Sprintf("data: %s\n\n", template)
+}
+
+func emitToolArgumentsDelta(blockIndex int, args string) string {
+	template := `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":""}}`
+	template, _ = sjson.Set(template, "index", blockIndex)
+	template, _ = sjson.Set(template, "delta.partial_json", args)
+	return "event: content_block_delta\n" + fmt.Sprintf("data: %s\n\n", template)
+}
+
+func closeOpenToolBlock(state *anthropicStreamState, outputIndex int) string {
+	block := state.OpenToolBlocks[outputIndex]
+	if block == nil {
+		return ""
+	}
+	template := `{"type":"content_block_stop","index":0}`
+	template, _ = sjson.Set(template, "index", block.BlockIndex)
+	delete(state.OpenToolBlocks, outputIndex)
+	return "event: content_block_stop\n" + fmt.Sprintf("data: %s\n\n", template)
+}
+
+func closeOpenToolBlocks(state *anthropicStreamState) string {
+	if len(state.OpenToolBlocks) == 0 {
+		return ""
+	}
+	outputIndexes := make([]int, 0, len(state.OpenToolBlocks))
+	for outputIndex := range state.OpenToolBlocks {
+		outputIndexes = append(outputIndexes, outputIndex)
+	}
+	for i := 1; i < len(outputIndexes); i++ {
+		for j := i; j > 0 && state.OpenToolBlocks[outputIndexes[j-1]].BlockIndex > state.OpenToolBlocks[outputIndexes[j]].BlockIndex; j-- {
+			outputIndexes[j-1], outputIndexes[j] = outputIndexes[j], outputIndexes[j-1]
+		}
+	}
+	var out strings.Builder
+	for _, outputIndex := range outputIndexes {
+		out.WriteString(closeOpenToolBlock(state, outputIndex))
+	}
+	return out.String()
 }
 
 // normalizeAnthropicMessageID 把 OpenAI Responses API 的 `resp_...` id 规范化为 Anthropic 风格的 `msg_...`。

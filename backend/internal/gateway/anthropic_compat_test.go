@@ -46,7 +46,7 @@ func TestConvertAnthropicRequestToResponsesMapsMessageSystemRoleToDeveloper(t *t
 }
 
 func TestConvertAnthropicRequestToResponsesMapsDisabledThinkingToNone(t *testing.T) {
-	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":8,"thinking":{"type":"disabled"},"messages":[{"role":"user","content":"Reply exactly OK."}]}`)
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":8,"thinking":{"type":"disabled"},"output_config":{"effort":"xhigh"},"messages":[{"role":"user","content":"Reply exactly OK."}]}`)
 
 	got := convertAnthropicRequestToResponses(body, "gpt-5.5", "high")
 	if effort := gjson.GetBytes(got, "reasoning.effort").String(); effort != "none" {
@@ -54,41 +54,204 @@ func TestConvertAnthropicRequestToResponsesMapsDisabledThinkingToNone(t *testing
 	}
 }
 
-func TestIsModelFallbackErrorIncludesContextWindowErrors(t *testing.T) {
-	cases := []struct {
-		name       string
-		statusCode int
-		body       []byte
-	}{
-		{
-			name:       "context length code",
-			statusCode: http.StatusBadRequest,
-			body:       []byte(`{"error":{"code":"context_length_exceeded","message":"Your input exceeds the context window of this model."}}`),
-		},
-		{
-			name:       "input too long",
-			statusCode: http.StatusBadRequest,
-			body:       []byte(`{"error":{"code":"input_too_long","message":"input is too long"}}`),
-		},
-		{
-			name:       "model unavailable",
-			statusCode: http.StatusBadRequest,
-			body:       []byte(`{"error":{"message":"The model gpt-x is not supported."}}`),
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if !isModelFallbackError(tc.statusCode, tc.body) {
-				t.Fatalf("isModelFallbackError(%d, %s) = false, want true", tc.statusCode, tc.body)
-			}
-		})
+func TestConvertAnthropicRequestToResponsesUsesOutputEffortWhenThinkingAdaptive(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-4-8","max_tokens":8,"thinking":{"type":"adaptive"},"output_config":{"effort":"xhigh"},"messages":[{"role":"user","content":"Review this."}]}`)
+
+	got := convertAnthropicRequestToResponses(body, "gpt-5.5", "medium")
+	if effort := gjson.GetBytes(got, "reasoning.effort").String(); effort != "xhigh" {
+		t.Fatalf("reasoning effort = %q, want xhigh; body=%s", effort, got)
 	}
 }
 
-func TestIsModelFallbackErrorRejectsOrdinaryClientErrors(t *testing.T) {
-	body := []byte(`{"error":{"message":"Missing required parameter: messages."}}`)
-	if isModelFallbackError(http.StatusBadRequest, body) {
-		t.Fatalf("ordinary invalid request should not trigger model fallback")
+func TestConvertAnthropicRequestToResponsesToolResultArrayOutputIsString(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":8,"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"toolu_read","name":"Read","input":{"file_path":"a.go"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_read","content":[{"type":"text","text":"alpha"},{"type":"text","text":"beta"}]}]}]}`)
+
+	got := convertAnthropicRequestToResponses(body, "gpt-5.5", "medium")
+	item := gjson.GetBytes(got, "input.1")
+	if typ := item.Get("type").String(); typ != "function_call_output" {
+		t.Fatalf("input.1.type = %q, want function_call_output; body=%s", typ, got)
+	}
+	output := item.Get("output")
+	if output.Type != gjson.String {
+		t.Fatalf("function_call_output.output type = %v, want string; output=%s body=%s", output.Type, output.Raw, got)
+	}
+	if output.String() != "alpha\n\nbeta" {
+		t.Fatalf("function_call_output.output = %q, want joined text; body=%s", output.String(), got)
+	}
+}
+
+func TestConvertAnthropicRequestToResponsesToolResultImagesBecomeUserImages(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":8,"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"toolu_view","name":"View","input":{"path":"shot.png"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_view","content":[{"type":"text","text":"screenshot"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGVsbG8="}}]}]}]}`)
+
+	got := convertAnthropicRequestToResponses(body, "gpt-5.5", "medium")
+	if output := gjson.GetBytes(got, "input.1.output").String(); output != "screenshot" {
+		t.Fatalf("function_call_output.output = %q, want screenshot; body=%s", output, got)
+	}
+	imageMsg := gjson.GetBytes(got, "input.2")
+	if typ := imageMsg.Get("type").String(); typ != "message" {
+		t.Fatalf("input.2.type = %q, want message; body=%s", typ, got)
+	}
+	if role := imageMsg.Get("role").String(); role != "user" {
+		t.Fatalf("image message role = %q, want user; body=%s", role, got)
+	}
+	if typ := imageMsg.Get("content.0.type").String(); typ != "input_image" {
+		t.Fatalf("image content type = %q, want input_image; body=%s", typ, got)
+	}
+	if url := imageMsg.Get("content.0.image_url").String(); url != "data:image/png;base64,aGVsbG8=" {
+		t.Fatalf("image_url = %q; body=%s", url, got)
+	}
+}
+
+func TestConvertAnthropicRequestToResponsesSkipsToolSearchMetaAndUndiscoveredDeferredTools(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":8,"messages":[{"role":"user","content":"hi"}],"tools":[{"type":"tool_search_tool_regex_20251119","name":"tool_search"},{"type":"custom","name":"DeferredReview","description":"Launch a deferred worker","custom":{"defer_loading":true},"defer_loading":true,"allowed_callers":["code_execution_20250825"],"input_examples":[{"prompt":"review"}],"cache_control":{"type":"ephemeral"},"input_schema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"prompt":{"type":"string"}}}},{"name":"Read","description":"Read a file","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}}}}]}`)
+
+	got := convertAnthropicRequestToResponses(body, "gpt-5.5", "medium")
+	if count := gjson.GetBytes(got, "tools.#").Int(); count != 1 {
+		t.Fatalf("tools count = %d, want one non-deferred function; body=%s", count, got)
+	}
+	tool := gjson.GetBytes(got, "tools.0")
+	if typ := tool.Get("type").String(); typ != "function" {
+		t.Fatalf("tool type = %q, want function; body=%s", typ, got)
+	}
+	if name := tool.Get("name").String(); name != "Read" {
+		t.Fatalf("tool name = %q, want Read; body=%s", name, got)
+	}
+	if choice := gjson.GetBytes(got, "tool_choice").String(); choice != "auto" {
+		t.Fatalf("tool_choice = %q, want auto; body=%s", choice, got)
+	}
+}
+
+func TestConvertAnthropicRequestToResponsesIncludesDiscoveredDeferredToolAndSanitizesFields(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":8,"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_search","content":[{"type":"tool_reference","tool_name":"DeferredReview"}]}]},{"role":"user","content":"hi"}],"tools":[{"type":"custom","name":"DeferredReview","description":"Launch a deferred worker","custom":{"defer_loading":true},"defer_loading":true,"allowed_callers":["code_execution_20250825"],"input_examples":[{"prompt":"review"}],"cache_control":{"type":"ephemeral"},"input_schema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"prompt":{"type":"string"}}}},{"name":"Read","description":"Read a file","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}}}}]}`)
+
+	got := convertAnthropicRequestToResponses(body, "gpt-5.5", "medium")
+	if count := gjson.GetBytes(got, "tools.#").Int(); count != 2 {
+		t.Fatalf("tools count = %d, want discovered deferred function and regular function; body=%s", count, got)
+	}
+	tool := gjson.GetBytes(got, "tools.0")
+	if typ := tool.Get("type").String(); typ != "function" {
+		t.Fatalf("tool type = %q, want function; body=%s", typ, got)
+	}
+	if name := tool.Get("name").String(); name != "DeferredReview" {
+		t.Fatalf("tool name = %q, want DeferredReview; body=%s", name, got)
+	}
+	if desc := tool.Get("description").String(); desc != "Launch a deferred worker" {
+		t.Fatalf("tool description = %q; body=%s", desc, got)
+	}
+	if params := tool.Get("parameters"); params.Get("properties.prompt.type").String() != "string" {
+		t.Fatalf("parameters not preserved: %s; body=%s", params.Raw, got)
+	}
+	if strings.Contains(tool.Get("parameters").Raw, "$schema") {
+		t.Fatalf("parameters still contains $schema: %s; body=%s", tool.Get("parameters").Raw, got)
+	}
+	for _, field := range []string{"custom", "defer_loading", "allowed_callers", "input_examples", "cache_control", "input_schema"} {
+		if tool.Get(field).Exists() {
+			t.Fatalf("tool still contains Anthropic field %q: %s", field, got)
+		}
+	}
+}
+
+func TestConvertAnthropicRequestToResponsesSanitizesRegularToolFields(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":8,"messages":[{"role":"user","content":"hi"}],"tools":[{"type":"custom","name":"Lookup","description":"Look up project data","custom":{"note":"metadata"},"input_examples":[{"query":"status"}],"cache_control":{"type":"ephemeral"},"input_schema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"query":{"type":"string"}}}}]}`)
+
+	got := convertAnthropicRequestToResponses(body, "gpt-5.5", "medium")
+	tool := gjson.GetBytes(got, "tools.0")
+	if typ := tool.Get("type").String(); typ != "function" {
+		t.Fatalf("tool type = %q, want function; body=%s", typ, got)
+	}
+	if name := tool.Get("name").String(); name != "Lookup" {
+		t.Fatalf("tool name = %q, want Lookup; body=%s", name, got)
+	}
+	if strict := tool.Get("strict"); !strict.Exists() || strict.Bool() {
+		t.Fatalf("tool strict = %s, want explicit false; body=%s", strict.Raw, got)
+	}
+	for _, field := range []string{"custom", "defer_loading", "allowed_callers", "input_examples", "cache_control", "input_schema"} {
+		if tool.Get(field).Exists() {
+			t.Fatalf("tool still contains %q: %s; body=%s", field, tool.Raw, got)
+		}
+	}
+	if choice := gjson.GetBytes(got, "tool_choice").String(); choice != "auto" {
+		t.Fatalf("tool_choice = %q, want auto; body=%s", choice, got)
+	}
+}
+
+func TestConvertAnthropicRequestToResponsesDowngradesMissingToolChoice(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":8,"messages":[{"role":"user","content":"hi"}],"tools":[{"name":"Read","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}}}}],"tool_choice":{"type":"tool","name":"Missing"}}`)
+
+	got := convertAnthropicRequestToResponses(body, "gpt-5.5", "medium")
+	if choice := gjson.GetBytes(got, "tool_choice").String(); choice != "auto" {
+		t.Fatalf("tool_choice = %q, want auto; body=%s", choice, got)
+	}
+}
+
+func TestConvertAnthropicRequestToResponsesPreservesDeferredToolChoice(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":8,"messages":[{"role":"user","content":"hi"}],"tools":[{"type":"custom","name":"DeferredReview","custom":{"defer_loading":true},"input_schema":{"type":"object","properties":{"prompt":{"type":"string"}}}}],"tool_choice":{"type":"tool","name":"DeferredReview"}}`)
+
+	got := convertAnthropicRequestToResponses(body, "gpt-5.5", "medium")
+	if count := gjson.GetBytes(got, "tools.#").Int(); count != 1 {
+		t.Fatalf("tools count = %d, want one sanitized function; body=%s", count, got)
+	}
+	choice := gjson.GetBytes(got, "tool_choice")
+	if typ := choice.Get("type").String(); typ != "function" {
+		t.Fatalf("tool_choice.type = %q, want function; body=%s", typ, got)
+	}
+	if name := choice.Get("name").String(); name != "DeferredReview" {
+		t.Fatalf("tool_choice.name = %q, want DeferredReview; body=%s", name, got)
+	}
+}
+
+func TestConvertAnthropicRequestToResponsesPreservesExistingToolChoice(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":8,"messages":[{"role":"user","content":"hi"}],"tools":[{"name":"Read","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}}}}],"tool_choice":{"type":"tool","name":"Read"}}`)
+
+	got := convertAnthropicRequestToResponses(body, "gpt-5.5", "medium")
+	choice := gjson.GetBytes(got, "tool_choice")
+	if typ := choice.Get("type").String(); typ != "function" {
+		t.Fatalf("tool_choice.type = %q, want function; body=%s", typ, got)
+	}
+	if name := choice.Get("name").String(); name != "Read" {
+		t.Fatalf("tool_choice.name = %q, want Read; body=%s", name, got)
+	}
+}
+
+func TestConvertAnthropicRequestToResponsesDowngradesAnyWhenOnlyToolSearchSkipped(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":8,"messages":[{"role":"user","content":"hi"}],"tools":[{"type":"tool_search_tool_regex_20251119","name":"tool_search"}],"tool_choice":{"type":"any"}}`)
+
+	got := convertAnthropicRequestToResponses(body, "gpt-5.5", "medium")
+	if count := gjson.GetBytes(got, "tools.#").Int(); count != 0 {
+		t.Fatalf("tools count = %d, want 0; body=%s", count, got)
+	}
+	if choice := gjson.GetBytes(got, "tool_choice").String(); choice != "auto" {
+		t.Fatalf("tool_choice = %q, want auto; body=%s", choice, got)
+	}
+}
+
+func TestFinalizeAnthropicResponsesBodyDropsToolFieldsWithoutTools(t *testing.T) {
+	body := []byte(`{"parallel_tool_calls":true,"tool_choice":"auto","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}`)
+
+	got := finalizeAnthropicResponsesBody(body, []byte(`{"messages":[{"role":"user","content":"hi"}]}`), "")
+	if gjson.GetBytes(got, "parallel_tool_calls").Exists() {
+		t.Fatalf("parallel_tool_calls should be removed without tools, body=%s", got)
+	}
+	if gjson.GetBytes(got, "tool_choice").Exists() {
+		t.Fatalf("tool_choice should be removed without tools, body=%s", got)
+	}
+}
+
+func TestConvertAnthropicRequestToResponsesDefaultsToolChoiceAutoWithTools(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":8,"messages":[{"role":"user","content":"hi"}],"tools":[{"name":"Read","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}}}}]}`)
+
+	got := convertAnthropicRequestToResponses(body, "gpt-5.5", "medium")
+	if choice := gjson.GetBytes(got, "tool_choice").String(); choice != "auto" {
+		t.Fatalf("tool_choice = %q, want auto; body=%s", choice, got)
+	}
+}
+
+func TestConvertAnthropicRequestToResponsesHonorsDisableParallelToolUse(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":8,"messages":[{"role":"user","content":"hi"}],"tools":[{"name":"Read","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}}}}],"tool_choice":{"type":"auto","disable_parallel_tool_use":true}}`)
+
+	got := convertAnthropicRequestToResponses(body, "gpt-5.5", "medium")
+	if parallel := gjson.GetBytes(got, "parallel_tool_calls"); !parallel.Exists() || parallel.Bool() {
+		t.Fatalf("parallel_tool_calls = %s, want false; body=%s", parallel.Raw, got)
 	}
 }
 
@@ -556,6 +719,108 @@ func TestConvertResponsesEventToAnthropic_MessageStartEmitsPing(t *testing.T) {
 	// 但绝不能包含 server_tool_use: null —— 会触发 JS `||` 短路转 undefined 后访问 .input_tokens 崩溃
 	if strings.Contains(out, `"server_tool_use":null`) {
 		t.Fatalf("message_start usage must NOT contain server_tool_use:null (triggers SDK undefined.input_tokens), got: %s", out)
+	}
+}
+
+func TestConvertResponsesEventToAnthropicFunctionCallLifecycleDefersStopForBatching(t *testing.T) {
+	state := &anthropicStreamState{}
+	request := []byte(`{"tools":[{"name":"Skill","input_schema":{"type":"object","properties":{"skill":{"type":"string"}}}}]}`)
+
+	added := []byte(`data: {"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","call_id":"call_1","name":"Skill","arguments":""}}`)
+	out := convertResponsesEventToAnthropic(added, request, state, "claude-sonnet-4-6")
+	if !strings.Contains(out, `"type":"tool_use"`) {
+		t.Fatalf("missing tool_use start, got: %s", out)
+	}
+	if strings.Contains(out, `"input_json_delta"`) {
+		t.Fatalf("tool_use start should not emit an empty input_json_delta, got: %s", out)
+	}
+	if strings.Contains(out, "event: content_block_stop") {
+		t.Fatalf("tool_use should stay open before response completion, got: %s", out)
+	}
+
+	argsDone := []byte(`data: {"type":"response.function_call_arguments.done","output_index":1,"arguments":"{\"skill\":\"claude-api\"}"}`)
+	out = convertResponsesEventToAnthropic(argsDone, request, state, "claude-sonnet-4-6")
+	if !strings.Contains(out, `"partial_json":"{\"skill\":\"claude-api\"}"`) {
+		t.Fatalf("missing full arguments delta, got: %s", out)
+	}
+	if strings.Contains(out, "event: content_block_stop") {
+		t.Fatalf("arguments done should defer tool_use close for same-turn batching, got: %s", out)
+	}
+
+	itemDone := []byte(`data: {"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","call_id":"call_1","name":"Skill","arguments":"{\"skill\":\"claude-api\"}"}}`)
+	if out := convertResponsesEventToAnthropic(itemDone, request, state, "claude-sonnet-4-6"); out != "" {
+		t.Fatalf("output_item.done after arguments done should be a no-op, got: %s", out)
+	}
+
+	completed := []byte(`data: {"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":1,"output_tokens":2}}}`)
+	out = convertResponsesEventToAnthropic(completed, request, state, "claude-sonnet-4-6")
+	if !strings.Contains(out, "event: content_block_stop") {
+		t.Fatalf("response completed should close deferred tool_use block, got: %s", out)
+	}
+	if !strings.Contains(out, `"stop_reason":"tool_use"`) {
+		t.Fatalf("message_delta should report tool_use stop, got: %s", out)
+	}
+}
+
+func TestConvertResponsesEventToAnthropicFunctionCallDeltaDefersStopUntilCompleted(t *testing.T) {
+	state := &anthropicStreamState{}
+	request := []byte(`{"tools":[{"name":"Edit","input_schema":{"type":"object","properties":{"file":{"type":"string"}}}}]}`)
+
+	_ = convertResponsesEventToAnthropic([]byte(`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_2","name":"Edit","arguments":""}}`), request, state, "claude-sonnet-4-6")
+	out := convertResponsesEventToAnthropic([]byte(`data: {"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"file\""}`), request, state, "claude-sonnet-4-6")
+	if !strings.Contains(out, `"partial_json":"{\"file\""`) {
+		t.Fatalf("missing streamed arguments delta, got: %s", out)
+	}
+
+	out = convertResponsesEventToAnthropic([]byte(`data: {"type":"response.function_call_arguments.done","output_index":0,"arguments":"{\"file\":\"a.go\"}"}`), request, state, "claude-sonnet-4-6")
+	if strings.Contains(out, `"partial_json":"{\"file\":\"a.go\"}"`) {
+		t.Fatalf("arguments done should not resend full args after deltas, got: %s", out)
+	}
+	if strings.Contains(out, "event: content_block_stop") {
+		t.Fatalf("arguments done should defer streamed tool_use close, got: %s", out)
+	}
+
+	out = convertResponsesEventToAnthropic([]byte(`data: {"type":"response.completed","response":{"id":"resp_2","usage":{"input_tokens":1,"output_tokens":2}}}`), request, state, "claude-sonnet-4-6")
+	if !strings.Contains(out, "event: content_block_stop") {
+		t.Fatalf("response completed should close streamed tool_use block, got: %s", out)
+	}
+}
+
+func TestConvertResponsesEventToAnthropicFunctionCallDeltasRouteByOutputIndex(t *testing.T) {
+	state := &anthropicStreamState{}
+	request := []byte(`{"tools":[{"name":"First","input_schema":{"type":"object"}},{"name":"Second","input_schema":{"type":"object"}}]}`)
+
+	out := convertResponsesEventToAnthropic([]byte(`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"First","arguments":""}}`), request, state, "claude-sonnet-4-6")
+	if !strings.Contains(out, `"index":0`) || strings.Contains(out, "event: content_block_stop") {
+		t.Fatalf("first tool should open index 0 without closing, got: %s", out)
+	}
+
+	out = convertResponsesEventToAnthropic([]byte(`data: {"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","call_id":"call_2","name":"Second","arguments":""}}`), request, state, "claude-sonnet-4-6")
+	if !strings.Contains(out, `"index":1`) || strings.Contains(out, "event: content_block_stop") {
+		t.Fatalf("second tool should open index 1 without closing first, got: %s", out)
+	}
+
+	out = convertResponsesEventToAnthropic([]byte(`data: {"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"a\""}`), request, state, "claude-sonnet-4-6")
+	if !strings.Contains(out, `"index":0`) || !strings.Contains(out, `"partial_json":"{\"a\""`) {
+		t.Fatalf("first tool delta should route to index 0, got: %s", out)
+	}
+
+	out = convertResponsesEventToAnthropic([]byte(`data: {"type":"response.function_call_arguments.done","output_index":1,"arguments":"{\"b\":2}"}`), request, state, "claude-sonnet-4-6")
+	if !strings.Contains(out, `"index":1`) || !strings.Contains(out, `"partial_json":"{\"b\":2}"`) || strings.Contains(out, "event: content_block_stop") {
+		t.Fatalf("second tool done should emit args without closing index 1, got: %s", out)
+	}
+
+	out = convertResponsesEventToAnthropic([]byte(`data: {"type":"response.function_call_arguments.done","output_index":0,"arguments":"{\"a\":1}"}`), request, state, "claude-sonnet-4-6")
+	if strings.Contains(out, `"partial_json":"{\"a\":1}"`) || strings.Contains(out, "event: content_block_stop") {
+		t.Fatalf("first tool done should not resend or close already-streamed index 0, got: %s", out)
+	}
+
+	out = convertResponsesEventToAnthropic([]byte(`data: {"type":"response.completed","response":{"id":"resp_3","usage":{"input_tokens":1,"output_tokens":2}}}`), request, state, "claude-sonnet-4-6")
+	if strings.Count(out, "event: content_block_stop") != 2 {
+		t.Fatalf("response completed should close both deferred tool blocks, got: %s", out)
+	}
+	if strings.Index(out, `"index":0`) > strings.Index(out, `"index":1`) {
+		t.Fatalf("deferred tool blocks should close in block index order, got: %s", out)
 	}
 }
 

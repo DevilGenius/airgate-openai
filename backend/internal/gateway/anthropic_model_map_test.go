@@ -20,9 +20,6 @@ func TestResolveAnthropicModelMapping_UsesUpdatedDefaultClaudeTarget(t *testing.
 			if mapping.OpenAIModel != "gpt-5.5" {
 				t.Fatalf("OpenAIModel = %q, want %q", mapping.OpenAIModel, "gpt-5.5")
 			}
-			if mapping.FallbackModel != "gpt-5.4" {
-				t.Fatalf("FallbackModel = %q, want %q", mapping.FallbackModel, "gpt-5.4")
-			}
 		})
 	}
 }
