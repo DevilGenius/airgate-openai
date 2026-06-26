@@ -8,14 +8,6 @@ author: airgate
 type: gateway
 min_core_version: 1.0.0
 dependencies: []
-config:
-  - key: anthropic_oauth_transport
-    label: Anthropic OAuth Transport
-    type: string
-    default: ws
-    description: 'OAuth 账号转发 /v1/messages 时使用的上游传输: ws 或 sse。ws 支持 previous_response_id continuation；sse 用于回退对比。'
-    placeholder: ws
-    required: false
 frontend_widgets:
   - slot: account-identity
     entry_file: index.js
@@ -192,7 +184,7 @@ gateway:
       cached_input_price_flex: 0.0375
     - id: gpt-5.5
       name: GPT 5.5
-      context_window: 272000
+      context_window: 400000
       max_output_tokens: 128000
       capabilities:
         - chat
