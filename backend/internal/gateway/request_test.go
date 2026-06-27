@@ -523,10 +523,10 @@ func TestOpenAIReasoningHintIgnoresEscapedJSONInStringValue(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// normalizeOpenAIWireReasoningEffort — 所有别名、大小写变体、分隔符变体、边界
+// normalizeOpenAIReasoningEffort — 所有别名、大小写变体、分隔符变体、边界
 // ---------------------------------------------------------------------------
 
-func TestNormalizeOpenAIWireReasoningEffort_AllAliases(t *testing.T) {
+func TestNormalizeOpenAIReasoningEffort_AllAliases(t *testing.T) {
 	cases := []struct {
 		input string
 		want  string
@@ -595,9 +595,46 @@ func TestNormalizeOpenAIWireReasoningEffort_AllAliases(t *testing.T) {
 		{"\t\n", ""},
 	}
 	for _, tc := range cases {
-		if got := normalizeOpenAIWireReasoningEffort(tc.input); got != tc.want {
-			t.Errorf("normalizeOpenAIWireReasoningEffort(%q) = %q, want %q", tc.input, got, tc.want)
+		if got := normalizeOpenAIReasoningEffort(tc.input); got != tc.want {
+			t.Errorf("normalizeOpenAIReasoningEffort(%q) = %q, want %q", tc.input, got, tc.want)
 		}
+	}
+}
+
+func TestOpenAIWireReasoningEffortClampsUnsupportedLevels(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"none", "none"},
+		{"low", "low"},
+		{"medium", "medium"},
+		{"high", "high"},
+		{"xhigh", "xhigh"},
+		{"max", "xhigh"},
+		{"maximum", "xhigh"},
+		{"ultra", "xhigh"},
+		{"unknown", "unknown"},
+	}
+	for _, tc := range cases {
+		if got := openAIWireReasoningEffort(tc.input); got != tc.want {
+			t.Errorf("openAIWireReasoningEffort(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestApplyOpenAIWireReasoningEffortClampsUnsupportedLevels(t *testing.T) {
+	body := []byte(`{"reasoning":{"effort":"max"},"reasoning_effort":"ultra","output_config":{"effort":"maximum"}}`)
+	result := applyOpenAIWireReasoningEffort(body)
+
+	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "xhigh" {
+		t.Fatalf("reasoning.effort = %q, want xhigh; body=%s", got, result)
+	}
+	if got := gjson.GetBytes(result, "reasoning_effort").String(); got != "xhigh" {
+		t.Fatalf("reasoning_effort = %q, want xhigh; body=%s", got, result)
+	}
+	if got := gjson.GetBytes(result, "output_config.effort").String(); got != "xhigh" {
+		t.Fatalf("output_config.effort = %q, want xhigh; body=%s", got, result)
 	}
 }
 

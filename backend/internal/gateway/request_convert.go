@@ -63,7 +63,7 @@ func firstNonEmptyTier(tiers ...string) string {
 	return ""
 }
 
-func normalizeOpenAIWireReasoningEffort(effort string) string {
+func normalizeOpenAIReasoningEffort(effort string) string {
 	trimmed := strings.TrimSpace(effort)
 	if trimmed == "" {
 		return ""
@@ -119,6 +119,35 @@ func normalizeOpenAIWireReasoningEffort(effort string) string {
 	}
 }
 
+func openAIWireReasoningEffort(effort string) string {
+	switch normalized := normalizeOpenAIReasoningEffort(effort); normalized {
+	case "max", "ultra":
+		return "xhigh"
+	default:
+		return normalized
+	}
+}
+
+func applyOpenAIWireReasoningEffort(body []byte) []byte {
+	if len(body) == 0 {
+		return body
+	}
+
+	result := body
+	for _, path := range []string{"reasoning.effort", "reasoning_effort", "output_config.effort"} {
+		node := gjson.GetBytes(result, path)
+		if !node.Exists() || node.Type != gjson.String {
+			continue
+		}
+		if effort := openAIWireReasoningEffort(node.String()); effort != "" {
+			if modified, err := sjson.SetBytes(result, path, effort); err == nil {
+				result = modified
+			}
+		}
+	}
+	return result
+}
+
 func hasJSONKeyToken(body, quotedKey []byte) bool {
 	for offset := 0; offset < len(body); {
 		idx := bytes.Index(body[offset:], quotedKey)
@@ -168,13 +197,13 @@ func hasOpenAIReasoningDefaultsHint(body []byte) bool {
 }
 
 func openAIReasoningEffortFromRequestAfterHint(body []byte) string {
-	if effort := normalizeOpenAIWireReasoningEffort(gjson.GetBytes(body, "reasoning.effort").String()); effort != "" {
+	if effort := normalizeOpenAIReasoningEffort(gjson.GetBytes(body, "reasoning.effort").String()); effort != "" {
 		return effort
 	}
-	if effort := normalizeOpenAIWireReasoningEffort(gjson.GetBytes(body, "reasoning_effort").String()); effort != "" {
+	if effort := normalizeOpenAIReasoningEffort(gjson.GetBytes(body, "reasoning_effort").String()); effort != "" {
 		return effort
 	}
-	if effort := normalizeOpenAIWireReasoningEffort(gjson.GetBytes(body, "output_config.effort").String()); effort != "" {
+	if effort := normalizeOpenAIReasoningEffort(gjson.GetBytes(body, "output_config.effort").String()); effort != "" {
 		return effort
 	}
 	return ""
@@ -260,7 +289,7 @@ func ensureResponsesDefaultsWithTier(body []byte, reqServiceTierOverride string)
 	}
 	if hasOpenAIReasoningDefaultsHint(result) {
 		if reasoning := gjson.GetBytes(result, "reasoning"); reasoning.Exists() {
-			if effort := normalizeOpenAIWireReasoningEffort(reasoning.Get("effort").String()); effort != "" {
+			if effort := normalizeOpenAIReasoningEffort(reasoning.Get("effort").String()); effort != "" {
 				if modified, err := sjson.SetBytes(result, "reasoning.effort", effort); err == nil {
 					result = modified
 				}

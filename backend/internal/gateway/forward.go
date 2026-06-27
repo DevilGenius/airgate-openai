@@ -168,7 +168,7 @@ func (g *OpenAIGateway) forwardOAuthCompact(ctx context.Context, req *sdk.Forwar
 	logger := sdk.LoggerFromContext(ctx)
 	session := resolveOpenAISession(req.Headers, req.Body, account.ID)
 	updateSessionStateFromRequest(session, account.ID)
-	upstreamBody := normalizePromptCacheKeyForUpstream(req.Body)
+	upstreamBody := normalizePromptCacheKeyForUpstream(applyOpenAIWireReasoningEffort(req.Body))
 
 	targetURL := strings.TrimRight(ChatGPTSSEURL, "/") + "/compact"
 	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(upstreamBody))
@@ -574,6 +574,7 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 	logger := sdk.LoggerFromContext(ctx)
 
 	if !isImagesRequest(reqPath) {
+		body = applyOpenAIWireReasoningEffort(body)
 		body = normalizePromptCacheKeyForUpstream(body)
 	}
 
