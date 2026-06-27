@@ -13,7 +13,7 @@ import (
 // ──────────────────────────────────────────────────────
 
 // thinkingBudgetToReasoningEffort 将 thinking budget_tokens 映射为 reasoning_effort
-// 返回值为上游 Codex Responses 接受的 effort 等级（none/low/medium/high/xhigh）
+// 返回值为上游 Codex Responses 接受的 effort 等级（none/low/medium/high/xhigh/max/ultra）
 //   - budget < 0  : 返回 "" 表示未指定，调用方应使用兜底策略
 //   - budget == 0 : 客户端显式禁用思考 → "none"
 //   - 其余按预算大小档位映射
@@ -35,7 +35,7 @@ func thinkingBudgetToReasoningEffort(budget int64) string {
 }
 
 // normalizeReasoningEffort 把客户端传入的 effort 字符串归一化到合法集合
-// 合法返回：none / low / medium / high / xhigh
+// 合法返回：none / low / medium / high / xhigh / max / ultra
 // 无法识别返回 ""，由调用方走兜底逻辑
 func normalizeReasoningEffort(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
@@ -47,7 +47,13 @@ func normalizeReasoningEffort(raw string) string {
 		return "medium"
 	case "high":
 		return "high"
-	case "xhigh", "very_high", "veryhigh", "max", "maximum", "ultra":
+	case "max":
+		return "max"
+	case "maximum":
+		return "max"
+	case "ultra":
+		return "ultra"
+	case "xhigh", "very_high", "veryhigh":
 		return "xhigh"
 	default:
 		return ""
@@ -220,6 +226,84 @@ func isAnthropicToolSearchType(toolType string) bool {
 
 func isAnthropicDeferredTool(tool gjson.Result) bool {
 	return tool.Get("defer_loading").Bool() || tool.Get("custom.defer_loading").Bool()
+}
+
+const anthropicCompactPromptScanBytes = 64 * 1024
+
+func isAnthropicCompactSummaryRequest(root gjson.Result) bool {
+	text := strings.ToLower(anthropicLastUserText(root, anthropicCompactPromptScanBytes))
+	if text == "" {
+		return false
+	}
+	if !strings.Contains(text, "critical: respond with text only. do not call any tools.") {
+		return false
+	}
+	if !strings.Contains(text, "an <analysis> block followed by a <summary> block") {
+		return false
+	}
+	return strings.Contains(text, "your task is to create a detailed summary of the conversation") ||
+		strings.Contains(text, "your task is to create a detailed summary of the recent portion") ||
+		strings.Contains(text, "this summary will be placed at the start of a continuing session")
+}
+
+func anthropicLastUserText(root gjson.Result, limit int) string {
+	messages := root.Get("messages")
+	if !messages.IsArray() {
+		return ""
+	}
+	items := messages.Array()
+	for i := len(items) - 1; i >= 0; i-- {
+		msg := items[i]
+		if strings.ToLower(strings.TrimSpace(msg.Get("role").String())) != "user" {
+			continue
+		}
+		if text := strings.TrimSpace(anthropicContentText(msg.Get("content"), limit)); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func anthropicContentText(content gjson.Result, limit int) string {
+	if limit <= 0 {
+		limit = anthropicCompactPromptScanBytes
+	}
+	if content.Type == gjson.String {
+		return limitStringBytes(content.String(), limit)
+	}
+	if !content.IsArray() {
+		return ""
+	}
+	var b strings.Builder
+	for _, block := range content.Array() {
+		if block.Get("type").String() != "text" {
+			continue
+		}
+		text := block.Get("text").String()
+		if text == "" {
+			continue
+		}
+		if b.Len() > 0 && b.Len() < limit {
+			b.WriteByte('\n')
+		}
+		remaining := limit - b.Len()
+		if remaining <= 0 {
+			break
+		}
+		if len(text) > remaining {
+			b.WriteString(text[:remaining])
+			break
+		}
+		b.WriteString(text)
+	}
+	return b.String()
+}
+
+func limitStringBytes(text string, limit int) string {
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	return text[:limit]
 }
 
 const (

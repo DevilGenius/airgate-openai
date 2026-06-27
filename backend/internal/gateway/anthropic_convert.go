@@ -18,6 +18,7 @@ import (
 // mappingEffort: 模型映射注入的 reasoning_effort（优先级最高）
 func convertAnthropicRequestToResponses(rawJSON []byte, modelName, mappingEffort string) []byte {
 	root := gjson.ParseBytes(rawJSON)
+	compactSummaryRequest := isAnthropicCompactSummaryRequest(root)
 	template := `{"model":"","instructions":"","input":[]}`
 	template, _ = sjson.Set(template, "model", modelName)
 
@@ -196,7 +197,7 @@ func convertAnthropicRequestToResponses(rawJSON []byte, modelName, mappingEffort
 	if tc := root.Get("tool_choice"); tc.Exists() && tc.IsObject() && strings.TrimSpace(tc.Get("type").String()) == "tool" {
 		forcedToolChoiceName = tc.Get("name").String()
 	}
-	if toolsResult.IsArray() {
+	if toolsResult.IsArray() && !compactSummaryRequest {
 		template, _ = sjson.SetRaw(template, "tools", `[]`)
 
 		var names []string
@@ -260,7 +261,7 @@ func convertAnthropicRequestToResponses(rawJSON []byte, modelName, mappingEffort
 	}
 
 	// ─── tool_choice 转换 ───
-	if tc := root.Get("tool_choice"); tc.Exists() && tc.IsObject() {
+	if tc := root.Get("tool_choice"); tc.Exists() && tc.IsObject() && !compactSummaryRequest {
 		tcType := strings.TrimSpace(tc.Get("type").String())
 		switch tcType {
 		case "auto":
@@ -298,7 +299,7 @@ func convertAnthropicRequestToResponses(rawJSON []byte, modelName, mappingEffort
 		default:
 			template, _ = sjson.Set(template, "tool_choice", "auto")
 		}
-	} else if len(convertedToolNames) > 0 || hasConvertedWebSearchTool {
+	} else if !compactSummaryRequest && (len(convertedToolNames) > 0 || hasConvertedWebSearchTool) {
 		template, _ = sjson.Set(template, "tool_choice", "auto")
 	}
 
@@ -318,6 +319,11 @@ func convertAnthropicRequestToResponses(rawJSON []byte, modelName, mappingEffort
 			reasoningEffort = "none"
 			clientEffortSet = true
 		}
+	}
+
+	if compactSummaryRequest && !clientEffortSet {
+		reasoningEffort = "none"
+		clientEffortSet = true
 	}
 
 	if !clientEffortSet {
@@ -364,6 +370,12 @@ func convertAnthropicRequestToResponses(rawJSON []byte, modelName, mappingEffort
 	template, _ = sjson.Set(template, "store", false)
 	template, _ = sjson.Set(template, "include", []string{"reasoning.encrypted_content"})
 	template, _ = sjson.Set(template, "text.verbosity", "medium") // 输出简练度（对齐 Codex CLI 默认值）
+
+	if compactSummaryRequest {
+		template, _ = sjson.Delete(template, "tools")
+		template, _ = sjson.Delete(template, "tool_choice")
+		template, _ = sjson.Delete(template, "parallel_tool_calls")
+	}
 
 	// 注意：上游 Codex 风格 Responses 代理不接受 max_output_tokens 字段（会 400 Unsupported parameter），
 	// Anthropic 的 max_tokens 在此被静默丢弃。如果以后切到原生 OpenAI Responses API，再恢复此映射。

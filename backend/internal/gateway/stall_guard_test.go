@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"io"
+	"sync"
 	"testing"
 	"time"
 )
@@ -36,6 +37,23 @@ func (r *tickReader) Read(p []byte) (int, error) {
 
 func (r *tickReader) Close() error { return nil }
 
+type closeOnlyReader struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (r *closeOnlyReader) Read(_ []byte) (int, error) {
+	<-r.closed
+	return 0, io.ErrClosedPipe
+}
+
+func (r *closeOnlyReader) Close() error {
+	r.once.Do(func() {
+		close(r.closed)
+	})
+	return nil
+}
+
 func TestStallGuardBody_CancelsOnIdle(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -52,6 +70,34 @@ func TestStallGuardBody_CancelsOnIdle(t *testing.T) {
 	case <-ctx.Done():
 	case <-time.After(2 * time.Second):
 		t.Fatal("stall guard did not cancel an idle stream")
+	}
+}
+
+func TestStallGuardBody_ClosesIdleReader(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	reader := &closeOnlyReader{closed: make(chan struct{})}
+	guard := newStallGuardBody(reader, 50*time.Millisecond, cancel)
+	defer func() { _ = guard.Close() }()
+
+	done := make(chan error, 1)
+	go func() {
+		buf := make([]byte, 16)
+		_, err := guard.Read(buf)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected read to return an error after idle close")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("stall guard did not close an idle reader")
+	}
+	if ctx.Err() == nil {
+		t.Fatal("stall guard did not cancel context on idle")
 	}
 }
 

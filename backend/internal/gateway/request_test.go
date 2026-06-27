@@ -465,8 +465,8 @@ func TestEnsureResponsesDefaultsNormalizesMaxReasoningEffort(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.5","input":"hi","reasoning_effort":"max"}`)
 	result := ensureResponsesDefaultsWithTier(body, "")
 
-	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "xhigh" {
-		t.Fatalf("reasoning.effort = %q, want xhigh; body=%s", got, result)
+	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "max" {
+		t.Fatalf("reasoning.effort = %q, want max; body=%s", got, result)
 	}
 }
 
@@ -474,8 +474,8 @@ func TestEnsureResponsesDefaultsNormalizesExistingMaxReasoningEffort(t *testing.
 	body := []byte(`{"model":"gpt-5.5","input":"hi","reasoning":{"effort":"maximum"}}`)
 	result := ensureResponsesDefaultsWithTier(body, "")
 
-	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "xhigh" {
-		t.Fatalf("reasoning.effort = %q, want xhigh; body=%s", got, result)
+	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "max" {
+		t.Fatalf("reasoning.effort = %q, want max; body=%s", got, result)
 	}
 }
 
@@ -483,8 +483,8 @@ func TestEnsureResponsesDefaultsUsesOutputConfigMaxEffort(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.5","input":"hi","output_config":{"effort":"max"}}`)
 	result := ensureResponsesDefaultsWithTier(body, "")
 
-	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "xhigh" {
-		t.Fatalf("reasoning.effort = %q, want xhigh; body=%s", got, result)
+	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "max" {
+		t.Fatalf("reasoning.effort = %q, want max; body=%s", got, result)
 	}
 	if gjson.GetBytes(result, "output_config").Exists() {
 		t.Fatalf("output_config should be stripped from upstream body: %s", result)
@@ -506,8 +506,8 @@ func TestOpenAIReasoningHintMatchesSpacedKeys(t *testing.T) {
 	if !hasOpenAIReasoningDefaultsHint(body) {
 		t.Fatal("expected reasoning defaults hint")
 	}
-	if got := openAIReasoningEffortFromRequest(body); got != "xhigh" {
-		t.Fatalf("openAIReasoningEffortFromRequest = %q, want xhigh", got)
+	if got := openAIReasoningEffortFromRequest(body); got != "max" {
+		t.Fatalf("openAIReasoningEffortFromRequest = %q, want max", got)
 	}
 }
 
@@ -537,13 +537,13 @@ func TestNormalizeOpenAIWireReasoningEffort_AllAliases(t *testing.T) {
 		{"medium", "medium"},
 		{"high", "high"},
 
-		// xhigh 精确别名 — Phase 1 精确命中
+		// xhigh / max 精确值和别名 — Phase 1 精确命中
 		{"xhigh", "xhigh"},
 		{"extrahigh", "xhigh"},
 		{"veryhigh", "xhigh"},
-		{"max", "xhigh"},
-		{"maximum", "xhigh"},
-		{"ultra", "xhigh"},
+		{"max", "max"},
+		{"maximum", "max"},
+		{"ultra", "ultra"},
 
 		// 禁用思考别名 — Phase 1 精确命中
 		{"minimal", "none"},
@@ -559,12 +559,12 @@ func TestNormalizeOpenAIWireReasoningEffort_AllAliases(t *testing.T) {
 		{"High", "high"},
 		{"Xhigh", "xhigh"},
 		{"XHIGH", "xhigh"},
-		{"Max", "xhigh"},
-		{"MAX", "xhigh"},
-		{"Maximum", "xhigh"},
+		{"Max", "max"},
+		{"MAX", "max"},
+		{"Maximum", "max"},
 		{"ExtraHigh", "xhigh"},
 		{"VeryHigh", "xhigh"},
-		{"Ultra", "xhigh"},
+		{"Ultra", "ultra"},
 		{"Minimal", "none"},
 		{"Min", "none"},
 		{"Off", "none"},
@@ -583,7 +583,7 @@ func TestNormalizeOpenAIWireReasoningEffort_AllAliases(t *testing.T) {
 		// 前后空白
 		{"  none  ", "none"},
 		{"  high\t", "high"},
-		{"\tmax\n", "xhigh"},
+		{"\tmax\n", "max"},
 
 		// 不可识别 — 原样返回 trimmed
 		{"unknown", "unknown"},
@@ -839,8 +839,8 @@ func TestOpenAIReasoningEffortFromRequest_AllPaths(t *testing.T) {
 	})
 	t.Run("output_config.effort path", func(t *testing.T) {
 		body := []byte(`{"output_config":{"effort":"max"}}`)
-		if got := openAIReasoningEffortFromRequest(body); got != "xhigh" {
-			t.Fatalf("got %q, want xhigh", got)
+		if got := openAIReasoningEffortFromRequest(body); got != "max" {
+			t.Fatalf("got %q, want max", got)
 		}
 	})
 	t.Run("no reasoning at all", func(t *testing.T) {
@@ -857,9 +857,9 @@ func TestOpenAIReasoningEffortFromRequest_NormalizesAliases(t *testing.T) {
 		body []byte
 		want string
 	}{
-		{"max → xhigh", []byte(`{"reasoning_effort":"max"}`), "xhigh"},
-		{"maximum → xhigh", []byte(`{"reasoning_effort":"maximum"}`), "xhigh"},
-		{"ultra → xhigh", []byte(`{"reasoning_effort":"ultra"}`), "xhigh"},
+		{"max → max", []byte(`{"reasoning_effort":"max"}`), "max"},
+		{"maximum → max", []byte(`{"reasoning_effort":"maximum"}`), "max"},
+		{"ultra → ultra", []byte(`{"reasoning_effort":"ultra"}`), "ultra"},
 		{"min → none", []byte(`{"reasoning":{"effort":"min"}}`), "none"},
 		{"off → none", []byte(`{"reasoning":{"effort":"off"}}`), "none"},
 		{"disabled → none", []byte(`{"output_config":{"effort":"disabled"}}`), "none"},
@@ -1048,8 +1048,8 @@ func TestWrapAsResponsesAPIUsesOutputConfigMaxEffort(t *testing.T) {
 		t.Fatalf("wrapAsResponsesAPI: %v", err)
 	}
 
-	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "xhigh" {
-		t.Fatalf("reasoning.effort = %q, want xhigh; body=%s", got, result)
+	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "max" {
+		t.Fatalf("reasoning.effort = %q, want max; body=%s", got, result)
 	}
 	if gjson.GetBytes(result, "output_config").Exists() {
 		t.Fatalf("output_config should not be forwarded: %s", result)

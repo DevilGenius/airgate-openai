@@ -92,11 +92,21 @@ func (g *OpenAIGateway) forwardAnthropicMessage(ctx context.Context, req *sdk.Fo
 			Duration: time.Since(start),
 		}, nil
 	}
-	body, _ = sjson.SetBytes(body, "model", modelName)
 
 	// 4. 一步直转为 Responses API JSON
 	// 注: Anthropic 的 cache_control 在转换为 Responses API 后不再适用，
 	// Responses API 使用 session_id + include 机制实现缓存，无需预处理断点
+	compactSummaryRequest := isAnthropicCompactSummaryRequest(gjson.ParseBytes(body))
+	if compactSummaryRequest {
+		if fallbackModel := strings.TrimSpace(responsesCompressionFallbackModel()); fallbackModel != "" && !mappedModelIDsEqual(modelName, fallbackModel) {
+			logger.Warn("anthropic_compact_summary_compression_model",
+				"from_model", modelName,
+				"fallback_model", fallbackModel,
+			)
+			modelName = fallbackModel
+		}
+	}
+	body, _ = sjson.SetBytes(body, "model", modelName)
 	fullResponsesBody := convertAnthropicRequestToResponses(body, modelName, mappingEffort)
 	responsesBody := fullResponsesBody
 	requestMode := "full_replay"
@@ -131,6 +141,7 @@ func (g *OpenAIGateway) forwardAnthropicMessage(ctx context.Context, req *sdk.Fo
 		"client_thinking_type", gjson.GetBytes(body, "thinking.type").String(),
 		"client_thinking_budget", gjson.GetBytes(body, "thinking.budget_tokens").Int(),
 		"client_max_tokens", gjson.GetBytes(body, "max_tokens").Int(),
+		"compact_summary", compactSummaryRequest,
 		"verbosity", gjson.GetBytes(responsesBody, "text.verbosity").String(),
 		"dispatch_rule_id", req.DispatchPlan.RuleID,
 		"request_mode", requestMode,
@@ -357,7 +368,7 @@ func (g *OpenAIGateway) forwardAnthropicResponses(
 		if turnState := decodeTurnStateHeader(resp.Header); turnState != "" {
 			updateSessionStateTurnState(session.SessionKey, turnState)
 		}
-		outcome, err := translateResponsesSSEToAnthropicSSE(ctx, resp, w, originalModel, mappedModel, req.Body, requestServiceTier, defaultServiceTier, start, session)
+		outcome, err := translateResponsesSSEToAnthropicSSE(ctx, resp, w, originalModel, mappedModel, req.Body, requestServiceTier, defaultServiceTier, start, g.streamIdleTimeout(), session)
 		setUsageReasoningEffort(outcome.Usage, resolvedEffort)
 		return outcome, nil, err
 	}

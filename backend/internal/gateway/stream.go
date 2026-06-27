@@ -45,6 +45,9 @@ type stallGuardBody struct {
 	mu      sync.Mutex
 	timer   *time.Timer
 	stopped bool
+
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func newStallGuardBody(rc io.ReadCloser, idle time.Duration, cancel context.CancelFunc) io.ReadCloser {
@@ -52,8 +55,21 @@ func newStallGuardBody(rc io.ReadCloser, idle time.Duration, cancel context.Canc
 		return rc
 	}
 	g := &stallGuardBody{rc: rc, cancel: cancel, idle: idle}
-	g.timer = time.AfterFunc(idle, cancel)
+	g.timer = time.AfterFunc(idle, g.timeout)
 	return g
+}
+
+func (g *stallGuardBody) timeout() {
+	g.mu.Lock()
+	if g.stopped {
+		g.mu.Unlock()
+		return
+	}
+	g.stopped = true
+	g.mu.Unlock()
+
+	g.cancel()
+	_ = g.closeUnderlying()
 }
 
 func (g *stallGuardBody) Read(p []byte) (int, error) {
@@ -68,12 +84,19 @@ func (g *stallGuardBody) Read(p []byte) (int, error) {
 	return n, err
 }
 
+func (g *stallGuardBody) closeUnderlying() error {
+	g.closeOnce.Do(func() {
+		g.closeErr = g.rc.Close()
+	})
+	return g.closeErr
+}
+
 func (g *stallGuardBody) Close() error {
 	g.mu.Lock()
 	g.stopped = true
 	g.mu.Unlock()
 	g.timer.Stop()
-	return g.rc.Close()
+	return g.closeUnderlying()
 }
 
 // handleStreamResponse 处理 SSE 流式响应。调用者保证 resp.StatusCode 是 2xx

@@ -80,7 +80,13 @@ func normalizeOpenAIWireReasoningEffort(effort string) string {
 		return "medium"
 	case "high":
 		return "high"
-	case "xhigh", "extrahigh", "veryhigh", "max", "maximum", "ultra":
+	case "max":
+		return "max"
+	case "maximum":
+		return "max"
+	case "ultra":
+		return "ultra"
+	case "xhigh", "extrahigh", "veryhigh":
 		return "xhigh"
 	}
 
@@ -100,7 +106,13 @@ func normalizeOpenAIWireReasoningEffort(effort string) string {
 		return "medium"
 	case "high":
 		return "high"
-	case "xhigh", "extrahigh", "veryhigh", "max", "maximum", "ultra":
+	case "max":
+		return "max"
+	case "maximum":
+		return "max"
+	case "ultra":
+		return "ultra"
+	case "xhigh", "extrahigh", "veryhigh":
 		return "xhigh"
 	default:
 		return trimmed

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -714,6 +715,7 @@ func translateResponsesSSEToAnthropicSSE(
 	requestServiceTier string,
 	defaultServiceTier string,
 	start time.Time,
+	compactEventIdleTimeout time.Duration,
 	session openAISessionResolution,
 ) (sdk.ForwardOutcome, error) {
 	setAnthropicStyleResponseHeaders(w)
@@ -727,6 +729,22 @@ func translateResponsesSSEToAnthropicSSE(
 	state := &anthropicStreamState{}
 	// billingModel 用于 Core 计费，优先使用映射后的 GPT 模型名
 	billingModel := mappedModel
+	compactSummaryRequest := isAnthropicCompactSummaryRequest(gjson.ParseBytes(originalRequest))
+	var compactIdleTimedOut atomic.Bool
+	var compactIdleTimer *time.Timer
+	if compactSummaryRequest && compactEventIdleTimeout > 0 {
+		compactIdleTimer = time.AfterFunc(compactEventIdleTimeout, func() {
+			compactIdleTimedOut.Store(true)
+			slog.Warn("anthropic_compact_sse_idle_timeout",
+				"timeout_ms", compactEventIdleTimeout.Milliseconds(),
+				"model", model,
+				"mapped_model", mappedModel,
+				"session", session.SessionKey,
+			)
+			_ = resp.Body.Close()
+		})
+		defer compactIdleTimer.Stop()
+	}
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), upstreamSSEMaxLineBytes)
@@ -755,6 +773,9 @@ func translateResponsesSSEToAnthropicSSE(
 
 		// 记录结构性事件
 		if data, ok := extractSSEData(string(line)); ok && data != "" && data != "[DONE]" {
+			if compactIdleTimer != nil && !compactIdleTimedOut.Load() {
+				compactIdleTimer.Reset(compactEventIdleTimeout)
+			}
 			eventType := gjson.Get(data, "type").String()
 			if eventType != "response.output_text.delta" &&
 				eventType != "response.reasoning_summary_text.delta" &&
@@ -853,7 +874,9 @@ func translateResponsesSSEToAnthropicSSE(
 	}
 
 done:
-	if err := scanner.Err(); err != nil && streamErr == nil {
+	if compactIdleTimedOut.Load() {
+		streamErr = fmt.Errorf("compact summary upstream SSE idle timeout after %s", compactEventIdleTimeout)
+	} else if err := scanner.Err(); err != nil && streamErr == nil {
 		streamErr = fmt.Errorf("读取上游 SSE 失败: %w", err)
 	}
 	if streamErr == nil && !terminalEventReceived {

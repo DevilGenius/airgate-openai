@@ -63,6 +63,87 @@ func TestConvertAnthropicRequestToResponsesUsesOutputEffortWhenThinkingAdaptive(
 	}
 }
 
+func TestConvertAnthropicRequestToResponsesPreservesOutputMaxEffort(t *testing.T) {
+	tests := []struct {
+		inputEffort string
+		wantEffort  string
+	}{
+		{inputEffort: "max", wantEffort: "max"},
+		{inputEffort: "maximum", wantEffort: "max"},
+		{inputEffort: "ultra", wantEffort: "ultra"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.inputEffort, func(t *testing.T) {
+			body := []byte(fmt.Sprintf(`{"model":"claude-opus-4-8","max_tokens":8,"thinking":{"type":"adaptive"},"output_config":{"effort":%q},"messages":[{"role":"user","content":"Review this."}]}`, tc.inputEffort))
+
+			got := convertAnthropicRequestToResponses(body, "gpt-5.5", "medium")
+			if effort := gjson.GetBytes(got, "reasoning.effort").String(); effort != tc.wantEffort {
+				t.Fatalf("reasoning effort = %q, want %q; body=%s", effort, tc.wantEffort, got)
+			}
+		})
+	}
+}
+
+func TestConvertAnthropicRequestToResponsesCompactSummaryDisablesTools(t *testing.T) {
+	compactPrompt := `CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.
+
+- Do NOT use Read, Bash, Grep, Glob, Edit, Write, or ANY other tool.
+- Your entire response must be plain text: an <analysis> block followed by a <summary> block.
+
+Your task is to create a detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.`
+	body := []byte(fmt.Sprintf(`{"model":"claude-opus-4-8","max_tokens":64000,"thinking":{"type":"adaptive"},"output_config":{"effort":"xhigh"},"messages":[{"role":"user","content":"normal work"},{"role":"user","content":[{"type":"text","text":%q}]}],"tools":[{"name":"Read","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}}}},{"name":"Grep","input_schema":{"type":"object","properties":{"pattern":{"type":"string"}}}}],"tool_choice":{"type":"auto","disable_parallel_tool_use":true}}`, compactPrompt))
+
+	got := convertAnthropicRequestToResponses(body, "gpt-5.5", "xhigh")
+	if gjson.GetBytes(got, "tools").Exists() {
+		t.Fatalf("compact summary request should not expose tools: %s", got)
+	}
+	if gjson.GetBytes(got, "tool_choice").Exists() {
+		t.Fatalf("compact summary request should not expose tool_choice: %s", got)
+	}
+	if gjson.GetBytes(got, "parallel_tool_calls").Exists() {
+		t.Fatalf("compact summary request should not expose parallel_tool_calls: %s", got)
+	}
+	if effort := gjson.GetBytes(got, "reasoning.effort").String(); effort != "none" {
+		t.Fatalf("compact summary reasoning effort = %q, want none; body=%s", effort, got)
+	}
+	if text := gjson.GetBytes(got, "input.1.content.0.text").String(); !strings.Contains(text, "Your task is to create a detailed summary") {
+		t.Fatalf("compact prompt was not preserved in input: %s", got)
+	}
+}
+
+func TestConvertAnthropicRequestToResponsesCompactSummaryForcesNoneEffort(t *testing.T) {
+	compactPrompt := `CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.
+
+- Do NOT use Read, Bash, Grep, Glob, Edit, Write, or ANY other tool.
+- Your entire response must be plain text: an <analysis> block followed by a <summary> block.
+
+Your task is to create a detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.`
+	tests := []struct {
+		inputEffort string
+		wantEffort  string
+	}{
+		{inputEffort: "max", wantEffort: "none"},
+		{inputEffort: "maximum", wantEffort: "none"},
+		{inputEffort: "ultra", wantEffort: "none"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.inputEffort, func(t *testing.T) {
+			body := []byte(fmt.Sprintf(`{"model":"claude-opus-4-8","max_tokens":64000,"thinking":{"type":"adaptive"},"output_config":{"effort":%q},"messages":[{"role":"user","content":[{"type":"text","text":%q}]}],"tools":[{"name":"Read","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}}}}],"tool_choice":{"type":"auto"}}`, tc.inputEffort, compactPrompt))
+
+			got := convertAnthropicRequestToResponses(body, "gpt-5.5", "medium")
+			if gjson.GetBytes(got, "tools").Exists() {
+				t.Fatalf("compact summary request should not expose tools: %s", got)
+			}
+			if gjson.GetBytes(got, "tool_choice").Exists() {
+				t.Fatalf("compact summary request should not expose tool_choice: %s", got)
+			}
+			if effort := gjson.GetBytes(got, "reasoning.effort").String(); effort != tc.wantEffort {
+				t.Fatalf("compact summary effort = %q, want %q; body=%s", effort, tc.wantEffort, got)
+			}
+		})
+	}
+}
+
 func TestConvertAnthropicRequestToResponsesToolResultArrayOutputIsString(t *testing.T) {
 	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":8,"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"toolu_read","name":"Read","input":{"file_path":"a.go"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_read","content":[{"type":"text","text":"alpha"},{"type":"text","text":"beta"}]}]}]}`)
 
@@ -373,6 +454,52 @@ func TestForwardAnthropicMessageNonStreamReturnsBodyForGRPC(t *testing.T) {
 	}
 }
 
+func TestForwardAnthropicMessageCompactSummaryUsesCompressionFallbackModel(t *testing.T) {
+	t.Setenv("AIRGATE_MODEL_RESPONSES_COMPRESSION_FALLBACK", "gpt-long")
+
+	var upstreamBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.output_text.delta","delta":"<analysis></analysis><summary>ok</summary>"}`+"\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.completed","response":{"id":"resp_compact","model":"gpt-long","usage":{"input_tokens":3,"output_tokens":1}}}`+"\n\n")
+	}))
+	defer ts.Close()
+
+	compactPrompt := `CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.
+
+- Do NOT use Read, Bash, Grep, Glob, Edit, Write, or ANY other tool.
+- Your entire response must be plain text: an <analysis> block followed by a <summary> block.
+
+Your task is to create a detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.`
+	req := &sdk.ForwardRequest{
+		Account: &sdk.Account{ID: time.Now().UnixNano(), Credentials: map[string]string{
+			"api_key":  "test-key",
+			"base_url": ts.URL,
+		}},
+		Body:         []byte(fmt.Sprintf(`{"model":"claude-opus-4-8","max_tokens":64000,"thinking":{"type":"adaptive"},"output_config":{"effort":"xhigh"},"messages":[{"role":"user","content":[{"type":"text","text":%q}]}],"tools":[{"name":"Read","input_schema":{"type":"object"}}]}`, compactPrompt)),
+		DispatchPlan: sdk.DispatchPlan{SchedulingModel: "gpt-5.5", WireModel: "gpt-5.5", RuleID: "anthropic-opus"},
+	}
+
+	gateway := &OpenAIGateway{transportPool: NewTransportPool()}
+	outcome, err := gateway.forwardAnthropicMessage(context.Background(), req)
+	if err != nil {
+		t.Fatalf("forwardAnthropicMessage err: %v", err)
+	}
+	if outcome.Kind != sdk.OutcomeSuccess {
+		t.Fatalf("outcome kind = %v, want success; reason=%s", outcome.Kind, outcome.Reason)
+	}
+	if model := gjson.GetBytes(upstreamBody, "model").String(); model != "gpt-long" {
+		t.Fatalf("upstream compact model = %q, want gpt-long; body=%s", model, upstreamBody)
+	}
+	if effort := gjson.GetBytes(upstreamBody, "reasoning.effort").String(); effort != "none" {
+		t.Fatalf("compact reasoning effort = %q, want none; body=%s", effort, upstreamBody)
+	}
+	if gjson.GetBytes(upstreamBody, "tools").Exists() {
+		t.Fatalf("compact summary should not expose tools upstream: %s", upstreamBody)
+	}
+}
+
 func TestExplicitAnthropicRequestServiceTier(t *testing.T) {
 	req := &sdk.ForwardRequest{
 		Headers: http.Header{"X-Airgate-Service-Tier": []string{"priority"}},
@@ -462,6 +589,7 @@ func TestTranslateResponsesSSERecordsDefaultPriority(t *testing.T) {
 		"",
 		"priority",
 		time.Now(),
+		0,
 		openAISessionResolution{},
 	)
 	if err != nil {
@@ -499,6 +627,7 @@ func TestTranslateResponsesSSEClosesOpenToolBlocksOnAbruptEOF(t *testing.T) {
 		"",
 		"",
 		time.Now(),
+		0,
 		openAISessionResolution{},
 	)
 	if err == nil {
@@ -519,6 +648,62 @@ func TestTranslateResponsesSSEClosesOpenToolBlocksOnAbruptEOF(t *testing.T) {
 	}
 	if strings.Contains(body, "event: message_stop") {
 		t.Fatalf("aborted stream must not emit message_stop, got: %s", body)
+	}
+}
+
+func TestTranslateResponsesSSECompactSummaryTimesOutWithoutEvents(t *testing.T) {
+	compactPrompt := `CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.
+
+- Do NOT use Read, Bash, Grep, Glob, Edit, Write, or ANY other tool.
+- Your entire response must be plain text: an <analysis> block followed by a <summary> block.
+
+Your task is to create a detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.`
+	originalRequest := []byte(fmt.Sprintf(`{"model":"claude-opus-4-8","stream":true,"max_tokens":64000,"thinking":{"type":"adaptive"},"output_config":{"effort":"xhigh"},"messages":[{"role":"user","content":[{"type":"text","text":%q}]}]}`, compactPrompt))
+	pr, pw := io.Pipe()
+	defer func() { _ = pw.Close() }()
+
+	go func() {
+		sse := strings.Join([]string{
+			`data: {"type":"response.created","response":{"id":"resp_compact_idle","model":"gpt-5.5"}}`,
+			`data: {"type":"response.in_progress","response":{"id":"resp_compact_idle","model":"gpt-5.5"}}`,
+			`data: {"type":"response.output_item.added","output_index":0,"item":{"id":"msg_compact_idle","type":"message","status":"in_progress","content":[],"role":"assistant"}}`,
+			`data: {"type":"response.content_part.added","content_index":0,"item_id":"msg_compact_idle","output_index":0,"part":{"type":"output_text","text":""}}`,
+			"",
+		}, "\n")
+		_, _ = pw.Write([]byte(sse))
+	}()
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       pr,
+	}
+	w := httptest.NewRecorder()
+
+	outcome, err := translateResponsesSSEToAnthropicSSE(
+		context.Background(),
+		resp,
+		w,
+		"claude-opus-4-8",
+		"gpt-5.5",
+		originalRequest,
+		"",
+		"",
+		time.Now(),
+		50*time.Millisecond,
+		openAISessionResolution{},
+	)
+	if err == nil {
+		t.Fatalf("expected compact idle timeout error")
+	}
+	if !strings.Contains(err.Error(), "compact summary upstream SSE idle timeout") {
+		t.Fatalf("error = %v, want compact idle timeout", err)
+	}
+	if outcome.Kind != sdk.OutcomeStreamAborted {
+		t.Fatalf("outcome kind = %v, want stream aborted", outcome.Kind)
+	}
+	if body := w.Body.String(); !strings.Contains(body, "event: error") {
+		t.Fatalf("stream should emit error after compact idle timeout, got: %s", body)
 	}
 }
 
@@ -841,6 +1026,7 @@ func TestTranslateResponsesSSEStoresResponseIDOnlyAfterCompletion(t *testing.T) 
 		"",
 		"",
 		time.Now(),
+		0,
 		openAISessionResolution{SessionKey: sessionKey, AccountID: 42},
 	)
 	if err == nil {
@@ -872,6 +1058,7 @@ func TestTranslateResponsesSSEStoresResponseIDOnlyAfterCompletion(t *testing.T) 
 		"",
 		"",
 		time.Now(),
+		0,
 		openAISessionResolution{SessionKey: completedKey, AccountID: 42},
 	)
 	if err != nil {
