@@ -121,6 +121,21 @@ func TestClassifyResponsesFailureContinuationAnchor(t *testing.T) {
 	}
 }
 
+func TestClassifyWSErrorEventFunctionCallOutputWithoutCall(t *testing.T) {
+	raw := []byte(`{"type":"error","error":{"type":"invalid_request_error","message":"No tool call found for function call output with call_id call_1."}}`)
+
+	failure := classifyWSErrorEvent(raw)
+	if failure == nil {
+		t.Fatalf("expected failure")
+	}
+	if failure.Kind != responsesFailureKindContinuationAnchor {
+		t.Fatalf("kind = %q, want continuation_anchor", failure.Kind)
+	}
+	if failure.Code != "function_call_output_without_call" {
+		t.Fatalf("code = %q, want function_call_output_without_call", failure.Code)
+	}
+}
+
 func TestClassifyResponsesFailureEncryptedContentVerifyFailed(t *testing.T) {
 	raw := []byte(`{"type":"response.failed","response":{"error":{"type":"invalid_request_error","message":"encrypted content verify failed"}}}`)
 	failure := classifyResponsesFailure(raw)

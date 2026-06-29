@@ -156,6 +156,98 @@ func TestApplyContinuationStateDoesNotBackfillWithToolCallContext(t *testing.T) 
 	}
 }
 
+func TestApplyContinuationStateDropsUnmatchedToolOutputWithoutPreviousResponseID(t *testing.T) {
+	reqBody := map[string]any{
+		"input": []any{
+			map[string]any{
+				"type": "message",
+				"role": "user",
+				"content": []any{
+					map[string]any{"type": "input_text", "text": "continue"},
+				},
+			},
+			map[string]any{
+				"type":    "function_call_output",
+				"call_id": "call_missing",
+				"output":  "ok",
+			},
+		},
+	}
+
+	reqBody = applyContinuationState(reqBody, openAISessionResolution{})
+
+	input := reqBody["input"].([]any)
+	if len(input) != 1 {
+		t.Fatalf("input length = %d, want 1: %#v", len(input), input)
+	}
+	if typ := input[0].(map[string]any)["type"]; typ != "message" {
+		t.Fatalf("remaining input type = %v, want message", typ)
+	}
+}
+
+func TestApplyContinuationStatePreservesToolOutputWithPreviousResponseID(t *testing.T) {
+	reqBody := map[string]any{
+		"input": []any{
+			map[string]any{
+				"type":    "function_call_output",
+				"call_id": "call_prev",
+				"output":  "ok",
+			},
+		},
+	}
+
+	reqBody = applyContinuationState(reqBody, openAISessionResolution{PreviousRespID: "resp_prev"})
+
+	if got, _ := reqBody["previous_response_id"].(string); got != "resp_prev" {
+		t.Fatalf("previous_response_id = %q, want resp_prev", got)
+	}
+	input := reqBody["input"].([]any)
+	if len(input) != 1 {
+		t.Fatalf("input length = %d, want 1: %#v", len(input), input)
+	}
+	if typ := input[0].(map[string]any)["type"]; typ != "function_call_output" {
+		t.Fatalf("remaining input type = %v, want function_call_output", typ)
+	}
+}
+
+func TestBuildSimulatedWSRequestDropsUnmatchedChatToolMessage(t *testing.T) {
+	body := []byte(`{"messages":[{"role":"user","content":"hi"},{"role":"tool","tool_call_id":"call_missing","content":"ok"}]}`)
+
+	got, err := buildSimulatedWSRequest(body, "gpt-5.4", openAISessionResolution{})
+	if err != nil {
+		t.Fatalf("buildSimulatedWSRequest: %v", err)
+	}
+
+	count := 0
+	for _, item := range gjson.GetBytes(got, "input").Array() {
+		if item.Get("type").String() == "function_call_output" {
+			count++
+		}
+	}
+	if count != 0 {
+		t.Fatalf("function_call_output count = %d, want 0; body=%s", count, got)
+	}
+	if text := gjson.GetBytes(got, "input.0.content.0.text").String(); text != "hi" {
+		t.Fatalf("remaining user text = %q, want hi; body=%s", text, got)
+	}
+}
+
+func TestBuildSimulatedWSRequestPreservesChatToolMessageWithPreviousResponseID(t *testing.T) {
+	body := []byte(`{"messages":[{"role":"tool","tool_call_id":"call_prev","content":"ok"}]}`)
+
+	got, err := buildSimulatedWSRequest(body, "gpt-5.4", openAISessionResolution{PreviousRespID: "resp_prev"})
+	if err != nil {
+		t.Fatalf("buildSimulatedWSRequest: %v", err)
+	}
+
+	if previous := gjson.GetBytes(got, "previous_response_id").String(); previous != "resp_prev" {
+		t.Fatalf("previous_response_id = %q, want resp_prev; body=%s", previous, got)
+	}
+	if typ := gjson.GetBytes(got, "input.0.type").String(); typ != "function_call_output" {
+		t.Fatalf("input.0.type = %q, want function_call_output; body=%s", typ, got)
+	}
+}
+
 func TestPreviousResponseNotFoundRecoveryBodyDropsSoftAnchor(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.4","previous_response_id":"resp_old","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}`)
 
@@ -234,6 +326,42 @@ func TestPreviousResponseNotFoundRecoveryBodyRejectsEncryptedContent(t *testing.
 
 	if _, ok := previousResponseNotFoundRecoveryBody(body); ok {
 		t.Fatalf("expected recovery to be rejected for encrypted reasoning content")
+	}
+}
+
+func TestFunctionCallOutputRecoveryBodyDropsStalePreviousAndOrphanOutput(t *testing.T) {
+	body := []byte(`{"type":"response.create","model":"gpt-5.4","previous_response_id":"resp_old","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]},{"type":"function_call_output","call_id":"call_missing","output":"ok"}]}`)
+
+	got, ok := functionCallOutputRecoveryBody(body)
+	if !ok {
+		t.Fatalf("expected recovery body")
+	}
+	if gjson.GetBytes(got, "previous_response_id").Exists() {
+		t.Fatalf("previous_response_id was not removed: %s", got)
+	}
+	if count := gjson.GetBytes(got, "input.#").Int(); count != 1 {
+		t.Fatalf("input count = %d, want 1; body=%s", count, got)
+	}
+	if typ := gjson.GetBytes(got, "input.0.type").String(); typ != "message" {
+		t.Fatalf("input.0.type = %q, want message; body=%s", typ, got)
+	}
+}
+
+func TestFunctionCallOutputRecoveryBodyPreservesMatchedOutput(t *testing.T) {
+	body := []byte(`{"type":"response.create","model":"gpt-5.4","previous_response_id":"resp_old","input":[{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{}"},{"type":"function_call_output","call_id":"call_1","output":"ok"}]}`)
+
+	got, ok := functionCallOutputRecoveryBody(body)
+	if !ok {
+		t.Fatalf("expected recovery body")
+	}
+	if gjson.GetBytes(got, "previous_response_id").Exists() {
+		t.Fatalf("previous_response_id was not removed: %s", got)
+	}
+	if count := gjson.GetBytes(got, "input.#").Int(); count != 2 {
+		t.Fatalf("input count = %d, want 2; body=%s", count, got)
+	}
+	if typ := gjson.GetBytes(got, "input.1.type").String(); typ != "function_call_output" {
+		t.Fatalf("input.1.type = %q, want function_call_output; body=%s", typ, got)
 	}
 }
 

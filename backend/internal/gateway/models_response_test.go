@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-
-	"github.com/tidwall/gjson"
 )
 
 func TestEnrichModelsResponse_AddsContextMetadata(t *testing.T) {
@@ -46,31 +44,6 @@ func TestEnrichModelsResponse_AddsContextMetadata(t *testing.T) {
 	m1 := payload.Data[1]
 	if toInt(m1["context_window"]) != 200000 {
 		t.Fatalf("o3 context_window = %v, want 200000", m1["context_window"])
-	}
-}
-
-func TestPreprocessRequestBody_ContextGuardTrimsMessages(t *testing.T) {
-	var b strings.Builder
-	b.WriteString(`{"model":"gpt-4o","messages":[`)
-	for i := 0; i < 120; i++ {
-		if i > 0 {
-			b.WriteString(",")
-		}
-		role := "user"
-		if i == 0 {
-			role = "system"
-		}
-		b.WriteString(`{"role":"` + role + `","content":"` + strings.Repeat("x", 8000) + `"}`)
-	}
-	b.WriteString(`]}`)
-
-	processed := preprocessRequestBody([]byte(b.String()), "gpt-4o", "/v1/chat/completions")
-	msgCount := gjson.GetBytes(processed, "messages.#").Int()
-	if msgCount > int64(contextGuardMaxTailMessages+2) {
-		t.Fatalf("messages count after trim = %d, want <= %d", msgCount, contextGuardMaxTailMessages+2)
-	}
-	if msgCount >= 120 {
-		t.Fatalf("messages were not trimmed, got count=%d", msgCount)
 	}
 }
 

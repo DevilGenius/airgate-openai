@@ -197,16 +197,15 @@ func buildAPIKeyURL(account *sdk.Account, reqPath string) string {
 //  1. model 同步（使用 Core 选出的上游模型）
 //  2. data:image 输入保持原样（对齐 Codex，不在网关内重采样用户图片）
 //  3. 按 Core 委托恢复信号移除失效续链锚点
-//  4. 上下文守卫（/v1/chat/completions 超长 messages 裁剪）
-//  5. input 规范化（/v1/responses 的 string input → list，messages → input 转换）
-//  6. Responses API 强制禁用上游存储（store=false）
+//  4. input 规范化（/v1/responses 的 string input → list，messages → input 转换）
+//  5. Responses API 强制禁用上游存储（store=false）
 func preprocessRequestBody(body []byte, model, reqPath string, headers ...http.Header) []byte {
 	if len(body) == 0 {
 		return body
 	}
 
 	// Images API 请求体只有 prompt/n/size/quality/model 等字段，后续的
-	// previous_response_id / context_guard / normalizeResponsesInput 对它都应
+	// previous_response_id / normalizeResponsesInput 对它都应
 	// 无作用。/images/edits 更是可能是 multipart/form-data（非 JSON），
 	// 提前 bypass 避免 sjson 把 multipart body 损坏成畸形 JSON。
 	if isImagesRequest(reqPath) {
@@ -239,8 +238,10 @@ func preprocessRequestBody(body []byte, model, reqPath string, headers ...http.H
 		return result
 	}
 
-	result = applyContextGuard(result, reqPath)
 	result = normalizeResponsesInput(result, reqPath)
+	if isResponsesRequestPath(reqPath) {
+		result = sanitizeUnmatchedFunctionCallOutputs(result, true)
+	}
 	result = forceResponsesStoreFalse(result, reqPath)
 	return result
 }
@@ -627,5 +628,6 @@ func applyContinuationState(reqData map[string]any, session openAISessionResolut
 	if requestNeedsPreviousResponseID(reqData) && strings.TrimSpace(session.PreviousRespID) != "" {
 		reqData["previous_response_id"] = strings.TrimSpace(session.PreviousRespID)
 	}
+	sanitizeUnmatchedFunctionCallOutputsFromMap(reqData, true)
 	return reqData
 }

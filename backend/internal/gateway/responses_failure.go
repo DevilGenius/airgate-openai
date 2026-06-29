@@ -227,6 +227,14 @@ func classifyResponsesError(errType, errCode, msg string) *responsesFailureError
 			Code:               "previous_response_not_found",
 			Message:            msg,
 		}
+	case isFunctionCallOutputWithoutCallError(errType, errCode, msg):
+		return &responsesFailureError{
+			Kind:               responsesFailureKindContinuationAnchor,
+			StatusCode:         http.StatusBadRequest,
+			AnthropicErrorType: "invalid_request_error",
+			Code:               "function_call_output_without_call",
+			Message:            msg,
+		}
 	case isEncryptedContentVerificationError(errType, errCode, msg):
 		return &responsesFailureError{
 			Kind:               responsesFailureKindContinuationAnchor,
@@ -290,6 +298,22 @@ func classifyResponsesError(errType, errCode, msg string) *responsesFailureError
 			Message:            msg,
 		}
 	}
+}
+
+func isFunctionCallOutputWithoutCallError(parts ...string) bool {
+	combined := strings.ToLower(strings.Join(parts, " "))
+	if strings.TrimSpace(combined) == "" {
+		return false
+	}
+	if strings.Contains(combined, "no tool call found for function call output") {
+		return true
+	}
+	return (strings.Contains(combined, "function_call_output") || strings.Contains(combined, "function call output")) &&
+		(strings.Contains(combined, "matching call_id") ||
+			strings.Contains(combined, "matched call_id") ||
+			strings.Contains(combined, "without the matching") ||
+			strings.Contains(combined, "no matching") ||
+			strings.Contains(combined, "not found"))
 }
 
 func isContextTooLargeError(parts ...string) bool {

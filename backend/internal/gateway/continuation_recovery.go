@@ -324,6 +324,17 @@ func isPreviousResponseNotFoundError(err error) bool {
 	return errors.As(err, &failure) && isPreviousResponseNotFoundFailure(failure)
 }
 
+func isFunctionCallOutputWithoutCallFailure(failure *responsesFailureError) bool {
+	return failure != nil &&
+		failure.Kind == responsesFailureKindContinuationAnchor &&
+		strings.TrimSpace(failure.Code) == "function_call_output_without_call"
+}
+
+func isFunctionCallOutputWithoutCallErrorResult(err error) bool {
+	var failure *responsesFailureError
+	return errors.As(err, &failure) && isFunctionCallOutputWithoutCallFailure(failure)
+}
+
 func isContextTooLargeFailure(failure *responsesFailureError) bool {
 	return failure != nil &&
 		failure.Kind == responsesFailureKindClient &&

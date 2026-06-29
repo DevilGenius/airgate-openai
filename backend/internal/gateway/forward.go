@@ -1063,6 +1063,51 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 			}
 		}
 	}
+	if isFunctionCallOutputWithoutCallErrorResult(result.Err) && !streamOutputStarted() {
+		if retryMsg, ok := functionCallOutputRecoveryBody(createMsg); ok {
+			logger.Warn("function_call_output_without_call_recovery_retry",
+				sdk.LogFieldAccountID, account.ID,
+				sdk.LogFieldModel, req.Model,
+				"account_type", "oauth",
+				"session", session.SessionKey,
+			)
+			clearSessionStateResponseID(session.SessionKey)
+			result, err = runAttempt(retryMsg, w, req.Stream, currentModel)
+			if err != nil {
+				logger.Warn("upstream_request_failed",
+					sdk.LogFieldAccountID, account.ID,
+					sdk.LogFieldModel, req.Model,
+					sdk.LogFieldDurationMs, time.Since(start).Milliseconds(),
+					sdk.LogFieldError, err,
+					"phase", "ws_function_call_output_recovery_send",
+				)
+				return transientOutcome(err.Error()), err
+			}
+			if isContextTooLargeErrorResult(result.Err) && !streamOutputStarted() {
+				if fallbackMsg, fallbackModel, ok := responsesCompressionFallbackBody(retryMsg, currentModel); ok {
+					logger.Warn("function_call_output_recovery_context_too_large_compression_retry",
+						sdk.LogFieldAccountID, account.ID,
+						sdk.LogFieldModel, currentModel,
+						"fallback_model", fallbackModel,
+						"account_type", "oauth",
+						"session", session.SessionKey,
+					)
+					currentModel = fallbackModel
+					result, err = runAttempt(fallbackMsg, w, req.Stream, currentModel)
+					if err != nil {
+						logger.Warn("upstream_request_failed",
+							sdk.LogFieldAccountID, account.ID,
+							sdk.LogFieldModel, currentModel,
+							sdk.LogFieldDurationMs, time.Since(start).Milliseconds(),
+							sdk.LogFieldError, err,
+							"phase", "ws_compression_retry_send",
+						)
+						return transientOutcome(err.Error()), err
+					}
+				}
+			}
+		}
+	}
 	if session.SessionKey != "" {
 		if result.ResponseID != "" {
 			updateSessionStateResponseID(session.SessionKey, result.ResponseID, account.ID)
