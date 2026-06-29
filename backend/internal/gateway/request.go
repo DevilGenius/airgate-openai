@@ -239,9 +239,6 @@ func preprocessRequestBody(body []byte, model, reqPath string, headers ...http.H
 	}
 
 	result = normalizeResponsesInput(result, reqPath)
-	if isResponsesRequestPath(reqPath) {
-		result = sanitizeUnmatchedFunctionCallOutputs(result, true)
-	}
 	result = forceResponsesStoreFalse(result, reqPath)
 	return result
 }
@@ -622,12 +619,15 @@ func applyContinuationState(reqData map[string]any, session openAISessionResolut
 		return reqData
 	}
 
-	if _, ok := reqData["previous_response_id"].(string); ok {
-		return reqData
+	if previous, ok := reqData["previous_response_id"].(string); ok {
+		if strings.TrimSpace(previous) != "" {
+			return reqData
+		}
+		delete(reqData, "previous_response_id")
 	}
 	if requestNeedsPreviousResponseID(reqData) && strings.TrimSpace(session.PreviousRespID) != "" {
 		reqData["previous_response_id"] = strings.TrimSpace(session.PreviousRespID)
 	}
-	sanitizeUnmatchedFunctionCallOutputsFromMap(reqData, true)
+	sanitizeUnmatchedToolCallOutputsFromMap(reqData, true)
 	return reqData
 }

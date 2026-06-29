@@ -365,6 +365,19 @@ func outcomeIsPreviousResponseNotFound(outcome sdk.ForwardOutcome) bool {
 	return false
 }
 
+func outcomeIsFunctionCallOutputWithoutCall(outcome sdk.ForwardOutcome) bool {
+	if outcome.Kind != sdk.OutcomeClientError && outcome.Upstream.StatusCode < 400 {
+		return false
+	}
+	if failure := classifyOpenAIErrorBody(outcome.Upstream.Body); isFunctionCallOutputWithoutCallFailure(failure) {
+		return true
+	}
+	if reason := strings.TrimSpace(outcome.Reason); reason != "" {
+		return isFunctionCallOutputWithoutCallFailure(classifyResponsesError("", "", reason))
+	}
+	return false
+}
+
 func outcomeIsContextTooLarge(outcome sdk.ForwardOutcome) bool {
 	if outcome.Kind != sdk.OutcomeClientError && outcome.Upstream.StatusCode < 400 {
 		return false

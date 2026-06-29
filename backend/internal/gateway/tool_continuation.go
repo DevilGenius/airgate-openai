@@ -48,10 +48,27 @@ func isOpenAIToolCallContextItemType(itemType string) bool {
 
 func isOpenAIToolOutputItemType(itemType string) bool {
 	switch strings.TrimSpace(itemType) {
-	case "function_call_output", "tool_search_output", "custom_tool_call_output", "mcp_tool_call_output":
+	case "function_call_output", "local_shell_call_output", "tool_search_output", "custom_tool_call_output", "mcp_tool_call_output":
 		return true
 	default:
 		return false
+	}
+}
+
+func matchingToolCallTypeForOutputType(itemType string) string {
+	switch strings.TrimSpace(itemType) {
+	case "function_call_output":
+		return "function_call"
+	case "custom_tool_call_output":
+		return "custom_tool_call"
+	case "local_shell_call_output":
+		return "local_shell_call"
+	case "tool_search_output":
+		return "tool_search_call"
+	case "mcp_tool_call_output":
+		return "mcp_tool_call"
+	default:
+		return ""
 	}
 }
 
@@ -60,12 +77,12 @@ func requestNeedsPreviousResponseID(reqData map[string]any) bool {
 	return signals.hasToolOutput && !signals.hasToolCallContext
 }
 
-func sanitizeUnmatchedFunctionCallOutputs(body []byte, allowPreviousContext bool) []byte {
+func sanitizeUnmatchedToolCallOutputs(body []byte, allowPreviousContext bool) []byte {
 	var reqData map[string]any
 	if err := json.Unmarshal(body, &reqData); err != nil {
 		return body
 	}
-	if !sanitizeUnmatchedFunctionCallOutputsFromMap(reqData, allowPreviousContext) {
+	if !sanitizeUnmatchedToolCallOutputsFromMap(reqData, allowPreviousContext) {
 		return body
 	}
 	patched, err := json.Marshal(reqData)
@@ -75,7 +92,7 @@ func sanitizeUnmatchedFunctionCallOutputs(body []byte, allowPreviousContext bool
 	return patched
 }
 
-func sanitizeUnmatchedFunctionCallOutputsFromMap(reqData map[string]any, allowPreviousContext bool) bool {
+func sanitizeUnmatchedToolCallOutputsFromMap(reqData map[string]any, allowPreviousContext bool) bool {
 	if reqData == nil {
 		return false
 	}
@@ -87,17 +104,21 @@ func sanitizeUnmatchedFunctionCallOutputsFromMap(reqData map[string]any, allowPr
 		return false
 	}
 
-	callIDs := make(map[string]struct{})
+	callIDsByType := make(map[string]map[string]struct{})
 	for _, item := range input {
 		itemMap, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
-		if strings.TrimSpace(jsonString(itemMap["type"])) != "function_call" {
+		itemType := strings.TrimSpace(jsonString(itemMap["type"]))
+		if !isOpenAIToolCallContextItemType(itemType) {
 			continue
 		}
 		if callID := strings.TrimSpace(jsonString(itemMap["call_id"])); callID != "" {
-			callIDs[callID] = struct{}{}
+			if callIDsByType[itemType] == nil {
+				callIDsByType[itemType] = make(map[string]struct{})
+			}
+			callIDsByType[itemType][callID] = struct{}{}
 		}
 	}
 
@@ -109,12 +130,14 @@ func sanitizeUnmatchedFunctionCallOutputsFromMap(reqData map[string]any, allowPr
 			filtered = append(filtered, item)
 			continue
 		}
-		if strings.TrimSpace(jsonString(itemMap["type"])) != "function_call_output" {
+		itemType := strings.TrimSpace(jsonString(itemMap["type"]))
+		callType := matchingToolCallTypeForOutputType(itemType)
+		if callType == "" {
 			filtered = append(filtered, item)
 			continue
 		}
 		callID := strings.TrimSpace(jsonString(itemMap["call_id"]))
-		if _, ok := callIDs[callID]; ok {
+		if _, ok := callIDsByType[callType][callID]; ok {
 			filtered = append(filtered, item)
 			continue
 		}
@@ -138,7 +161,7 @@ func functionCallOutputRecoveryBody(body []byte) ([]byte, bool) {
 		delete(reqData, "previous_response_id")
 		changed = true
 	}
-	if sanitizeUnmatchedFunctionCallOutputsFromMap(reqData, false) {
+	if sanitizeUnmatchedToolCallOutputsFromMap(reqData, false) {
 		changed = true
 	}
 	if !changed || !responsesInputHasRecoverableContext(reqData) {
@@ -161,7 +184,7 @@ func responsesInputHasRecoverableContext(reqData map[string]any) bool {
 		if !ok {
 			return true
 		}
-		if strings.TrimSpace(jsonString(itemMap["type"])) != "function_call_output" {
+		if !isOpenAIToolOutputItemType(strings.TrimSpace(jsonString(itemMap["type"]))) {
 			return true
 		}
 	}
