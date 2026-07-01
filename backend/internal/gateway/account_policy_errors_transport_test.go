@@ -94,6 +94,15 @@ func TestOperationPolicyHelpers(t *testing.T) {
 	if _, denied := enforceOperationPolicies(req, "/responses"); denied {
 		t.Fatal("enabled responses image tool should pass")
 	}
+	req.Headers = http.Header{}
+	outcome, denied = enforceOperationPolicies(req, "/v1/chat/completions")
+	if !denied || gjson.GetBytes(outcome.Upstream.Body, "error.code").String() != "responses_image_generation_disabled" {
+		t.Fatalf("chat path responses image tool denied = %#v denied=%v", outcome, denied)
+	}
+	req.Headers.Set("X-Airgate-Operation-Responses-Image-Generation", "true")
+	if _, denied := enforceOperationPolicies(req, "/v1/chat/completions"); denied {
+		t.Fatal("enabled chat path responses image tool should pass")
+	}
 	req.Body = []byte(`{"tools":[{"type":"web_search"}]}`)
 	req.Headers = http.Header{}
 	if _, denied := enforceOperationPolicies(req, "/v1/responses"); denied {

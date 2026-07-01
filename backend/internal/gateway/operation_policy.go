@@ -18,14 +18,15 @@ func enforceOperationPolicies(req *sdk.ForwardRequest, reqPath string) (sdk.Forw
 		if !operationEnabled(req.Headers, "images.generate") {
 			return operationDeniedOutcome("images_generate_disabled", "当前分组未开启文生图能力"), true
 		}
+		return sdk.ForwardOutcome{}, false
 	case isImagesEditsPath(reqPath):
 		if !operationEnabled(req.Headers, "images.edit") {
 			return operationDeniedOutcome("images_edit_disabled", "当前分组未开启图像编辑能力"), true
 		}
-	case isResponsesRequestPath(reqPath):
-		if hasResponsesImageGenerationTool(req.Body) && !operationEnabled(req.Headers, "responses.image_generation") {
-			return operationDeniedOutcome("responses_image_generation_disabled", "当前分组未开启文本路径图片生成功能"), true
-		}
+		return sdk.ForwardOutcome{}, false
+	}
+	if hasResponsesImageGenerationTool(req.Body) && !operationEnabled(req.Headers, "responses.image_generation") {
+		return operationDeniedOutcome("responses_image_generation_disabled", "当前分组未开启文本路径图片生成功能"), true
 	}
 	return sdk.ForwardOutcome{}, false
 }
