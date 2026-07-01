@@ -319,14 +319,7 @@ func collectAnthropicDiscoveredToolNames(root gjson.Result) map[string]struct{} 
 	}
 	for _, msg := range messages.Array() {
 		content := msg.Get("content")
-		if !content.IsArray() {
-			continue
-		}
-		for _, block := range content.Array() {
-			if block.Get("type").String() == "tool_result" {
-				collectToolReferencesFromContent(block.Get("content"), discovered)
-			}
-		}
+		collectToolReferencesFromContent(content, discovered)
 	}
 	return discovered
 }
@@ -340,6 +333,11 @@ func collectToolReferencesFromContent(content gjson.Result, discovered map[strin
 				}
 				continue
 			}
+			if item.Get("type").String() == "tool_result" {
+				collectToolReferencesFromContent(item.Get("content"), discovered)
+				continue
+			}
+			collectToolReferencesFromContent(item.Get("content"), discovered)
 			collectToolReferencesFromText(item.String(), discovered)
 		}
 		return

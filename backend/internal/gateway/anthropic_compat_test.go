@@ -233,6 +233,18 @@ func TestConvertAnthropicRequestToResponsesIncludesDiscoveredDeferredToolAndSani
 	}
 }
 
+func TestConvertAnthropicRequestToResponsesDiscoversDeferredToolOutsideToolResult(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":8,"messages":[{"role":"user","content":[{"type":"text","text":"use deferred"},{"type":"tool_reference","tool_name":"DeferredReview"}]}],"tools":[{"type":"custom","name":"DeferredReview","defer_loading":true,"input_schema":{"type":"object","properties":{"prompt":{"type":"string"}}}}]}`)
+
+	got := convertAnthropicRequestToResponses(body, "gpt-5.5", "medium")
+	if count := gjson.GetBytes(got, "tools.#").Int(); count != 1 {
+		t.Fatalf("tools count = %d, want discovered deferred tool; body=%s", count, got)
+	}
+	if name := gjson.GetBytes(got, "tools.0.name").String(); name != "DeferredReview" {
+		t.Fatalf("tool name = %q, want DeferredReview; body=%s", name, got)
+	}
+}
+
 func TestCollectToolReferencesFromParsedJSONDepthLimit(t *testing.T) {
 	discovered := map[string]struct{}{}
 	collectToolReferencesFromText(`[{"type":"tool_reference","tool_name":"ShallowTool"}]`, discovered)
