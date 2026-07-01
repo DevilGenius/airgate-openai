@@ -331,6 +331,23 @@ func convertResponsesEventToAnthropic(rawLine []byte, originalRequest []byte, st
 		prefix := closeOpenTextBlock(state)
 		prefix += closeOpenThinkingBlock(state)
 		prefix += closeOpenToolBlocks(state)
+		if reason == "max_output_tokens" {
+			inputTokens, outputTokens, cachedTokens, reasoningTokens := extractResponsesUsage(root.Get("response.usage"))
+			state.InputTokens = int(inputTokens)
+			state.OutputTokens = int(outputTokens)
+			state.CachedInputTokens = int(cachedTokens)
+			state.ReasoningOutputTokens = int(reasoningTokens)
+
+			template := `{"type":"message_delta","delta":{"stop_reason":"max_tokens","stop_sequence":null,"container":null},"context_management":null,"usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"service_tier":"standard","inference_geo":"","iterations":[],"speed":"standard"}}`
+			template, _ = sjson.Set(template, "usage.input_tokens", inputTokens)
+			template, _ = sjson.Set(template, "usage.output_tokens", outputTokens)
+			template, _ = sjson.Set(template, "usage.cache_read_input_tokens", cachedTokens)
+			if tier := normalizeOpenAIServiceTier(root.Get("response.service_tier").String()); tier != "" {
+				template, _ = sjson.Set(template, "usage.service_tier", tier)
+			}
+			return prefix + "event: message_delta\n" + fmt.Sprintf("data: %s\n\n", template) +
+				"event: message_stop\n" + "data: {\"type\":\"message_stop\"}\n\n"
+		}
 		return prefix + buildAnthropicStreamError("api_error", "response incomplete: "+reason)
 	}
 
@@ -505,7 +522,15 @@ func convertResponsesCompletedToAnthropicJSON(
 	wsResult *WSResult,
 ) string {
 	root := gjson.ParseBytes(completedJSON)
-	if typeStr := root.Get("type").String(); typeStr != "response.completed" && typeStr != "response.done" {
+	typeStr := root.Get("type").String()
+	if typeStr != "response.completed" && typeStr != "response.done" {
+		if typeStr != "response.incomplete" || root.Get("response.incomplete_details.reason").String() != "max_output_tokens" {
+			return ""
+		}
+	}
+
+	maxOutputIncomplete := typeStr == "response.incomplete"
+	if maxOutputIncomplete && root.Get("response.incomplete_details.reason").String() != "max_output_tokens" {
 		return ""
 	}
 
@@ -638,6 +663,8 @@ func convertResponsesCompletedToAnthropicJSON(
 	var finalStop string
 	if hasToolCall {
 		finalStop = "tool_use"
+	} else if maxOutputIncomplete {
+		finalStop = "max_tokens"
 	} else {
 		finalStop = normalizeAnthropicStopReason(responseData.Get("stop_reason").String())
 	}
@@ -836,7 +863,9 @@ func translateResponsesSSEToAnthropicSSE(
 			if eventType == "response.incomplete" {
 				terminalEventReceived = true
 				reason := gjson.Get(data, "response.incomplete_details.reason").String()
-				streamErr = fmt.Errorf("响应不完整: %s", reason)
+				if reason != "max_output_tokens" {
+					streamErr = fmt.Errorf("响应不完整: %s", reason)
+				}
 			}
 		}
 

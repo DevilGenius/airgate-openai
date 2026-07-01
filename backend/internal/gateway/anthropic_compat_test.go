@@ -922,6 +922,39 @@ func TestEnsureAnthropicStopReason(t *testing.T) {
 	}
 }
 
+func TestConvertResponsesCompletedToAnthropicJSON_MaxOutputTokensIncomplete(t *testing.T) {
+	raw := []byte(`{"type":"response.incomplete","response":{"id":"resp_limit","model":"gpt-5","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":3,"output_tokens":9,"input_tokens_details":{"cached_tokens":1}}}}`)
+	result := &WSResult{Text: "partial answer"}
+	jsonOut := convertResponsesCompletedToAnthropicJSON(raw, nil, "claude-sonnet-4-6", result)
+	if jsonOut == "" {
+		t.Fatal("convertResponsesCompletedToAnthropicJSON returned empty")
+	}
+	if got := gjson.Get(jsonOut, "stop_reason").String(); got != "max_tokens" {
+		t.Fatalf("stop_reason = %q, want max_tokens; body=%s", got, jsonOut)
+	}
+	if got := gjson.Get(jsonOut, "content.0.text").String(); got != "partial answer" {
+		t.Fatalf("content text = %q", got)
+	}
+	if got := gjson.Get(jsonOut, "usage.output_tokens").Int(); got != 9 {
+		t.Fatalf("usage.output_tokens = %d, want 9", got)
+	}
+}
+
+func TestConvertResponsesEventToAnthropic_MaxOutputTokensIncomplete(t *testing.T) {
+	state := &anthropicStreamState{TextBlockOpen: true}
+	line := []byte(`data: {"type":"response.incomplete","response":{"id":"resp_limit","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":3,"output_tokens":9,"input_tokens_details":{"cached_tokens":1}}}}`)
+	out := convertResponsesEventToAnthropic(line, nil, state, "claude-sonnet-4-6")
+	if !strings.Contains(out, "event: message_delta") || !strings.Contains(out, "event: message_stop") {
+		t.Fatalf("expected normal stop events, got: %s", out)
+	}
+	if strings.Contains(out, `"type":"error"`) {
+		t.Fatalf("did not expect error event, got: %s", out)
+	}
+	if !strings.Contains(out, `"stop_reason":"max_tokens"`) {
+		t.Fatalf("missing max_tokens stop, got: %s", out)
+	}
+}
+
 func TestGenerateAnthropicRequestID_Format(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		id := generateAnthropicRequestID()
