@@ -501,15 +501,7 @@ func getModelMetadataByID(modelID string) map[string]any {
 
 // buildWSRequest 构建 WebSocket response.create 消息
 func (g *OpenAIGateway) buildWSRequest(req *sdk.ForwardRequest, session openAISessionResolution) ([]byte, error) {
-	var (
-		body []byte
-		err  error
-	)
-	if isCodexCLI(req.Headers) {
-		body, err = buildCodexWSRequest(req.Body, req.Model, session)
-	} else {
-		body, err = buildSimulatedWSRequest(req.Body, req.Model, session)
-	}
+	body, err := buildResponseCreateWSRequest(req.Body, req.Model, session)
 	if err != nil {
 		return nil, err
 	}
@@ -537,13 +529,21 @@ func applyForceInstructions(body []byte, headers http.Header) []byte {
 
 // buildCodexWSRequest Codex CLI 透传模式
 func buildCodexWSRequest(body []byte, model string, session openAISessionResolution) ([]byte, error) {
+	return buildResponseCreateWSRequest(body, model, session)
+}
+
+func buildResponseCreateWSRequest(body []byte, model string, session openAISessionResolution) ([]byte, error) {
+	normalizedBody, err := normalizeWSRequestBody(body, model)
+	if err != nil {
+		return nil, err
+	}
+
 	var reqData map[string]any
-	if err := json.Unmarshal(body, &reqData); err != nil {
+	if err := json.Unmarshal(normalizedBody, &reqData); err != nil {
 		return nil, fmt.Errorf("解析请求体失败: %w", err)
 	}
 	reqData = applyContinuationState(reqData, session)
 
-	// 如果已有 type=response.create，直接使用
 	if t, _ := reqData["type"].(string); t == "response.create" {
 		reqData["model"] = resolveEffectiveModel(model, reqData["model"])
 		reqData["store"] = false
@@ -552,8 +552,24 @@ func buildCodexWSRequest(body []byte, model string, session openAISessionResolut
 		return json.Marshal(reqData)
 	}
 
-	// 否则包装为 response.create
 	return wrapResponseCreate(reqData, model, session)
+}
+
+func normalizeWSRequestBody(body []byte, model string) ([]byte, error) {
+	if len(body) == 0 {
+		return body, nil
+	}
+
+	if gjson.GetBytes(body, "type").String() == "response.create" {
+		result := normalizeResponsesInput(body, "/v1/responses")
+		return ensureResponsesDefaultsWithTier(result, ""), nil
+	}
+
+	wrapped, err := wrapAsResponsesAPI(body, model)
+	if err != nil {
+		return nil, err
+	}
+	return wrapped, nil
 }
 
 // resolveEffectiveModel 决定最终送到上游的 model 字段。
@@ -573,18 +589,7 @@ func resolveEffectiveModel(reqModel string, existing any) string {
 
 // buildSimulatedWSRequest 模拟客户端模式
 func buildSimulatedWSRequest(body []byte, model string, session openAISessionResolution) ([]byte, error) {
-	wrapped, err := wrapAsResponsesAPI(body, model)
-	if err != nil {
-		return nil, err
-	}
-
-	var reqData map[string]any
-	if err := json.Unmarshal(wrapped, &reqData); err != nil {
-		return nil, fmt.Errorf("解析包装后请求体失败: %w", err)
-	}
-	reqData = applyContinuationState(reqData, session)
-
-	return wrapResponseCreate(reqData, model, session)
+	return buildResponseCreateWSRequest(body, model, session)
 }
 
 // wrapResponseCreate 将请求数据包装为 response.create WS 消息

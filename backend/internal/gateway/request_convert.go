@@ -249,15 +249,22 @@ func wrapAsResponsesAPIWithTier(body []byte, model string, reqServiceTierOverrid
 		}
 
 		// 转换 tools（Chat Completions → Responses API 格式）
+		var responseTools []any
 		if tools := gjson.GetBytes(body, "tools"); tools.Exists() && tools.IsArray() {
-			wrapped["tools"] = convertChatToolsToResponsesTools(tools.Array())
+			responseTools = convertChatToolsToResponsesTools(tools.Array())
+			if len(responseTools) > 0 {
+				wrapped["tools"] = responseTools
+			}
 		}
+		hasTools := len(responseTools) > 0
 
 		// tool_choice：如果历史中有工具调用记录（处于工具循环中），强制 required
 		// 避免模型在执行阶段只输出文字确认而不调用工具
 		if tc := gjson.GetBytes(body, "tool_choice"); tc.Exists() {
-			wrapped["tool_choice"] = normalizeResponsesToolChoice(tc)
-		} else if messagesHaveToolCalls(gjson.GetBytes(body, "messages").Array()) {
+			if hasTools {
+				wrapped["tool_choice"] = normalizeResponsesToolChoice(tc)
+			}
+		} else if hasTools && messagesHaveToolCalls(gjson.GetBytes(body, "messages").Array()) {
 			wrapped["tool_choice"] = "required"
 		}
 
@@ -334,12 +341,29 @@ func ensureResponsesDefaultsWithTier(body []byte, reqServiceTierOverride string)
 		"top_p",
 		"user",
 		"output_config",
+		"stream_options",
+		"messages",
 	} {
 		if gjson.GetBytes(result, field).Exists() {
 			result, _ = sjson.DeleteBytes(result, field)
 		}
 	}
 
+	result = removeResponsesToolControlWithoutTools(result)
+	return result
+}
+
+func removeResponsesToolControlWithoutTools(body []byte) []byte {
+	tools := gjson.GetBytes(body, "tools")
+	if tools.IsArray() && tools.Get("#").Int() > 0 {
+		return body
+	}
+	result := body
+	for _, field := range []string{"tools", "tool_choice", "parallel_tool_calls"} {
+		if gjson.GetBytes(result, field).Exists() {
+			result, _ = sjson.DeleteBytes(result, field)
+		}
+	}
 	return result
 }
 

@@ -347,6 +347,93 @@ func TestBuildCodexWSRequestBackfillsPreviousResponseIDAfterResponsesPreprocess(
 	}
 }
 
+func TestBuildCodexWSRequestConvertsChatCompletionsMessages(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","messages":[{"role":"system","content":"be concise"},{"role":"user","content":"hi"}],"stream_options":{"include_usage":true},"max_completion_tokens":32}`)
+
+	got, err := buildCodexWSRequest(body, "gpt-5.5", openAISessionResolution{})
+	if err != nil {
+		t.Fatalf("buildCodexWSRequest: %v", err)
+	}
+
+	if typ := gjson.GetBytes(got, "type").String(); typ != "response.create" {
+		t.Fatalf("type = %q, want response.create; body=%s", typ, got)
+	}
+	if gjson.GetBytes(got, "messages").Exists() {
+		t.Fatalf("messages should not be sent to Codex WS upstream: %s", got)
+	}
+	if text := gjson.GetBytes(got, "input.0.content.0.text").String(); text != "hi" {
+		t.Fatalf("input text = %q, want hi; body=%s", text, got)
+	}
+	if instructions := gjson.GetBytes(got, "instructions").String(); instructions != "be concise" {
+		t.Fatalf("instructions = %q, want be concise; body=%s", instructions, got)
+	}
+	if gjson.GetBytes(got, "stream_options").Exists() {
+		t.Fatalf("stream_options should not be forwarded to Codex WS upstream: %s", got)
+	}
+	if gjson.GetBytes(got, "max_completion_tokens").Exists() {
+		t.Fatalf("max_completion_tokens should not be forwarded to Codex WS upstream: %s", got)
+	}
+}
+
+func TestBuildCodexWSRequestNormalizesResponseCreateMessages(t *testing.T) {
+	body := []byte(`{"type":"response.create","model":"gpt-5.5","previous_response_id":"resp_prev","messages":[{"role":"user","content":"continue"}],"stream_options":{"include_usage":true}}`)
+
+	got, err := buildCodexWSRequest(body, "gpt-5.5", openAISessionResolution{})
+	if err != nil {
+		t.Fatalf("buildCodexWSRequest: %v", err)
+	}
+
+	if gjson.GetBytes(got, "messages").Exists() {
+		t.Fatalf("messages should not be sent to Codex WS upstream: %s", got)
+	}
+	if previous := gjson.GetBytes(got, "previous_response_id").String(); previous != "resp_prev" {
+		t.Fatalf("previous_response_id = %q, want resp_prev; body=%s", previous, got)
+	}
+	if text := gjson.GetBytes(got, "input.0.content.0.text").String(); text != "continue" {
+		t.Fatalf("input text = %q, want continue; body=%s", text, got)
+	}
+	if gjson.GetBytes(got, "stream_options").Exists() {
+		t.Fatalf("stream_options should not be forwarded to Codex WS upstream: %s", got)
+	}
+}
+
+func TestBuildWSRequestNormalizesChatBodyIndependentOfCodexHeaders(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}]}`)
+	cases := []struct {
+		name    string
+		headers http.Header
+	}{
+		{
+			name:    "codex headers",
+			headers: http.Header{"User-Agent": []string{"codex-cli/1.0"}, "originator": []string{"codex_cli_rs"}},
+		},
+		{
+			name:    "plain OpenAI client headers",
+			headers: http.Header{"User-Agent": []string{"openai-go/1.0"}},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &sdk.ForwardRequest{
+				Headers: tc.headers,
+				Body:    body,
+				Model:   "gpt-5.5",
+			}
+			got, err := (&OpenAIGateway{}).buildWSRequest(req, openAISessionResolution{})
+			if err != nil {
+				t.Fatalf("buildWSRequest: %v", err)
+			}
+			if gjson.GetBytes(got, "messages").Exists() {
+				t.Fatalf("messages should not depend on request headers: %s", got)
+			}
+			if text := gjson.GetBytes(got, "input.0.content.0.text").String(); text != "hi" {
+				t.Fatalf("input text = %q, want hi; body=%s", text, got)
+			}
+		})
+	}
+}
+
 func TestPreviousResponseNotFoundRecoveryBodyDropsSoftAnchor(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.4","previous_response_id":"resp_old","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}`)
 
@@ -1320,6 +1407,60 @@ func TestWrapAsResponsesAPIToolResultOutputIsString(t *testing.T) {
 	}
 	if output.String() != "sunny" {
 		t.Fatalf("function_call_output.output = %q, want sunny", output.String())
+	}
+}
+
+func TestWrapAsResponsesAPIDoesNotRequireToolsWhenToolsMissing(t *testing.T) {
+	body := []byte(`{"messages":[{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"北京\"}"}}]},{"role":"tool","tool_call_id":"call_1","content":"sunny"}]}`)
+	result, err := wrapAsResponsesAPI(body, "gpt-5.4")
+	if err != nil {
+		t.Fatalf("wrapAsResponsesAPI: %v", err)
+	}
+
+	if gjson.GetBytes(result, "tool_choice").Exists() {
+		t.Fatalf("tool_choice should not be forwarded without tools: %s", result)
+	}
+	if gjson.GetBytes(result, "tools").Exists() {
+		t.Fatalf("tools should stay absent when client did not provide tools: %s", result)
+	}
+}
+
+func TestWrapAsResponsesAPIRequiresToolsOnlyWhenToolsPresent(t *testing.T) {
+	body := []byte(`{"messages":[{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"北京\"}"}}]},{"role":"tool","tool_call_id":"call_1","content":"sunny"}],"tools":[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object","properties":{"city":{"type":"string"}}}}}]}`)
+	result, err := wrapAsResponsesAPI(body, "gpt-5.4")
+	if err != nil {
+		t.Fatalf("wrapAsResponsesAPI: %v", err)
+	}
+
+	if tools := gjson.GetBytes(result, "tools.#").Int(); tools != 1 {
+		t.Fatalf("tools count = %d, want 1; body=%s", tools, result)
+	}
+	if choice := gjson.GetBytes(result, "tool_choice").String(); choice != "required" {
+		t.Fatalf("tool_choice = %q, want required; body=%s", choice, result)
+	}
+}
+
+func TestWrapAsResponsesAPIDropsExplicitToolChoiceWithoutTools(t *testing.T) {
+	body := []byte(`{"messages":[{"role":"user","content":"hi"}],"tool_choice":"required"}`)
+	result, err := wrapAsResponsesAPI(body, "gpt-5.4")
+	if err != nil {
+		t.Fatalf("wrapAsResponsesAPI: %v", err)
+	}
+
+	if gjson.GetBytes(result, "tool_choice").Exists() {
+		t.Fatalf("tool_choice should be dropped without tools: %s", result)
+	}
+}
+
+func TestEnsureResponsesDefaultsDropsToolControlWithoutTools(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"parallel_tool_calls":true,"tool_choice":"required"}`)
+	result := ensureResponsesDefaultsWithTier(body, "")
+
+	if gjson.GetBytes(result, "tool_choice").Exists() {
+		t.Fatalf("tool_choice should be removed without tools: %s", result)
+	}
+	if gjson.GetBytes(result, "parallel_tool_calls").Exists() {
+		t.Fatalf("parallel_tool_calls should be removed without tools: %s", result)
 	}
 }
 
