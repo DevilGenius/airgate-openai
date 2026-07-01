@@ -498,6 +498,13 @@ func closeOpenToolBlocks(state *anthropicStreamState) string {
 	return out.String()
 }
 
+func continuationAnchorReplayErr(failure *responsesFailureError) error {
+	if failure != nil && failure.isContinuationAnchorError() {
+		return failure
+	}
+	return nil
+}
+
 // normalizeAnthropicMessageID 把 OpenAI Responses API 的 `resp_...` id 规范化为 Anthropic 风格的 `msg_...`。
 // Anthropic 官方 message id 固定使用 `msg_` 前缀，部分 SDK / 下游消费方会以此为前缀做类型识别。
 // 保持后缀不变，确保和 Core 侧的请求追踪 ID 仍能对应。
@@ -1032,7 +1039,7 @@ done:
 				RetryAfter:    failure.RetryAfter,
 				Duration:      elapsed,
 				Usage:         abortUsage(),
-			}, nil
+			}, continuationAnchorReplayErr(failure)
 		}
 		errBody := anthropicErrorJSON("api_error", streamErr.Error())
 		return sdk.ForwardOutcome{

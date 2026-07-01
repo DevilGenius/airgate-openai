@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -648,6 +649,44 @@ func TestTranslateResponsesSSEClosesOpenToolBlocksOnAbruptEOF(t *testing.T) {
 	}
 	if strings.Contains(body, "event: message_stop") {
 		t.Fatalf("aborted stream must not emit message_stop, got: %s", body)
+	}
+}
+
+func TestTranslateResponsesSSEContinuationAnchorFailureReturnsReplayError(t *testing.T) {
+	sse := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_bad_anchor","model":"gpt-5.4"}}`,
+		`data: {"type":"response.failed","response":{"id":"resp_bad_anchor","error":{"type":"invalid_request_error","code":"previous_response_not_found","message":"Previous response not found"}}}`,
+		"",
+	}, "\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(sse)),
+	}
+	w := httptest.NewRecorder()
+
+	outcome, err := translateResponsesSSEToAnthropicSSE(
+		context.Background(),
+		resp,
+		w,
+		"claude-sonnet-4-6",
+		"gpt-5.4",
+		[]byte(`{"model":"claude-sonnet-4-6","stream":true,"max_tokens":128,"messages":[{"role":"user","content":"ping"}]}`),
+		"",
+		"",
+		time.Now(),
+		0,
+		openAISessionResolution{SessionKey: "sess-anchor"},
+	)
+	var failure *responsesFailureError
+	if !errors.As(err, &failure) || !failure.isContinuationAnchorError() {
+		t.Fatalf("err = %v, want continuation anchor failure", err)
+	}
+	if outcome.Kind != sdk.OutcomeClientError {
+		t.Fatalf("outcome kind = %v, want client error", outcome.Kind)
+	}
+	if body := w.Body.String(); strings.Contains(body, "event: error") {
+		t.Fatalf("continuation anchor failure should be suppressed for replay, got: %s", body)
 	}
 }
 
