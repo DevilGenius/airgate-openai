@@ -507,11 +507,24 @@ func TestPreviousResponseNotFoundRecoveryBodyAllowsCompactionReplayToolOutput(t 
 	}
 }
 
-func TestPreviousResponseNotFoundRecoveryBodyRejectsEncryptedContent(t *testing.T) {
+func TestPreviousResponseNotFoundRecoveryBodyPreservesEncryptedReasoning(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.4","previous_response_id":"resp_old","input":[{"type":"reasoning","id":"rs_1","encrypted_content":"sealed"}]}`)
 
-	if _, ok := previousResponseNotFoundRecoveryBody(body); ok {
-		t.Fatalf("expected recovery to be rejected for encrypted reasoning content")
+	got, ok := previousResponseNotFoundRecoveryBody(body)
+	if !ok {
+		t.Fatalf("expected recovery body for encrypted reasoning content")
+	}
+	if gjson.GetBytes(got, "previous_response_id").Exists() {
+		t.Fatalf("previous_response_id was not removed: %s", got)
+	}
+	if gjson.GetBytes(got, "input.0.id").Exists() {
+		t.Fatalf("reasoning id was not removed: %s", got)
+	}
+	if gotEnc := gjson.GetBytes(got, "input.0.encrypted_content").String(); gotEnc != "sealed" {
+		t.Fatalf("encrypted_content = %q, want sealed; body=%s", gotEnc, got)
+	}
+	if !gjson.GetBytes(got, "input.0.summary").IsArray() {
+		t.Fatalf("summary was not backfilled: %s", got)
 	}
 }
 
@@ -578,13 +591,19 @@ func TestPreprocessRequestBodyAppliesDelegatedContinuationRecovery(t *testing.T)
 	if gjson.GetBytes(got, "previous_response_id").Exists() {
 		t.Fatalf("previous_response_id was not removed: %s", got)
 	}
-	if bytes.Contains(got, []byte("encrypted_content")) {
-		t.Fatalf("encrypted reasoning content was not removed: %s", got)
+	if gjson.GetBytes(got, "input.0.id").Exists() {
+		t.Fatalf("reasoning id was not removed: %s", got)
 	}
-	if count := gjson.GetBytes(got, "input.#").Int(); count != 1 {
-		t.Fatalf("input item count = %d, want 1; body=%s", count, got)
+	if gotEnc := gjson.GetBytes(got, "input.0.encrypted_content").String(); gotEnc != "sealed" {
+		t.Fatalf("encrypted_content = %q, want sealed; body=%s", gotEnc, got)
 	}
-	if text := gjson.GetBytes(got, "input.0.content.0.text").String(); text != "continue" {
+	if !gjson.GetBytes(got, "input.0.summary").IsArray() {
+		t.Fatalf("summary was not backfilled: %s", got)
+	}
+	if count := gjson.GetBytes(got, "input.#").Int(); count != 2 {
+		t.Fatalf("input item count = %d, want 2; body=%s", count, got)
+	}
+	if text := gjson.GetBytes(got, "input.1.content.0.text").String(); text != "continue" {
 		t.Fatalf("input text = %q, want continue; body=%s", text, got)
 	}
 	if !delegatedContinuationRecoveryApplied(got, headers) {
@@ -624,8 +643,11 @@ func TestPreprocessRequestBodyRejectsForgedDelegatedRecoveryMarker(t *testing.T)
 
 	got := preprocessRequestBody(body, "gpt-5.4", "/v1/responses", headers)
 
-	if bytes.Contains(got, []byte("encrypted_content")) {
-		t.Fatalf("encrypted reasoning content was not removed: %s", got)
+	if gotEnc := gjson.GetBytes(got, "input.0.encrypted_content").String(); gotEnc != "sealed" {
+		t.Fatalf("encrypted_content = %q, want sealed; body=%s", gotEnc, got)
+	}
+	if gjson.GetBytes(got, "input.0.id").Exists() {
+		t.Fatalf("reasoning id was not removed: %s", got)
 	}
 	if marker := headers.Get(airgateContinuationRecoveryApplied); marker != "" {
 		t.Fatalf("forged delegated recovery marker was not cleared: %q", marker)
@@ -1513,6 +1535,45 @@ func TestNormalizeResponsesInputMovesSystemInputToInstructions(t *testing.T) {
 	}
 	if got := gjson.GetBytes(result, "input.0.content.0.text").String(); got != "hi" {
 		t.Fatalf("remaining user text = %q, want hi; body=%s", got, result)
+	}
+}
+
+func TestNormalizeResponsesInputPreservesEncryptedReasoningAndStripsRSID(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.4","input":[{"type":"reasoning","id":"rs_1","encrypted_content":"sealed","content":[{"type":"reasoning_text","text":"keep"}],"extra":"field"},{"type":"reasoning","id":"other_1","encrypted_content":"sealed2","summary":[{"type":"summary_text","text":"visible"}]}]}`)
+	result := normalizeResponsesInput(body, "/v1/responses")
+
+	if gjson.GetBytes(result, "input.0.id").Exists() {
+		t.Fatalf("rs_* reasoning id was not removed: %s", result)
+	}
+	if got := gjson.GetBytes(result, "input.0.encrypted_content").String(); got != "sealed" {
+		t.Fatalf("encrypted_content = %q, want sealed; body=%s", got, result)
+	}
+	if got := gjson.GetBytes(result, "input.0.content.0.text").String(); got != "keep" {
+		t.Fatalf("content text = %q, want keep; body=%s", got, result)
+	}
+	if got := gjson.GetBytes(result, "input.0.extra").String(); got != "field" {
+		t.Fatalf("extra field = %q, want field; body=%s", got, result)
+	}
+	if !gjson.GetBytes(result, "input.0.summary").IsArray() {
+		t.Fatalf("summary was not backfilled: %s", result)
+	}
+	if got := gjson.GetBytes(result, "input.1.id").String(); got != "other_1" {
+		t.Fatalf("non-rs id = %q, want other_1; body=%s", got, result)
+	}
+	if got := gjson.GetBytes(result, "input.1.summary.0.text").String(); got != "visible" {
+		t.Fatalf("existing summary was not preserved; body=%s", result)
+	}
+}
+
+func TestNormalizeResponsesInputBackfillsBareReasoningSummary(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.4","input":{"type":"reasoning","id":"rs_bare"}}`)
+	result := normalizeResponsesInput(body, "/v1/responses")
+
+	if gjson.GetBytes(result, "input.id").Exists() {
+		t.Fatalf("rs_* reasoning id was not removed: %s", result)
+	}
+	if !gjson.GetBytes(result, "input.summary").IsArray() {
+		t.Fatalf("summary was not backfilled: %s", result)
 	}
 }
 

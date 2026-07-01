@@ -300,6 +300,9 @@ func preserveOpenAIConversationImages(body []byte) []byte {
 //
 // 对完整 input 列表中的 system item，沿用 Chat Completions 转换策略：提取为
 // top-level instructions，避免上游 Codex/Responses 兼容层拒绝 system message。
+//
+// 对 reasoning replay，保留 encrypted_content/content/summary 等上下文字段，仅
+// 移除 store=false 下会触发服务端存储查找的 rs_* id，并补齐上游要求的 summary。
 func normalizeResponsesInput(body []byte, reqPath string) []byte {
 	if !isResponsesRequestPath(reqPath) {
 		return body
@@ -331,7 +334,11 @@ func normalizeResponsesInput(body []byte, reqPath string) []byte {
 
 	// 情况 2：input 已是完整列表 → system message 提升到 instructions
 	if inputNode.Exists() && inputNode.IsArray() {
-		return normalizeResponsesSystemInputMessages(body, inputNode)
+		return normalizeResponsesInputItems(body, inputNode)
+	}
+
+	if inputNode.Exists() && isJSONObject(inputNode.Raw) {
+		return normalizeResponsesInputObject(body, inputNode)
 	}
 
 	// 情况 3：没有 input 但有 Chat Completions 风格的 messages → 翻译
@@ -364,13 +371,19 @@ func normalizeResponsesInput(body []byte, reqPath string) []byte {
 	return body
 }
 
-func normalizeResponsesSystemInputMessages(body []byte, inputNode gjson.Result) []byte {
-	var kept []json.RawMessage
+func normalizeResponsesInputItems(body []byte, inputNode gjson.Result) []byte {
+	kept := make([]any, 0, len(inputNode.Array()))
 	var instructionsParts []string
 	changed := false
 
 	for _, item := range inputNode.Array() {
-		role := strings.ToLower(strings.TrimSpace(item.Get("role").String()))
+		var itemMap map[string]any
+		if err := json.Unmarshal([]byte(item.Raw), &itemMap); err != nil || itemMap == nil {
+			kept = append(kept, json.RawMessage(item.Raw))
+			continue
+		}
+
+		role := strings.ToLower(strings.TrimSpace(jsonString(itemMap["role"])))
 		if role == "system" {
 			if text := extractResponsesInputMessageText(item); text != "" {
 				instructionsParts = append(instructionsParts, text)
@@ -378,7 +391,10 @@ func normalizeResponsesSystemInputMessages(body []byte, inputNode gjson.Result) 
 			changed = true
 			continue
 		}
-		kept = append(kept, json.RawMessage(item.Raw))
+		if normalizeResponsesReasoningInputItem(itemMap) {
+			changed = true
+		}
+		kept = append(kept, itemMap)
 	}
 
 	if !changed {
@@ -405,6 +421,44 @@ func normalizeResponsesSystemInputMessages(body []byte, inputNode gjson.Result) 
 		return modified
 	}
 	return result
+}
+
+func normalizeResponsesInputObject(body []byte, inputNode gjson.Result) []byte {
+	var item map[string]any
+	if err := json.Unmarshal([]byte(inputNode.Raw), &item); err != nil || item == nil {
+		return body
+	}
+	if !normalizeResponsesReasoningInputItem(item) {
+		return body
+	}
+	encoded, err := json.Marshal(item)
+	if err != nil {
+		return body
+	}
+	if modified, err := sjson.SetRawBytes(body, "input", encoded); err == nil {
+		return modified
+	}
+	return body
+}
+
+func normalizeResponsesReasoningInputItem(item map[string]any) bool {
+	if strings.TrimSpace(jsonString(item["type"])) != "reasoning" {
+		return false
+	}
+	changed := false
+	if id := strings.TrimSpace(jsonString(item["id"])); strings.HasPrefix(id, "rs_") {
+		delete(item, "id")
+		changed = true
+	}
+	if _, ok := item["summary"]; !ok {
+		item["summary"] = []any{}
+		changed = true
+	}
+	return changed
+}
+
+func isJSONObject(raw string) bool {
+	return strings.HasPrefix(strings.TrimSpace(raw), "{")
 }
 
 func extractResponsesInputMessageText(msg gjson.Result) string {

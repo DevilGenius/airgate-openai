@@ -171,7 +171,7 @@ func functionCallOutputRecoveryBody(body []byte) ([]byte, bool) {
 	if err != nil {
 		return nil, false
 	}
-	return patched, true
+	return normalizeResponsesInput(patched, "/v1/responses"), true
 }
 
 func responsesInputHasRecoverableContext(reqData map[string]any) bool {

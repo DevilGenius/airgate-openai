@@ -22,7 +22,6 @@ const (
 type previousResponseRecoverySignals struct {
 	hasToolOutput       bool
 	hasToolCallContext  bool
-	hasEncryptedContent bool
 	hasCompactionReplay bool
 }
 
@@ -67,9 +66,6 @@ func delegatedContinuationRecoveryBody(body []byte) ([]byte, bool) {
 		delete(reqData, "previous_response_id")
 		changed = true
 	}
-	if sanitizeEncryptedReasoningItems(reqData) {
-		changed = true
-	}
 	if !changed {
 		return body, true
 	}
@@ -104,7 +100,7 @@ func previousResponseNotFoundRecoveryBody(body []byte) ([]byte, bool) {
 	if err != nil {
 		return nil, false
 	}
-	return patched, true
+	return normalizeResponsesInput(patched, "/v1/responses"), true
 }
 
 func requestCanRecoverPreviousResponseNotFound(body []byte) bool {
@@ -117,81 +113,7 @@ func requestCanRecoverPreviousResponseNotFound(body []byte) bool {
 		return false
 	}
 	signals := analyzePreviousResponseRecoverySignals(reqData)
-	return !signals.hasEncryptedContent &&
-		(!signals.hasToolOutput || signals.hasToolCallContext || signals.hasCompactionReplay)
-}
-
-func sanitizeEncryptedReasoningItems(reqData map[string]any) bool {
-	if len(reqData) == 0 {
-		return false
-	}
-	changed := false
-	if input, ok := reqData["input"]; ok {
-		next, inputChanged, keep := sanitizeEncryptedReasoningValue(input)
-		if inputChanged {
-			changed = true
-			if keep {
-				reqData["input"] = next
-			} else {
-				delete(reqData, "input")
-			}
-		}
-	}
-	if messages, ok := reqData["messages"]; ok {
-		next, messagesChanged, keep := sanitizeEncryptedReasoningValue(messages)
-		if messagesChanged {
-			changed = true
-			if keep {
-				reqData["messages"] = next
-			} else {
-				delete(reqData, "messages")
-			}
-		}
-	}
-	return changed
-}
-
-func sanitizeEncryptedReasoningValue(value any) (next any, changed bool, keep bool) {
-	switch v := value.(type) {
-	case []any:
-		filtered := v[:0]
-		changed := false
-		for _, item := range v {
-			nextItem, itemChanged, keepItem := sanitizeEncryptedReasoningItem(item)
-			if itemChanged {
-				changed = true
-			}
-			if keepItem {
-				filtered = append(filtered, nextItem)
-			}
-		}
-		if !changed {
-			return value, false, true
-		}
-		if len(filtered) == 0 {
-			return nil, true, false
-		}
-		return filtered, true, true
-	case map[string]any:
-		return sanitizeEncryptedReasoningItem(v)
-	default:
-		return value, false, true
-	}
-}
-
-func sanitizeEncryptedReasoningItem(item any) (next any, changed bool, keep bool) {
-	itemMap, ok := item.(map[string]any)
-	if !ok {
-		return item, false, true
-	}
-	if strings.TrimSpace(jsonString(itemMap["type"])) != "reasoning" {
-		return item, false, true
-	}
-	if strings.TrimSpace(jsonString(itemMap["encrypted_content"])) == "" {
-		return item, false, true
-	}
-
-	return nil, true, false
+	return !signals.hasToolOutput || signals.hasToolCallContext || signals.hasCompactionReplay
 }
 
 func analyzePreviousResponseRecoverySignals(reqData map[string]any) previousResponseRecoverySignals {
@@ -227,9 +149,6 @@ func analyzePreviousResponseInputItemSignals(item map[string]any, signals *previ
 	if isCompactionReplayItemType(itemType) {
 		signals.hasCompactionReplay = true
 	}
-	if itemType == "reasoning" && strings.TrimSpace(jsonString(item["encrypted_content"])) != "" {
-		signals.hasEncryptedContent = true
-	}
 	switch {
 	case isOpenAIToolOutputItemType(itemType):
 		signals.hasToolOutput = true
@@ -254,10 +173,6 @@ func analyzePreviousResponseMessagesSignals(messages any, signals *previousRespo
 			continue
 		}
 		role := strings.ToLower(strings.TrimSpace(jsonString(msg["role"])))
-		msgType := strings.TrimSpace(jsonString(msg["type"]))
-		if msgType == "reasoning" && strings.TrimSpace(jsonString(msg["encrypted_content"])) != "" {
-			signals.hasEncryptedContent = true
-		}
 		if role == "tool" {
 			signals.hasToolOutput = true
 		}
@@ -291,10 +206,6 @@ func analyzePreviousResponseMessageContentSignals(content any, signals *previous
 func analyzePreviousResponseMessageContentItemSignals(item map[string]any, signals *previousResponseRecoverySignals) {
 	itemType := strings.TrimSpace(jsonString(item["type"]))
 	switch itemType {
-	case "reasoning":
-		if strings.TrimSpace(jsonString(item["encrypted_content"])) != "" {
-			signals.hasEncryptedContent = true
-		}
 	case "compaction", "compaction_summary":
 		signals.hasCompactionReplay = true
 	case "tool_result":
