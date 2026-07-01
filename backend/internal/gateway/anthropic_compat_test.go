@@ -245,6 +245,27 @@ func TestConvertAnthropicRequestToResponsesDiscoversDeferredToolOutsideToolResul
 	}
 }
 
+func TestConvertAnthropicRequestToResponsesContinuationSkipsToolResultTail(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":8,"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"Read","input":{"file":"a.go"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"ok"}]}]}`)
+	if got, ok := convertAnthropicRequestToResponsesContinuation(body, "gpt-5.5", "medium", "resp_prev"); ok || got != nil {
+		t.Fatalf("continuation should skip tool_result tail, ok=%v body=%s", ok, got)
+	}
+}
+
+func TestConvertAnthropicRequestToResponsesContinuationKeepsPlainTail(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":8,"messages":[{"role":"user","content":"old"},{"role":"user","content":"new"}]}`)
+	got, ok := convertAnthropicRequestToResponsesContinuation(body, "gpt-5.5", "medium", "resp_prev")
+	if !ok {
+		t.Fatal("continuation should accept plain tail")
+	}
+	if prev := gjson.GetBytes(got, "previous_response_id").String(); prev != "resp_prev" {
+		t.Fatalf("previous_response_id = %q, body=%s", prev, got)
+	}
+	if count := gjson.GetBytes(got, "input.#").Int(); count == 0 {
+		t.Fatalf("converted continuation input is empty: %s", got)
+	}
+}
+
 func TestCollectToolReferencesFromParsedJSONDepthLimit(t *testing.T) {
 	discovered := map[string]struct{}{}
 	collectToolReferencesFromText(`[{"type":"tool_reference","tool_name":"ShallowTool"}]`, discovered)

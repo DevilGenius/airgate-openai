@@ -484,6 +484,9 @@ func convertAnthropicRequestToResponsesContinuation(rawJSON []byte, modelName, m
 	if last.Get("role").String() == "" {
 		return nil, false
 	}
+	if anthropicMessageHasToolResult(last) {
+		return nil, false
+	}
 
 	trimmed := `{"model":"","messages":[]}`
 	trimmed, _ = sjson.Set(trimmed, "model", root.Get("model").String())
@@ -508,6 +511,19 @@ func convertAnthropicRequestToResponsesContinuation(rawJSON []byte, modelName, m
 	responsesBody := convertAnthropicRequestToResponses([]byte(trimmed), modelName, mappingEffort)
 	responsesBody, _ = sjson.SetBytes(responsesBody, "previous_response_id", previousResponseID)
 	return responsesBody, true
+}
+
+func anthropicMessageHasToolResult(msg gjson.Result) bool {
+	content := msg.Get("content")
+	if !content.IsArray() {
+		return false
+	}
+	for _, part := range content.Array() {
+		if part.Get("type").String() == "tool_result" {
+			return true
+		}
+	}
+	return false
 }
 
 // ──────────────────────────────────────────────────────
