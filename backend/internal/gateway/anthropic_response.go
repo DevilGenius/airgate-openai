@@ -149,6 +149,25 @@ func convertResponsesEventToAnthropic(rawLine []byte, originalRequest []byte, st
 		template, _ = sjson.Set(template, "delta.text", root.Get("delta").String())
 		return prefix + "event: content_block_delta\n" + fmt.Sprintf("data: %s\n\n", template)
 
+	case "response.refusal.delta":
+		delta := root.Get("delta").String()
+		if delta == "" {
+			return ""
+		}
+		var prefix string
+		if !state.TextBlockOpen {
+			prefix = closeOpenThinkingBlock(state)
+			prefix += closeOpenToolBlocks(state)
+			startTpl := `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`
+			startTpl, _ = sjson.Set(startTpl, "index", state.BlockIndex)
+			prefix += "event: content_block_start\n" + fmt.Sprintf("data: %s\n\n", startTpl)
+			state.TextBlockOpen = true
+		}
+		template := `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":""}}`
+		template, _ = sjson.Set(template, "index", state.BlockIndex)
+		template, _ = sjson.Set(template, "delta.text", delta)
+		return prefix + "event: content_block_delta\n" + fmt.Sprintf("data: %s\n\n", template)
+
 	case "response.content_part.done":
 		if !state.TextBlockOpen {
 			return ""

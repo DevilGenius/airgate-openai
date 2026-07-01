@@ -955,6 +955,21 @@ func TestConvertResponsesEventToAnthropic_MaxOutputTokensIncomplete(t *testing.T
 	}
 }
 
+func TestConvertResponsesEventToAnthropic_RefusalDelta(t *testing.T) {
+	state := &anthropicStreamState{}
+	line := []byte(`data: {"type":"response.refusal.delta","delta":"I can't help with that."}`)
+	out := convertResponsesEventToAnthropic(line, nil, state, "claude-sonnet-4-6")
+	if !strings.Contains(out, "event: content_block_start") {
+		t.Fatalf("missing content_block_start, got: %s", out)
+	}
+	if !strings.Contains(out, `"type":"text_delta"`) || !strings.Contains(out, `I can't help with that.`) {
+		t.Fatalf("missing refusal text delta, got: %s", out)
+	}
+	if !state.TextBlockOpen {
+		t.Fatal("text block should remain open until terminal event")
+	}
+}
+
 func TestGenerateAnthropicRequestID_Format(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		id := generateAnthropicRequestID()
