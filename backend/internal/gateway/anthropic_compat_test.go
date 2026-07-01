@@ -1126,35 +1126,29 @@ func TestConvertResponsesEventToAnthropicFunctionCallLifecycleDefersStopForBatch
 	request := []byte(`{"tools":[{"name":"Skill","input_schema":{"type":"object","properties":{"skill":{"type":"string"}}}}]}`)
 
 	added := []byte(`data: {"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","call_id":"call_1","name":"Skill","arguments":""}}`)
-	out := convertResponsesEventToAnthropic(added, request, state, "claude-sonnet-4-6")
-	if !strings.Contains(out, `"type":"tool_use"`) {
-		t.Fatalf("missing tool_use start, got: %s", out)
-	}
-	if strings.Contains(out, `"input_json_delta"`) {
-		t.Fatalf("tool_use start should not emit an empty input_json_delta, got: %s", out)
-	}
-	if strings.Contains(out, "event: content_block_stop") {
-		t.Fatalf("tool_use should stay open before response completion, got: %s", out)
+	if out := convertResponsesEventToAnthropic(added, request, state, "claude-sonnet-4-6"); out != "" {
+		t.Fatalf("output_item.added should only register pending tool block, got: %s", out)
 	}
 
 	argsDone := []byte(`data: {"type":"response.function_call_arguments.done","output_index":1,"arguments":"{\"skill\":\"claude-api\"}"}`)
-	out = convertResponsesEventToAnthropic(argsDone, request, state, "claude-sonnet-4-6")
-	if !strings.Contains(out, `"partial_json":"{\"skill\":\"claude-api\"}"`) {
+	out := convertResponsesEventToAnthropic(argsDone, request, state, "claude-sonnet-4-6")
+	if !strings.Contains(out, `"type":"tool_use"`) || !strings.Contains(out, `"partial_json":"{\"skill\":\"claude-api\"}"`) {
 		t.Fatalf("missing full arguments delta, got: %s", out)
 	}
 	if strings.Contains(out, "event: content_block_stop") {
-		t.Fatalf("arguments done should defer tool_use close for same-turn batching, got: %s", out)
+		t.Fatalf("arguments done should not close before item done, got: %s", out)
 	}
 
 	itemDone := []byte(`data: {"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","call_id":"call_1","name":"Skill","arguments":"{\"skill\":\"claude-api\"}"}}`)
-	if out := convertResponsesEventToAnthropic(itemDone, request, state, "claude-sonnet-4-6"); out != "" {
-		t.Fatalf("output_item.done after arguments done should be a no-op, got: %s", out)
+	out = convertResponsesEventToAnthropic(itemDone, request, state, "claude-sonnet-4-6")
+	if !strings.Contains(out, "event: content_block_stop") || strings.Contains(out, `"partial_json"`) {
+		t.Fatalf("output_item.done should close without resending args, got: %s", out)
 	}
 
 	completed := []byte(`data: {"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":1,"output_tokens":2}}}`)
 	out = convertResponsesEventToAnthropic(completed, request, state, "claude-sonnet-4-6")
-	if !strings.Contains(out, "event: content_block_stop") {
-		t.Fatalf("response completed should close deferred tool_use block, got: %s", out)
+	if strings.Contains(out, "event: content_block_stop") {
+		t.Fatalf("response completed should not close already completed tool_use block, got: %s", out)
 	}
 	if !strings.Contains(out, `"stop_reason":"tool_use"`) {
 		t.Fatalf("message_delta should report tool_use stop, got: %s", out)
@@ -1176,12 +1170,12 @@ func TestConvertResponsesEventToAnthropicFunctionCallDeltaDefersStopUntilComplet
 		t.Fatalf("arguments done should not resend full args after deltas, got: %s", out)
 	}
 	if strings.Contains(out, "event: content_block_stop") {
-		t.Fatalf("arguments done should defer streamed tool_use close, got: %s", out)
+		t.Fatalf("arguments done should not close before item done, got: %s", out)
 	}
 
-	out = convertResponsesEventToAnthropic([]byte(`data: {"type":"response.completed","response":{"id":"resp_2","usage":{"input_tokens":1,"output_tokens":2}}}`), request, state, "claude-sonnet-4-6")
+	out = convertResponsesEventToAnthropic([]byte(`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","call_id":"call_2","name":"Edit","arguments":"{\"file\":\"a.go\"}"}}`), request, state, "claude-sonnet-4-6")
 	if !strings.Contains(out, "event: content_block_stop") {
-		t.Fatalf("response completed should close streamed tool_use block, got: %s", out)
+		t.Fatalf("output_item.done should close streamed tool_use block, got: %s", out)
 	}
 }
 
@@ -1189,37 +1183,43 @@ func TestConvertResponsesEventToAnthropicFunctionCallDeltasRouteByOutputIndex(t 
 	state := &anthropicStreamState{}
 	request := []byte(`{"tools":[{"name":"First","input_schema":{"type":"object"}},{"name":"Second","input_schema":{"type":"object"}}]}`)
 
-	out := convertResponsesEventToAnthropic([]byte(`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"First","arguments":""}}`), request, state, "claude-sonnet-4-6")
-	if !strings.Contains(out, `"index":0`) || strings.Contains(out, "event: content_block_stop") {
-		t.Fatalf("first tool should open index 0 without closing, got: %s", out)
-	}
+	_ = convertResponsesEventToAnthropic([]byte(`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"First","arguments":""}}`), request, state, "claude-sonnet-4-6")
+	_ = convertResponsesEventToAnthropic([]byte(`data: {"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","call_id":"call_2","name":"Second","arguments":""}}`), request, state, "claude-sonnet-4-6")
 
-	out = convertResponsesEventToAnthropic([]byte(`data: {"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","call_id":"call_2","name":"Second","arguments":""}}`), request, state, "claude-sonnet-4-6")
-	if !strings.Contains(out, `"index":1`) || strings.Contains(out, "event: content_block_stop") {
-		t.Fatalf("second tool should open index 1 without closing first, got: %s", out)
-	}
-
-	out = convertResponsesEventToAnthropic([]byte(`data: {"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"a\""}`), request, state, "claude-sonnet-4-6")
+	out := convertResponsesEventToAnthropic([]byte(`data: {"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"a\""}`), request, state, "claude-sonnet-4-6")
 	if !strings.Contains(out, `"index":0`) || !strings.Contains(out, `"partial_json":"{\"a\""`) {
 		t.Fatalf("first tool delta should route to index 0, got: %s", out)
 	}
 
 	out = convertResponsesEventToAnthropic([]byte(`data: {"type":"response.function_call_arguments.done","output_index":1,"arguments":"{\"b\":2}"}`), request, state, "claude-sonnet-4-6")
-	if !strings.Contains(out, `"index":1`) || !strings.Contains(out, `"partial_json":"{\"b\":2}"`) || strings.Contains(out, "event: content_block_stop") {
-		t.Fatalf("second tool done should emit args without closing index 1, got: %s", out)
+	if !strings.Contains(out, "event: content_block_stop") || !strings.Contains(out, `"index":1`) || !strings.Contains(out, `"partial_json":"{\"b\":2}"`) {
+		t.Fatalf("second tool done should close first before emitting args, got: %s", out)
+	}
+
+	out = convertResponsesEventToAnthropic([]byte(`data: {"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","call_id":"call_2","name":"Second","arguments":"{\"b\":2}"}}`), request, state, "claude-sonnet-4-6")
+	if !strings.Contains(out, "event: content_block_stop") || strings.Contains(out, `"partial_json"`) {
+		t.Fatalf("second output_item.done should close without resending args, got: %s", out)
 	}
 
 	out = convertResponsesEventToAnthropic([]byte(`data: {"type":"response.function_call_arguments.done","output_index":0,"arguments":"{\"a\":1}"}`), request, state, "claude-sonnet-4-6")
-	if strings.Contains(out, `"partial_json":"{\"a\":1}"`) || strings.Contains(out, "event: content_block_stop") {
-		t.Fatalf("first tool done should not resend or close already-streamed index 0, got: %s", out)
+	if strings.Contains(out, `"partial_json":"{\"a\":1}"`) {
+		t.Fatalf("first tool done should not resend already-streamed args, got: %s", out)
 	}
 
 	out = convertResponsesEventToAnthropic([]byte(`data: {"type":"response.completed","response":{"id":"resp_3","usage":{"input_tokens":1,"output_tokens":2}}}`), request, state, "claude-sonnet-4-6")
-	if strings.Count(out, "event: content_block_stop") != 2 {
-		t.Fatalf("response completed should close both deferred tool blocks, got: %s", out)
+	if strings.Contains(out, "event: content_block_stop") {
+		t.Fatalf("response completed should not close already completed tool blocks, got: %s", out)
 	}
-	if strings.Index(out, `"index":0`) > strings.Index(out, `"index":1`) {
-		t.Fatalf("deferred tool blocks should close in block index order, got: %s", out)
+}
+
+func TestConvertResponsesEventToAnthropicFunctionCallDeltasRouteByCallIDFallback(t *testing.T) {
+	state := &anthropicStreamState{}
+	request := []byte(`{"tools":[{"name":"Second","input_schema":{"type":"object"}}]}`)
+	_ = convertResponsesEventToAnthropic([]byte(`data: {"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","call_id":"call_2","name":"Second","arguments":""}}`), request, state, "claude-sonnet-4-6")
+
+	out := convertResponsesEventToAnthropic([]byte(`data: {"type":"response.function_call_arguments.done","call_id":"call_2","arguments":"{\"b\":2}"}`), request, state, "claude-sonnet-4-6")
+	if !strings.Contains(out, `"name":"Second"`) || !strings.Contains(out, `"partial_json":"{\"b\":2}"`) {
+		t.Fatalf("call_id-only arguments should route to registered block, got: %s", out)
 	}
 }
 

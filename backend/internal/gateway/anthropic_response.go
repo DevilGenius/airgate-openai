@@ -33,13 +33,19 @@ type anthropicStreamState struct {
 	TextBlockOpen         bool // 当前是否已打开 text content block（用于容错上游跳过 content_part.added 的情况）
 	ThinkingBlockOpen     bool // 当前是否已打开 thinking content block
 	OpenToolBlocks        map[int]*anthropicToolBlock
+	ToolBlocksByCallID    map[string]*anthropicToolBlock
+	CurrentToolBlock      *anthropicToolBlock
 	reverseNameMap        map[string]string // 缓存 short→original 工具名映射，避免每次事件重建
 }
 
 type anthropicToolBlock struct {
-	BlockIndex int
-	Args       string
-	HadDelta   bool
+	OutputIndex int
+	BlockIndex  int
+	CallID      string
+	Name        string
+	Args        string
+	HadDelta    bool
+	Started     bool
 }
 
 // convertResponsesEventToAnthropic 将单条 Responses API SSE 事件转换为 Anthropic SSE 事件字符串
@@ -184,11 +190,6 @@ func convertResponsesEventToAnthropic(rawLine []byte, originalRequest []byte, st
 		if itemType == "function_call" {
 			state.HasToolCall = true
 
-			// 工具调用前若仍有未关闭的 text/thinking 内容块，先关闭，保证事件序列成对。
-			// 多个 function_call 可以并列打开，参数 delta 通过 output_index 路由。
-			closePrefix := closeOpenTextBlock(state)
-			closePrefix += closeOpenThinkingBlock(state)
-
 			// 还原工具短名（懒初始化缓存）
 			if state.reverseNameMap == nil {
 				state.reverseNameMap = buildReverseToolNameMap(originalRequest)
@@ -202,17 +203,20 @@ func convertResponsesEventToAnthropic(rawLine []byte, originalRequest []byte, st
 			if state.OpenToolBlocks == nil {
 				state.OpenToolBlocks = map[int]*anthropicToolBlock{}
 			}
-			closePrefix += closeOpenToolBlock(state, outputIndex)
-			blockIndex := state.BlockIndex
-			state.BlockIndex++
-			state.OpenToolBlocks[outputIndex] = &anthropicToolBlock{BlockIndex: blockIndex}
+			if state.ToolBlocksByCallID == nil {
+				state.ToolBlocksByCallID = map[string]*anthropicToolBlock{}
+			}
+			block := &anthropicToolBlock{
+				OutputIndex: outputIndex,
+				CallID:      item.Get("call_id").String(),
+				Name:        name,
+			}
+			state.OpenToolBlocks[outputIndex] = block
+			if block.CallID != "" {
+				state.ToolBlocksByCallID[block.CallID] = block
+			}
 
-			template := `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"","name":"","input":{}}}`
-			template, _ = sjson.Set(template, "index", blockIndex)
-			template, _ = sjson.Set(template, "content_block.id", item.Get("call_id").String())
-			template, _ = sjson.Set(template, "content_block.name", name)
-
-			return closePrefix + "event: content_block_start\n" + fmt.Sprintf("data: %s\n\n", template)
+			return ""
 		}
 		// web_search_call 等原生工具：忽略
 		return ""
@@ -222,18 +226,16 @@ func convertResponsesEventToAnthropic(rawLine []byte, originalRequest []byte, st
 		if delta == "" {
 			return ""
 		}
-		outputIndex := int(root.Get("output_index").Int())
-		block := state.OpenToolBlocks[outputIndex]
+		block := lookupToolBlock(state, root)
 		if block == nil {
 			return ""
 		}
 		block.Args += delta
 		block.HadDelta = true
-		return emitToolArgumentsDelta(block.BlockIndex, delta)
+		return startAnthropicToolBlock(state, block) + emitToolArgumentsDelta(block.BlockIndex, delta)
 
 	case "response.function_call_arguments.done":
-		outputIndex := int(root.Get("output_index").Int())
-		block := state.OpenToolBlocks[outputIndex]
+		block := lookupToolBlock(state, root)
 		if block == nil {
 			return ""
 		}
@@ -243,23 +245,24 @@ func convertResponsesEventToAnthropic(rawLine []byte, originalRequest []byte, st
 		}
 		if args != "" && !block.HadDelta {
 			block.HadDelta = true
-			return emitToolArgumentsDelta(block.BlockIndex, args)
+			return startAnthropicToolBlock(state, block) + emitToolArgumentsDelta(block.BlockIndex, args)
 		}
 		return ""
 
 	case "response.output_item.done":
 		itemType := root.Get("item.type").String()
 		if itemType == "function_call" {
-			outputIndex := int(root.Get("output_index").Int())
-			block := state.OpenToolBlocks[outputIndex]
+			block := lookupToolBlock(state, root)
 			if block == nil {
 				return ""
 			}
+			output := startAnthropicToolBlock(state, block)
 			if args := root.Get("item.arguments").String(); args != "" && !block.HadDelta {
 				block.HadDelta = true
-				return emitToolArgumentsDelta(block.BlockIndex, args)
+				output += emitToolArgumentsDelta(block.BlockIndex, args)
 			}
-			return ""
+			output += closeAnthropicToolBlock(state, block)
+			return output
 		}
 		return ""
 
@@ -412,14 +415,66 @@ func emitToolArgumentsDelta(blockIndex int, args string) string {
 	return "event: content_block_delta\n" + fmt.Sprintf("data: %s\n\n", template)
 }
 
-func closeOpenToolBlock(state *anthropicStreamState, outputIndex int) string {
-	block := state.OpenToolBlocks[outputIndex]
+func lookupToolBlock(state *anthropicStreamState, root gjson.Result) *anthropicToolBlock {
+	if state == nil {
+		return nil
+	}
+	if outputIndex := root.Get("output_index"); outputIndex.Exists() {
+		if block := state.OpenToolBlocks[int(outputIndex.Int())]; block != nil {
+			return block
+		}
+	}
+	callID := root.Get("call_id").String()
+	if callID == "" {
+		callID = root.Get("item.call_id").String()
+	}
+	if callID != "" {
+		return state.ToolBlocksByCallID[callID]
+	}
+	return nil
+}
+
+func startAnthropicToolBlock(state *anthropicStreamState, block *anthropicToolBlock) string {
 	if block == nil {
 		return ""
 	}
+	prefix := closeOpenTextBlock(state)
+	prefix += closeOpenThinkingBlock(state)
+	if state.CurrentToolBlock != nil && state.CurrentToolBlock != block {
+		prefix += closeAnthropicToolBlock(state, state.CurrentToolBlock)
+	}
+	if block.Started {
+		state.CurrentToolBlock = block
+		return prefix
+	}
+	block.BlockIndex = state.BlockIndex
+	state.BlockIndex++
+	block.Started = true
+	state.CurrentToolBlock = block
+	template := `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"","name":"","input":{}}}`
+	template, _ = sjson.Set(template, "index", block.BlockIndex)
+	template, _ = sjson.Set(template, "content_block.id", block.CallID)
+	template, _ = sjson.Set(template, "content_block.name", block.Name)
+	return prefix + "event: content_block_start\n" + fmt.Sprintf("data: %s\n\n", template)
+}
+
+func closeAnthropicToolBlock(state *anthropicStreamState, block *anthropicToolBlock) string {
+	if block == nil {
+		return ""
+	}
+	delete(state.OpenToolBlocks, block.OutputIndex)
+	if block.CallID != "" {
+		delete(state.ToolBlocksByCallID, block.CallID)
+	}
+	if state.CurrentToolBlock == block {
+		state.CurrentToolBlock = nil
+	}
+	if !block.Started {
+		return ""
+	}
+	block.Started = false
 	template := `{"type":"content_block_stop","index":0}`
 	template, _ = sjson.Set(template, "index", block.BlockIndex)
-	delete(state.OpenToolBlocks, outputIndex)
 	return "event: content_block_stop\n" + fmt.Sprintf("data: %s\n\n", template)
 }
 
@@ -438,7 +493,7 @@ func closeOpenToolBlocks(state *anthropicStreamState) string {
 	}
 	var out strings.Builder
 	for _, outputIndex := range outputIndexes {
-		out.WriteString(closeOpenToolBlock(state, outputIndex))
+		out.WriteString(closeAnthropicToolBlock(state, state.OpenToolBlocks[outputIndex]))
 	}
 	return out.String()
 }
