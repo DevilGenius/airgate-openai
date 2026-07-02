@@ -498,9 +498,37 @@ func closeOpenToolBlocks(state *anthropicStreamState) string {
 	return out.String()
 }
 
-func continuationAnchorReplayErr(failure *responsesFailureError) error {
+type continuationAnchorReplayError struct {
+	failure    *responsesFailureError
+	replaySafe bool
+}
+
+func (e *continuationAnchorReplayError) Error() string {
+	if e == nil || e.failure == nil {
+		return ""
+	}
+	return e.failure.Error()
+}
+
+func (e *continuationAnchorReplayError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.failure
+}
+
+func canReplayContinuationAnchor(err error) bool {
+	var replayErr *continuationAnchorReplayError
+	if errors.As(err, &replayErr) {
+		return replayErr.replaySafe
+	}
+	var failure *responsesFailureError
+	return errors.As(err, &failure) && failure.isContinuationAnchorError()
+}
+
+func continuationAnchorReplayErr(failure *responsesFailureError, outputWritten bool) error {
 	if failure != nil && failure.isContinuationAnchorError() {
-		return failure
+		return &continuationAnchorReplayError{failure: failure, replaySafe: !outputWritten}
 	}
 	return nil
 }
@@ -929,7 +957,7 @@ func translateResponsesSSEToAnthropicSSE(
 				terminalEventReceived = true
 				if failure := classifyResponsesFailure([]byte(data)); failure != nil {
 					streamErr = failure
-					skipCurrentOutput = failure.isContinuationAnchorError()
+					skipCurrentOutput = failure.isContinuationAnchorError() && !firstTokenRecorded
 				} else {
 					errMsg := gjson.Get(data, "response.error.message").String()
 					if errMsg == "" {
@@ -1036,7 +1064,7 @@ done:
 				RetryAfter:    failure.RetryAfter,
 				Duration:      elapsed,
 				Usage:         abortUsage(),
-			}, continuationAnchorReplayErr(failure)
+			}, continuationAnchorReplayErr(failure, firstTokenRecorded)
 		}
 		errBody := anthropicErrorJSON("api_error", streamErr.Error())
 		return sdk.ForwardOutcome{

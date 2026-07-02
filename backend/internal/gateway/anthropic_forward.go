@@ -192,7 +192,7 @@ func (g *OpenAIGateway) doAnthropicForward(
 	if err != nil {
 		if len(replayBody) > 0 {
 			var failure *responsesFailureError
-			if errors.As(err, &failure) && failure.isContinuationAnchorError() {
+			if errors.As(err, &failure) && failure.isContinuationAnchorError() && canReplayContinuationAnchor(err) {
 				sdk.LoggerFromContext(ctx).Warn("anthropic_continuation_anchor_invalid",
 					"session", session.SessionKey,
 					"digest_chain", session.DigestChain)

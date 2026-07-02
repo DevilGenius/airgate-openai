@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -735,8 +736,91 @@ func TestTranslateResponsesSSEContinuationAnchorFailureReturnsReplayError(t *tes
 	if outcome.Kind != sdk.OutcomeClientError {
 		t.Fatalf("outcome kind = %v, want client error", outcome.Kind)
 	}
-	if body := w.Body.String(); strings.Contains(body, "event: error") {
-		t.Fatalf("continuation anchor failure should be suppressed for replay, got: %s", body)
+	body := w.Body.String()
+	if count := strings.Count(body, "event: message_start"); count != 1 {
+		t.Fatalf("message_start count = %d, want 1; body=%s", count, body)
+	}
+	if !strings.Contains(body, "event: error") {
+		t.Fatalf("continuation anchor failure after output should be sent as stream error, got: %s", body)
+	}
+	if canReplayContinuationAnchor(err) {
+		t.Fatalf("anchor failure after message_start must not be replay-safe")
+	}
+}
+
+func TestForwardAnthropicMessageDoesNotReplayAfterMessageStart(t *testing.T) {
+	prevContinuation := enableAnthropicContinuation
+	enableAnthropicContinuation = true
+	t.Cleanup(func() { enableAnthropicContinuation = prevContinuation })
+
+	var requestCount atomic.Int32
+	var handlerErr atomic.Value
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count := requestCount.Add(1)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			handlerErr.Store(fmt.Sprintf("read request body: %v", err))
+			http.Error(w, "read failed", http.StatusInternalServerError)
+			return
+		}
+		if count == 1 && !gjson.GetBytes(body, "previous_response_id").Exists() {
+			handlerErr.Store(fmt.Sprintf("first request should use continuation body: %s", body))
+			http.Error(w, "missing previous_response_id", http.StatusInternalServerError)
+			return
+		}
+		if count > 1 {
+			handlerErr.Store(fmt.Sprintf("unexpected full replay request after stream output: %s", body))
+			http.Error(w, "unexpected replay", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.created","response":{"id":"resp_bad_anchor","model":"gpt-5.4"}}`+"\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.failed","response":{"id":"resp_bad_anchor","error":{"type":"invalid_request_error","code":"previous_response_not_found","message":"Previous response not found"}}}`+"\n\n")
+	}))
+	defer ts.Close()
+
+	sessionID := "anthropic-replay-after-start"
+	sessionKey := sessionStateKeyFromValues(sessionID, "", "")
+	sessionStateStore.Delete(sessionKey)
+	t.Cleanup(func() { sessionStateStore.Delete(sessionKey) })
+
+	headers := http.Header{}
+	headers.Set("X-Session-ID", sessionID)
+	headers.Set("X-OpenAI-Previous-Response-ID", "resp_missing")
+	w := httptest.NewRecorder()
+	req := &sdk.ForwardRequest{
+		Account: &sdk.Account{ID: time.Now().UnixNano(), Credentials: map[string]string{
+			"api_key":  "test-key",
+			"base_url": ts.URL,
+		}},
+		Headers:      headers,
+		Writer:       w,
+		Stream:       true,
+		Body:         []byte(`{"model":"claude-sonnet-4-6","stream":true,"max_tokens":128,"messages":[{"role":"user","content":"ping"}]}`),
+		DispatchPlan: sdk.DispatchPlan{SchedulingModel: sonnetTargetModel, WireModel: sonnetTargetModel},
+	}
+	gateway := &OpenAIGateway{transportPool: NewTransportPool()}
+	outcome, err := gateway.forwardAnthropicMessage(context.Background(), req)
+
+	if v := handlerErr.Load(); v != nil {
+		t.Fatal(v)
+	}
+	var failure *responsesFailureError
+	if !errors.As(err, &failure) || !failure.isContinuationAnchorError() {
+		t.Fatalf("err = %v, want continuation anchor failure", err)
+	}
+	if outcome.Kind != sdk.OutcomeClientError {
+		t.Fatalf("outcome kind = %v, want client error", outcome.Kind)
+	}
+	if got := requestCount.Load(); got != 1 {
+		t.Fatalf("upstream request count = %d, want 1", got)
+	}
+	body := w.Body.String()
+	if count := strings.Count(body, "event: message_start"); count != 1 {
+		t.Fatalf("message_start count = %d, want 1; body=%s", count, body)
+	}
+	if !strings.Contains(body, "event: error") {
+		t.Fatalf("late anchor failure should be visible as stream error, got: %s", body)
 	}
 }
 
