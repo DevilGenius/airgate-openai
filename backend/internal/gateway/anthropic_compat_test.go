@@ -282,6 +282,23 @@ func TestCollectToolReferencesFromParsedJSONDepthLimit(t *testing.T) {
 	}
 }
 
+func TestCollectToolReferencesFromContentDepthLimit(t *testing.T) {
+	discovered := map[string]struct{}{}
+	collectToolReferencesFromContent(gjson.Parse(`[{"type":"tool_result","content":[{"type":"tool_reference","tool_name":"NestedTool"}]}]`), discovered, 0)
+	if _, ok := discovered["NestedTool"]; !ok {
+		t.Fatalf("expected nested tool_reference to be discovered")
+	}
+
+	nested := `[{"type":"tool_reference","tool_name":"TooDeepContent"}]`
+	for i := 0; i < anthropicToolReferenceMaxDepth+8; i++ {
+		nested = fmt.Sprintf(`[{"type":"tool_result","content":%s}]`, nested)
+	}
+	collectToolReferencesFromContent(gjson.Parse(nested), discovered, 0)
+	if _, ok := discovered["TooDeepContent"]; ok {
+		t.Fatalf("tool_reference beyond content depth limit should not be discovered")
+	}
+}
+
 func TestCollectToolReferencesFromTextScansFunctionTagsWithinLimit(t *testing.T) {
 	discovered := map[string]struct{}{}
 	collectToolReferencesFromText(`prefix <function>{"name":"TaggedTool","parameters":{}}</function> suffix`, discovered)
