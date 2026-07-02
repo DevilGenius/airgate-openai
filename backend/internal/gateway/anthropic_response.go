@@ -611,9 +611,6 @@ func convertResponsesCompletedToAnthropicJSON(
 	}
 
 	maxOutputIncomplete := typeStr == "response.incomplete"
-	if maxOutputIncomplete && root.Get("response.incomplete_details.reason").String() != "max_output_tokens" {
-		return ""
-	}
 
 	responseData := root.Get("response")
 	if !responseData.Exists() {
