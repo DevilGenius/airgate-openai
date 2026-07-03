@@ -164,6 +164,9 @@ func functionCallOutputRecoveryBody(body []byte) ([]byte, bool) {
 	if sanitizeUnmatchedToolCallOutputsFromMap(reqData, false) {
 		changed = true
 	}
+	if sanitizeEncryptedReasoningItems(reqData) {
+		changed = true
+	}
 	if !changed || !responsesInputHasRecoverableContext(reqData) {
 		return nil, false
 	}

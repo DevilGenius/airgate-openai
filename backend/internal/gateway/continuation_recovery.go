@@ -62,8 +62,12 @@ func delegatedContinuationRecoveryBody(body []byte) ([]byte, bool) {
 	}
 
 	changed := false
-	if _, ok := reqData["previous_response_id"]; ok {
+	_, removedPreviousResponseID := reqData["previous_response_id"]
+	if removedPreviousResponseID {
 		delete(reqData, "previous_response_id")
+		changed = true
+	}
+	if removedPreviousResponseID && sanitizeEncryptedReasoningItems(reqData) {
 		changed = true
 	}
 	if !changed {
@@ -96,7 +100,13 @@ func previousResponseNotFoundRecoveryBody(body []byte) ([]byte, bool) {
 	if !requestCanRecoverPreviousResponseNotFound(body) {
 		return nil, false
 	}
-	patched, err := sjson.DeleteBytes(body, "previous_response_id")
+	var reqData map[string]any
+	if err := json.Unmarshal(body, &reqData); err != nil {
+		return nil, false
+	}
+	delete(reqData, "previous_response_id")
+	sanitizeEncryptedReasoningItems(reqData)
+	patched, err := json.Marshal(reqData)
 	if err != nil {
 		return nil, false
 	}
@@ -114,6 +124,79 @@ func requestCanRecoverPreviousResponseNotFound(body []byte) bool {
 	}
 	signals := analyzePreviousResponseRecoverySignals(reqData)
 	return !signals.hasToolOutput || signals.hasToolCallContext || signals.hasCompactionReplay
+}
+
+func sanitizeEncryptedReasoningItems(reqData map[string]any) bool {
+	if len(reqData) == 0 {
+		return false
+	}
+	changed := false
+	if input, ok := reqData["input"]; ok {
+		next, inputChanged, keep := sanitizeEncryptedReasoningValue(input)
+		if inputChanged {
+			changed = true
+			if keep {
+				reqData["input"] = next
+			} else {
+				delete(reqData, "input")
+			}
+		}
+	}
+	if messages, ok := reqData["messages"]; ok {
+		next, messagesChanged, keep := sanitizeEncryptedReasoningValue(messages)
+		if messagesChanged {
+			changed = true
+			if keep {
+				reqData["messages"] = next
+			} else {
+				delete(reqData, "messages")
+			}
+		}
+	}
+	return changed
+}
+
+func sanitizeEncryptedReasoningValue(value any) (next any, changed bool, keep bool) {
+	switch v := value.(type) {
+	case []any:
+		filtered := v[:0]
+		changed := false
+		for _, item := range v {
+			nextItem, itemChanged, keepItem := sanitizeEncryptedReasoningItem(item)
+			if itemChanged {
+				changed = true
+			}
+			if keepItem {
+				filtered = append(filtered, nextItem)
+			}
+		}
+		if !changed {
+			return value, false, true
+		}
+		if len(filtered) == 0 {
+			return nil, true, false
+		}
+		return filtered, true, true
+	case map[string]any:
+		return sanitizeEncryptedReasoningItem(v)
+	default:
+		return value, false, true
+	}
+}
+
+func sanitizeEncryptedReasoningItem(item any) (next any, changed bool, keep bool) {
+	itemMap, ok := item.(map[string]any)
+	if !ok {
+		return item, false, true
+	}
+	if strings.TrimSpace(jsonString(itemMap["type"])) != "reasoning" {
+		return item, false, true
+	}
+	if strings.TrimSpace(jsonString(itemMap["encrypted_content"])) == "" {
+		return item, false, true
+	}
+
+	return nil, true, false
 }
 
 func analyzePreviousResponseRecoverySignals(reqData map[string]any) previousResponseRecoverySignals {

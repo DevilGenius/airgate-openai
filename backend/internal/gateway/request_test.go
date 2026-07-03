@@ -507,24 +507,24 @@ func TestPreviousResponseNotFoundRecoveryBodyAllowsCompactionReplayToolOutput(t 
 	}
 }
 
-func TestPreviousResponseNotFoundRecoveryBodyPreservesEncryptedReasoning(t *testing.T) {
-	body := []byte(`{"model":"gpt-5.4","previous_response_id":"resp_old","input":[{"type":"reasoning","id":"rs_1","encrypted_content":"sealed"}]}`)
+func TestPreviousResponseNotFoundRecoveryBodyDropsEncryptedReasoning(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.4","previous_response_id":"resp_old","input":[{"type":"reasoning","id":"rs_1","encrypted_content":"sealed"},{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}]}`)
 
 	got, ok := previousResponseNotFoundRecoveryBody(body)
 	if !ok {
-		t.Fatalf("expected recovery body for encrypted reasoning content")
+		t.Fatalf("expected recovery body")
 	}
 	if gjson.GetBytes(got, "previous_response_id").Exists() {
 		t.Fatalf("previous_response_id was not removed: %s", got)
 	}
-	if gjson.GetBytes(got, "input.0.id").Exists() {
-		t.Fatalf("reasoning id was not removed: %s", got)
+	if bytes.Contains(got, []byte("encrypted_content")) {
+		t.Fatalf("encrypted reasoning content was not removed: %s", got)
 	}
-	if gotEnc := gjson.GetBytes(got, "input.0.encrypted_content").String(); gotEnc != "sealed" {
-		t.Fatalf("encrypted_content = %q, want sealed; body=%s", gotEnc, got)
+	if count := gjson.GetBytes(got, "input.#").Int(); count != 1 {
+		t.Fatalf("input item count = %d, want 1; body=%s", count, got)
 	}
-	if !gjson.GetBytes(got, "input.0.summary").IsArray() {
-		t.Fatalf("summary was not backfilled: %s", got)
+	if text := gjson.GetBytes(got, "input.0.content.0.text").String(); text != "continue" {
+		t.Fatalf("input text = %q, want continue; body=%s", text, got)
 	}
 }
 
@@ -564,6 +564,27 @@ func TestFunctionCallOutputRecoveryBodyPreservesMatchedOutput(t *testing.T) {
 	}
 }
 
+func TestFunctionCallOutputRecoveryBodyDropsEncryptedReasoning(t *testing.T) {
+	body := []byte(`{"type":"response.create","model":"gpt-5.4","previous_response_id":"resp_old","input":[{"type":"reasoning","id":"rs_1","encrypted_content":"sealed"},{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]},{"type":"function_call_output","call_id":"call_missing","output":"ok"}]}`)
+
+	got, ok := functionCallOutputRecoveryBody(body)
+	if !ok {
+		t.Fatalf("expected recovery body")
+	}
+	if gjson.GetBytes(got, "previous_response_id").Exists() {
+		t.Fatalf("previous_response_id was not removed: %s", got)
+	}
+	if bytes.Contains(got, []byte("encrypted_content")) {
+		t.Fatalf("encrypted reasoning content was not removed: %s", got)
+	}
+	if count := gjson.GetBytes(got, "input.#").Int(); count != 1 {
+		t.Fatalf("input count = %d, want 1; body=%s", count, got)
+	}
+	if typ := gjson.GetBytes(got, "input.0.type").String(); typ != "message" {
+		t.Fatalf("input.0.type = %q, want message; body=%s", typ, got)
+	}
+}
+
 func TestFunctionCallOutputRecoveryBodyDropsCustomToolOrphanOutput(t *testing.T) {
 	body := []byte(`{"type":"response.create","model":"gpt-5.4","previous_response_id":"resp_old","input":[{"type":"custom_tool_call_output","call_id":"call_missing","output":"ok"},{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}]}`)
 
@@ -591,19 +612,13 @@ func TestPreprocessRequestBodyAppliesDelegatedContinuationRecovery(t *testing.T)
 	if gjson.GetBytes(got, "previous_response_id").Exists() {
 		t.Fatalf("previous_response_id was not removed: %s", got)
 	}
-	if gjson.GetBytes(got, "input.0.id").Exists() {
-		t.Fatalf("reasoning id was not removed: %s", got)
+	if bytes.Contains(got, []byte("encrypted_content")) {
+		t.Fatalf("encrypted reasoning content was not removed: %s", got)
 	}
-	if gotEnc := gjson.GetBytes(got, "input.0.encrypted_content").String(); gotEnc != "sealed" {
-		t.Fatalf("encrypted_content = %q, want sealed; body=%s", gotEnc, got)
+	if count := gjson.GetBytes(got, "input.#").Int(); count != 1 {
+		t.Fatalf("input item count = %d, want 1; body=%s", count, got)
 	}
-	if !gjson.GetBytes(got, "input.0.summary").IsArray() {
-		t.Fatalf("summary was not backfilled: %s", got)
-	}
-	if count := gjson.GetBytes(got, "input.#").Int(); count != 2 {
-		t.Fatalf("input item count = %d, want 2; body=%s", count, got)
-	}
-	if text := gjson.GetBytes(got, "input.1.content.0.text").String(); text != "continue" {
+	if text := gjson.GetBytes(got, "input.0.content.0.text").String(); text != "continue" {
 		t.Fatalf("input text = %q, want continue; body=%s", text, got)
 	}
 	if !delegatedContinuationRecoveryApplied(got, headers) {
