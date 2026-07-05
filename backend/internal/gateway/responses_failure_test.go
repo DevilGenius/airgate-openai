@@ -228,6 +228,13 @@ func TestClassifyHTTPFailureKeepsDisabled403AsAccountDead(t *testing.T) {
 	}
 }
 
+func TestClassifyHTTPFailureTreatsDeactivatedWorkspace402AsAccountDead(t *testing.T) {
+	got := classifyHTTPFailure(http.StatusPaymentRequired, `{"detail":{"code":"deactivated_workspace"}}`)
+	if got != sdk.OutcomeAccountDead {
+		t.Fatalf("expected AccountDead, got %v", got)
+	}
+}
+
 func TestClassifyHTTPFailureTreatsPlain403AsAccountUnavailable(t *testing.T) {
 	got := classifyHTTPFailure(403, "访问被拒绝，账号可能已被禁用或无权限 (HTTP 403)")
 	if got != sdk.OutcomeAccountUnavailable {

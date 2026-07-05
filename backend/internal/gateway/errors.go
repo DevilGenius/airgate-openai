@@ -25,19 +25,23 @@ const maxErrorResponseBodyBytes = 1 << 20
 //	429 → AccountRateLimited
 //	401 → AccountDead
 //	403 → AccountUnavailable（明确 disabled/deactivated/suspended 仍升级为 AccountDead）
+//	402 + deactivated_workspace → AccountDead
 //	400 + 消息含限流关键词 → AccountRateLimited（部分上游用 400 返回 usage_limit_reached）
 //	400 + 消息含 disabled/deactivated → AccountDead
 //	overloaded 语义 → FamilyTransient（走 Core 的 family 级短退避）
 //	5xx → UpstreamTransient
 //	其它 4xx → ClientError（客户端请求自己的问题，账号无辜）
 func classifyHTTPFailure(statusCode int, message string) sdk.OutcomeKind {
-	if isOverloadedText(message) {
+	if statusCode >= 400 && isOverloadedText(message) {
 		return sdk.OutcomeFamilyTransient
 	}
-	if isTemporaryRateLimitText(message) && (statusCode == 400 || statusCode == 403 || statusCode == 429) {
+	if (statusCode == 400 || statusCode == 403 || statusCode == 429) && isTemporaryRateLimitText(message) {
 		return sdk.OutcomeAccountRateLimited
 	}
-	if isDisabledAccountText(message) && (statusCode == 400 || statusCode == 403) {
+	if statusCode == http.StatusPaymentRequired && isDeactivatedWorkspaceText(message) {
+		return sdk.OutcomeAccountDead
+	}
+	if (statusCode == 400 || statusCode == 403) && isDisabledAccountText(message) {
 		return sdk.OutcomeAccountDead
 	}
 	switch statusCode {
@@ -102,6 +106,14 @@ func isDisabledAccountText(parts ...string) bool {
 	return strings.Contains(combined, "disabled") ||
 		strings.Contains(combined, "deactivated") ||
 		strings.Contains(combined, "suspended")
+}
+
+func isDeactivatedWorkspaceText(parts ...string) bool {
+	combined := strings.ToLower(strings.Join(parts, " "))
+	if combined == "" {
+		return false
+	}
+	return strings.Contains(combined, "deactivated_workspace")
 }
 
 func isModelUnsupportedText(parts ...string) bool {

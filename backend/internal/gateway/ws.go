@@ -207,6 +207,10 @@ func formatWebSocketDialError(resp *http.Response, err error) error {
 		switch resp.StatusCode {
 		case 401:
 			hint = "认证失败，access_token 已过期或账号已被停用"
+		case 402:
+			if isDeactivatedWorkspaceText(upstreamMsg) {
+				hint = "认证失败，access_token 已过期或账号已被停用"
+			}
 		case 403:
 			hint = "访问被拒绝，账号可能已被禁用或无权限"
 		case 429:
