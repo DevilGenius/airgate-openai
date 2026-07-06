@@ -24,7 +24,7 @@ const maxErrorResponseBodyBytes = 1 << 20
 //
 //	429 → AccountRateLimited
 //	401 → AccountDead
-//	403 → AccountUnavailable（明确 disabled/deactivated/suspended 仍升级为 AccountDead）
+//	403 → AccountUnavailable（明确账号禁用 / workspace 失活仍升级为 AccountDead）
 //	402 + deactivated_workspace → AccountDead
 //	400 + 消息含限流关键词 → AccountRateLimited（部分上游用 400 返回 usage_limit_reached）
 //	400 + 消息含 disabled/deactivated → AccountDead
@@ -105,7 +105,8 @@ func isDisabledAccountText(parts ...string) bool {
 	}
 	return strings.Contains(combined, "disabled") ||
 		strings.Contains(combined, "deactivated") ||
-		strings.Contains(combined, "suspended")
+		strings.Contains(combined, "suspended") ||
+		strings.Contains(combined, "not an active member of the selected workspace")
 }
 
 func isDeactivatedWorkspaceText(parts ...string) bool {
