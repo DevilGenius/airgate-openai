@@ -86,19 +86,32 @@ func TestOperationPolicyHelpers(t *testing.T) {
 	}
 
 	req.Headers = http.Header{}
-	outcome, denied = enforceOperationPolicies(req, "/v1/responses")
-	if !denied || gjson.GetBytes(outcome.Upstream.Body, "error.code").String() != "responses_image_generation_disabled" {
-		t.Fatalf("responses image tool denied = %#v denied=%v", outcome, denied)
+	req.Body = []byte(`{"tools":[{"type":"web_search"},{"type":"image_generation","model":"gpt-image-1.5"}],"tool_choice":{"type":"image_generation"}}`)
+	if _, denied := enforceOperationPolicies(req, "/v1/responses"); denied {
+		t.Fatal("disabled responses image tool should be removed instead of denied")
 	}
+	if hasResponsesImageGenerationTool(req.Body) {
+		t.Fatalf("disabled responses image tool was not removed: %s", req.Body)
+	}
+	if got := gjson.GetBytes(req.Body, "tools.0.type").String(); got != "web_search" {
+		t.Fatalf("non-image tool was not preserved: %s", req.Body)
+	}
+	if gjson.GetBytes(req.Body, "tool_choice").Exists() {
+		t.Fatalf("image_generation tool_choice should be removed with the tool: %s", req.Body)
+	}
+	req.Body = []byte(`{"tools":[{"type":"image_generation"}]}`)
 	req.Headers.Set("X-Airgate-Operation-Responses-Image-Generation", "true")
 	if _, denied := enforceOperationPolicies(req, "/responses"); denied {
 		t.Fatal("enabled responses image tool should pass")
 	}
 	req.Headers = http.Header{}
-	outcome, denied = enforceOperationPolicies(req, "/v1/chat/completions")
-	if !denied || gjson.GetBytes(outcome.Upstream.Body, "error.code").String() != "responses_image_generation_disabled" {
-		t.Fatalf("chat path responses image tool denied = %#v denied=%v", outcome, denied)
+	if _, denied := enforceOperationPolicies(req, "/v1/chat/completions"); denied {
+		t.Fatal("disabled chat path image tool should be removed instead of denied")
 	}
+	if hasResponsesImageGenerationTool(req.Body) {
+		t.Fatalf("disabled chat path image tool was not removed: %s", req.Body)
+	}
+	req.Body = []byte(`{"tools":[{"type":"image_generation"}]}`)
 	req.Headers.Set("X-Airgate-Operation-Responses-Image-Generation", "true")
 	if _, denied := enforceOperationPolicies(req, "/v1/chat/completions"); denied {
 		t.Fatal("enabled chat path responses image tool should pass")
@@ -117,6 +130,9 @@ func TestOperationPolicyHelpers(t *testing.T) {
 	}
 	if hasResponsesImageGenerationTool(nil) || hasResponsesImageGenerationTool([]byte(`{"tools":[{"type":"IMAGE_GENERATION"}]}`)) == false {
 		t.Fatal("hasResponsesImageGenerationTool returned unexpected result")
+	}
+	if got := removeResponsesImageGenerationTool([]byte(`{"tools":[{"type":"image_generation"}],"tool_choice":"image_generation"}`)); gjson.GetBytes(got, "tools").Exists() || gjson.GetBytes(got, "tool_choice").Exists() {
+		t.Fatalf("removeResponsesImageGenerationTool should remove empty tools and image tool_choice: %s", got)
 	}
 	if normalizeForwardedPath(" /V1/Responses/?x=1 ") != "/v1/responses" {
 		t.Fatal("normalizeForwardedPath should trim, lower, strip query and slash")

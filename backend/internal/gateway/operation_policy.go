@@ -1,10 +1,12 @@
 package gateway
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
@@ -16,17 +18,17 @@ func enforceOperationPolicies(req *sdk.ForwardRequest, reqPath string) (sdk.Forw
 	switch {
 	case isImagesGenerationsPath(reqPath):
 		if !operationEnabled(req.Headers, "images.generate") {
-			return operationDeniedOutcome("images_generate_disabled", "当前分组未开启文生图能力"), true
+			return operationDeniedOutcome("images_generate_disabled", "Image generation is not enabled for this group"), true
 		}
 		return sdk.ForwardOutcome{}, false
 	case isImagesEditsPath(reqPath):
 		if !operationEnabled(req.Headers, "images.edit") {
-			return operationDeniedOutcome("images_edit_disabled", "当前分组未开启图像编辑能力"), true
+			return operationDeniedOutcome("images_edit_disabled", "Image generation is not enabled for this group"), true
 		}
 		return sdk.ForwardOutcome{}, false
 	}
 	if hasResponsesImageGenerationTool(req.Body) && !operationEnabled(req.Headers, "responses.image_generation") {
-		return operationDeniedOutcome("responses_image_generation_disabled", "当前分组未开启文本路径图片生成功能"), true
+		req.Body = removeResponsesImageGenerationTool(req.Body)
 	}
 	return sdk.ForwardOutcome{}, false
 }
@@ -62,6 +64,60 @@ func hasResponsesImageGenerationTool(body []byte) bool {
 		}
 	}
 	return false
+}
+
+func removeResponsesImageGenerationTool(body []byte) []byte {
+	if len(body) == 0 {
+		return body
+	}
+	tools := gjson.GetBytes(body, "tools")
+	if !tools.IsArray() {
+		return body
+	}
+	items := tools.Array()
+	if len(items) == 0 {
+		return body
+	}
+
+	updated := body
+	removed := false
+	for i := len(items) - 1; i >= 0; i-- {
+		if !strings.EqualFold(strings.TrimSpace(items[i].Get("type").String()), "image_generation") {
+			continue
+		}
+		next, err := sjson.DeleteBytes(updated, fmt.Sprintf("tools.%d", i))
+		if err != nil {
+			continue
+		}
+		updated = next
+		removed = true
+	}
+	if !removed {
+		return body
+	}
+
+	if len(gjson.GetBytes(updated, "tools").Array()) == 0 {
+		if next, err := sjson.DeleteBytes(updated, "tools"); err == nil {
+			updated = next
+		}
+	}
+	if isImageGenerationToolChoice(gjson.GetBytes(updated, "tool_choice")) {
+		if next, err := sjson.DeleteBytes(updated, "tool_choice"); err == nil {
+			updated = next
+		}
+	}
+	return updated
+}
+
+func isImageGenerationToolChoice(choice gjson.Result) bool {
+	switch {
+	case !choice.Exists():
+		return false
+	case choice.IsObject():
+		return strings.EqualFold(strings.TrimSpace(choice.Get("type").String()), "image_generation")
+	default:
+		return strings.EqualFold(strings.TrimSpace(choice.String()), "image_generation")
+	}
 }
 
 func isImagesGenerationsPath(reqPath string) bool {
