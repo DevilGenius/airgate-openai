@@ -16,7 +16,7 @@ import (
 func main() {
 	token := flag.String("token", "", "OAuth access_token")
 	accountID := flag.String("account-id", "", "ChatGPT Account ID（可选）")
-	model := flag.String("model", "gpt-5.3-codex", "模型名称")
+	model := flag.String("model", "gpt-5.3-codex-spark", "模型名称")
 	proxy := flag.String("proxy", "", "代理地址（可选）")
 	useWS := flag.Bool("ws", false, "使用 WebSocket 协议（默认 SSE）")
 	reasoning := flag.String("reasoning", "medium", "思考强度: none/minimal/low/medium/high/xhigh")

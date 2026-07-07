@@ -18,7 +18,7 @@ func TestLookup_ByKeyword(t *testing.T) {
 		modelID   string
 		wantMatch string // 期望命中的注册键（按 InputPrice 识别）
 	}{
-		{"未知 codex 系列 → gpt-5.3-codex", "gpt-5.9-codex-preview", "gpt-5.3-codex"},
+		{"未知 codex 系列 → gpt-5.3-codex-spark", "gpt-5.9-codex-preview", "gpt-5.3-codex-spark"},
 		{"未知 image 系列 → gpt-image-1.5", "gpt-image-3", "gpt-image-1.5"},
 		{"未知 mini 系列 → gpt-5.4-mini", "gpt-5.9-mini", "gpt-5.4-mini"},
 		{"未知 nano 系列 → gpt-5.4-mini", "gpt-5.9-nano", "gpt-5.4-mini"},
@@ -47,8 +47,8 @@ func TestLookup_KnownModelUnchanged(t *testing.T) {
 		if spec.InputPrice != 5.0 || spec.OutputPrice != 30.0 || spec.CachedPrice != 0.5 {
 			t.Errorf("gpt-5.5 定价变化: In=%v Out=%v Cached=%v", spec.InputPrice, spec.OutputPrice, spec.CachedPrice)
 		}
-		if spec.ContextWindow != 400000 {
-			t.Errorf("gpt-5.5 ContextWindow = %v, want 400000", spec.ContextWindow)
+		if spec.ContextWindow != 272000 {
+			t.Errorf("gpt-5.5 ContextWindow = %v, want 272000", spec.ContextWindow)
 		}
 		if spec.InputPricePriority != 12.5 || spec.OutputPricePriority != 75.0 || spec.CachedPricePriority != 1.25 {
 			t.Errorf("gpt-5.5 priority 定价变化: In=%v Out=%v Cached=%v", spec.InputPricePriority, spec.OutputPricePriority, spec.CachedPricePriority)
@@ -62,6 +62,37 @@ func TestLookup_KnownModelUnchanged(t *testing.T) {
 		spec := Lookup("gpt-5.4")
 		if spec.InputPrice != 2.5 || spec.OutputPrice != 15.0 {
 			t.Errorf("gpt-5.4 定价变化: In=%v Out=%v", spec.InputPrice, spec.OutputPrice)
+		}
+		if spec.ContextWindow != 1050000 {
+			t.Errorf("gpt-5.4 ContextWindow = %v, want 1050000", spec.ContextWindow)
+		}
+		if spec.LongContextThreshold != 272000 {
+			t.Errorf("gpt-5.4 LongContextThreshold = %v, want 272000", spec.LongContextThreshold)
+		}
+	})
+
+	t.Run("gpt-5.6 preview", func(t *testing.T) {
+		cases := []struct {
+			model  string
+			input  float64
+			cached float64
+			output float64
+		}{
+			{model: "gpt-5.6-sol", input: 5.0, cached: 0.5, output: 30.0},
+			{model: "gpt-5.6-terra", input: 2.5, cached: 0.25, output: 15.0},
+			{model: "gpt-5.6-luna", input: 1.0, cached: 0.1, output: 6.0},
+		}
+		for _, tc := range cases {
+			spec := Lookup(tc.model)
+			if spec.InputPrice != tc.input || spec.CachedPrice != tc.cached || spec.OutputPrice != tc.output {
+				t.Errorf("%s 定价变化: In=%v Cached=%v Out=%v", tc.model, spec.InputPrice, spec.CachedPrice, spec.OutputPrice)
+			}
+			if spec.ContextWindow != 1050000 {
+				t.Errorf("%s ContextWindow = %v, want 1050000", tc.model, spec.ContextWindow)
+			}
+			if spec.MaxOutputTokens != 128000 {
+				t.Errorf("%s MaxOutputTokens = %v, want 128000", tc.model, spec.MaxOutputTokens)
+			}
 		}
 	})
 

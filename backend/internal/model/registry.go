@@ -18,7 +18,7 @@ import (
 //   - 标准档：Input / Cached / Output
 //   - Priority 档：*Priority 字段（通常标准 × 2；gpt-5.5 为 × 2.5），缺省时 SDK 以 × 2 兜底
 //   - Flex / Batch 档：*Flex 字段（= 标准 × 0.5），缺省时 SDK 以 × 0.5 兜底
-//   - 长上下文档（仅 gpt-5.4 家族）：完整 input_tokens 超过 LongContextThreshold
+//   - 长上下文档：完整 input_tokens 超过 LongContextThreshold
 //     时，整次请求全量按倍率计费
 type Spec struct {
 	Name            string
@@ -49,7 +49,7 @@ type Spec struct {
 	CachedPriceFlex float64
 	OutputPriceFlex float64
 
-	// 长上下文阶梯（只对 gpt-5.4 家族填非零值）。
+	// 长上下文阶梯（只对支持长上下文阶梯的模型填非零值）。
 	LongContextThreshold        int
 	LongContextInputMultiplier  float64
 	LongContextOutputMultiplier float64
@@ -90,7 +90,7 @@ func imgSpec(name string, input, cached, output, pricePerImage float64) Spec {
 	return spec
 }
 
-// withLongCtx 在已构造的 Spec 基础上附加 gpt-5.4 家族的长上下文阶梯。
+// withLongCtx 在已构造的 Spec 基础上附加长上下文阶梯。
 // OpenAI 官方：input ×2、cached ×2、output ×1.5，阈值 272k input_tokens。
 func withLongCtx(s Spec) Spec {
 	s.LongContextThreshold = 272_000
@@ -103,18 +103,25 @@ func withLongCtx(s Spec) Spec {
 // registry 全局模型注册表（按模型 ID 索引）
 // ─── 新增模型只需在此处加一行 ───
 var registry = map[string]Spec{
-	"gpt-5.5": withPriorityMultiplier(std("GPT 5.5", 400000, 128000, 5.0, 0.5, 30.0), 2.5),
+	"gpt-5.5": withPriorityMultiplier(std("GPT 5.5", 272000, 128000, 5.0, 0.5, 30.0), 2.5),
 
-	// ── GPT-5.4（唯一具备长上下文阶梯的家族）──
-	"gpt-5.4": withLongCtx(std("GPT 5.4", 272000, 128000, 2.5, 0.25, 15.0)),
+	// ── GPT-5.6 preview ──
+	"gpt-5.6-sol":   withLongCtx(std("GPT 5.6 Sol", 1050000, 128000, 5.0, 0.5, 30.0)),
+	"gpt-5.6-terra": withLongCtx(std("GPT 5.6 Terra", 1050000, 128000, 2.5, 0.25, 15.0)),
+	"gpt-5.6-luna":  withLongCtx(std("GPT 5.6 Luna", 1050000, 128000, 1.0, 0.1, 6.0)),
+
+	// ── GPT-5.4 ──
+	"gpt-5.4": withLongCtx(std("GPT 5.4", 1050000, 128000, 2.5, 0.25, 15.0)),
 
 	// ── Codex 5.x ──
-	"gpt-5.3-codex":       std("GPT 5.3 Codex", 272000, 128000, 1.75, 0.175, 14.0),
+	// gpt-5.3-codex 已失效，保留历史配置但不再注册。
+	// "gpt-5.3-codex": std("GPT 5.3 Codex", 272000, 128000, 1.75, 0.175, 14.0),
 	"gpt-5.3-codex-spark": std("GPT 5.3 Codex Spark", 128000, 128000, 1.75, 0.175, 14.0),
 	"gpt-5.4-mini":        std("GPT 5.4 Mini", 128000, 128000, 0.75, 0.075, 4.5),
 
 	// ── GPT 基础系列 ──
-	"gpt-5.2": std("GPT 5.2", 272000, 128000, 1.75, 0.175, 14.0),
+	// gpt-5.2 已失效，保留历史配置但不再注册。
+	// "gpt-5.2": std("GPT 5.2", 272000, 128000, 1.75, 0.175, 14.0),
 
 	// ── 图像生成：标准成本按 token 计，分组图片固定单价由 Core 替代最终计费 ──
 	"gpt-image-1":   imgSpec("GPT Image 1", 5.0, 0.5, 30.0, 0.20),
@@ -149,7 +156,7 @@ func fallbackByKeyword(id string) (Spec, bool) {
 	// 顺序敏感：先细分（codex / mini / image）后粗分（gpt-5 / gpt-4）
 	switch {
 	case strings.Contains(id, "codex"):
-		return registry["gpt-5.3-codex"], true
+		return registry["gpt-5.3-codex-spark"], true
 	case strings.Contains(id, "image"):
 		return registry["gpt-image-1.5"], true
 	case strings.Contains(id, "mini") || strings.Contains(id, "nano"):
