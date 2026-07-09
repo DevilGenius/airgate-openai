@@ -151,7 +151,7 @@ packages:
     engines: {node: '>=20.19.0'}
 
   '@devilgenius/airgate-theme@https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.6/airgate-theme-v0.2.6.tgz':
-    resolution: {tarball: https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.6/airgate-theme-v0.2.6.tgz}
+    resolution: {integrity: sha512-E6fNnIDTWJ3WDNMpM/0jnItM6Izv4TbQGj/N76mGdA+94SDxcc1PqzE4pWjlnx+X30FfXcUB0buhE/rtwrSygg==, tarball: https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.6/airgate-theme-v0.2.6.tgz}
     version: 0.2.6
     peerDependencies:
       react: ^19.0.0
