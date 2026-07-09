@@ -16,6 +16,8 @@ backend/config.docker.yaml
 
 # 前端
 /web/node_modules/
+/web/.pnpm-store/
+/web/.pnpm-store-tmp/
 /web/dist/
 
 # 前端构建产物（嵌入 Go 二进制用，由 Makefile 复制）
