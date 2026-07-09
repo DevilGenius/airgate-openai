@@ -13,7 +13,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@devilgenius/airgate-theme": "https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.5/airgate-theme-v0.2.5.tgz",
+    "@devilgenius/airgate-theme": "https://github.com/DevilGenius/airgate-sdk/releases/download/v0.2.6/airgate-theme-v0.2.6.tgz",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
@@ -28,7 +28,7 @@
     "@vitest/coverage-v8": "^4.1.9",
     "eslint": "^10.1.0",
     "jsdom": "^29.1.1",
-    "typescript": "^5.7.0",
+    "typescript": "^7.0.2",
     "typescript-eslint": "^8.58.0",
     "vite": "^8.0.16",
     "vitest": "^4.1.9"
