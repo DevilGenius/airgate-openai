@@ -986,15 +986,33 @@ func TestOpenAIWireReasoningEffortClampsUnsupportedLevels(t *testing.T) {
 		{"unknown", "unknown"},
 	}
 	for _, tc := range cases {
-		if got := openAIWireReasoningEffort(tc.input); got != tc.want {
+		if got := openAIWireReasoningEffort(tc.input, openAIWireReasoningSupport{}); got != tc.want {
 			t.Errorf("openAIWireReasoningEffort(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestOpenAIWireReasoningEffortAllowsGPT56ExtendedLevels(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"max", "max"},
+		{"maximum", "max"},
+		{"ultra", "ultra"},
+		{"xhigh", "xhigh"},
+		{"unknown", "unknown"},
+	}
+	for _, tc := range cases {
+		if got := openAIWireReasoningEffort(tc.input, openAIWireReasoningSupport{Max: true, Ultra: true}); got != tc.want {
+			t.Errorf("openAIWireReasoningEffort(%q, allowExtended=true) = %q, want %q", tc.input, got, tc.want)
 		}
 	}
 }
 
 func TestApplyOpenAIWireReasoningEffortClampsUnsupportedLevels(t *testing.T) {
 	body := []byte(`{"reasoning":{"effort":"max"},"reasoning_effort":"ultra","output_config":{"effort":"maximum"}}`)
-	result := applyOpenAIWireReasoningEffort(body)
+	result := applyOpenAIWireReasoningEffort(body, "gpt-5.5")
 
 	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "xhigh" {
 		t.Fatalf("reasoning.effort = %q, want xhigh; body=%s", got, result)
@@ -1004,6 +1022,50 @@ func TestApplyOpenAIWireReasoningEffortClampsUnsupportedLevels(t *testing.T) {
 	}
 	if got := gjson.GetBytes(result, "output_config.effort").String(); got != "xhigh" {
 		t.Fatalf("output_config.effort = %q, want xhigh; body=%s", got, result)
+	}
+}
+
+func TestApplyOpenAIWireReasoningEffortClampsLunaUltra(t *testing.T) {
+	body := []byte(`{"reasoning":{"effort":"max"},"reasoning_effort":"ultra"}`)
+	result := applyOpenAIWireReasoningEffort(body, "gpt-5.6-luna")
+
+	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "max" {
+		t.Fatalf("reasoning.effort = %q, want max; body=%s", got, result)
+	}
+	if got := gjson.GetBytes(result, "reasoning_effort").String(); got != "max" {
+		t.Fatalf("reasoning_effort = %q, want max; body=%s", got, result)
+	}
+}
+
+func TestApplyOpenAIWireReasoningEffortPreservesGPT56ExtendedLevels(t *testing.T) {
+	body := []byte(`{"reasoning":{"effort":"max"},"reasoning_effort":"ultra","output_config":{"effort":"maximum"}}`)
+	result := applyOpenAIWireReasoningEffort(body, "gpt-5.6-sol")
+
+	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "max" {
+		t.Fatalf("reasoning.effort = %q, want max; body=%s", got, result)
+	}
+	if got := gjson.GetBytes(result, "reasoning_effort").String(); got != "ultra" {
+		t.Fatalf("reasoning_effort = %q, want ultra; body=%s", got, result)
+	}
+	if got := gjson.GetBytes(result, "output_config.effort").String(); got != "max" {
+		t.Fatalf("output_config.effort = %q, want max; body=%s", got, result)
+	}
+}
+
+func TestOpenAIWireReasoningSupportForModelRecognizesAliases(t *testing.T) {
+	cases := []struct {
+		model string
+		want  openAIWireReasoningSupport
+	}{
+		{"gpt-5.6-sol", openAIWireReasoningSupport{Max: true, Ultra: true}},
+		{"openai/gpt-5.6-terra", openAIWireReasoningSupport{Max: true, Ultra: true}},
+		{"oai/gpt-5.6-luna-openai-compact", openAIWireReasoningSupport{Max: true}},
+		{"gpt-5.5", openAIWireReasoningSupport{}},
+	}
+	for _, tc := range cases {
+		if got := openAIWireReasoningSupportForModel(tc.model); got != tc.want {
+			t.Fatalf("openAIWireReasoningSupportForModel(%q) = %+v, want %+v", tc.model, got, tc.want)
+		}
 	}
 }
 

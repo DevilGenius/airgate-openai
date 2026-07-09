@@ -560,7 +560,7 @@ func (g *OpenAIGateway) buildWSRequest(req *sdk.ForwardRequest, session openAISe
 		return nil, err
 	}
 	// applyForceInstructions 已在 forwardHTTP 入口统一处理
-	body = applyOpenAIWireReasoningEffort(body)
+	body = applyOpenAIWireReasoningEffort(body, req.Model)
 	return applyOpenAIWireServiceTier(body), nil
 }
 

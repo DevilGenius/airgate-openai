@@ -71,7 +71,7 @@ func TestLookup_KnownModelUnchanged(t *testing.T) {
 		}
 	})
 
-	t.Run("gpt-5.6 preview", func(t *testing.T) {
+	t.Run("gpt-5.6", func(t *testing.T) {
 		cases := []struct {
 			model  string
 			input  float64
@@ -87,11 +87,14 @@ func TestLookup_KnownModelUnchanged(t *testing.T) {
 			if spec.InputPrice != tc.input || spec.CachedPrice != tc.cached || spec.OutputPrice != tc.output {
 				t.Errorf("%s 定价变化: In=%v Cached=%v Out=%v", tc.model, spec.InputPrice, spec.CachedPrice, spec.OutputPrice)
 			}
-			if spec.ContextWindow != 1050000 {
-				t.Errorf("%s ContextWindow = %v, want 1050000", tc.model, spec.ContextWindow)
+			if spec.ContextWindow != 372000 {
+				t.Errorf("%s ContextWindow = %v, want 372000", tc.model, spec.ContextWindow)
 			}
 			if spec.MaxOutputTokens != 128000 {
 				t.Errorf("%s MaxOutputTokens = %v, want 128000", tc.model, spec.MaxOutputTokens)
+			}
+			if spec.LongContextThreshold != 0 {
+				t.Errorf("%s LongContextThreshold = %v, want 0", tc.model, spec.LongContextThreshold)
 			}
 		}
 	})

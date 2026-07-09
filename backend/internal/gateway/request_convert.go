@@ -119,18 +119,42 @@ func normalizeOpenAIReasoningEffort(effort string) string {
 	}
 }
 
-func openAIWireReasoningEffort(effort string) string {
+type openAIWireReasoningSupport struct {
+	Max   bool
+	Ultra bool
+}
+
+func openAIWireReasoningEffort(effort string, support openAIWireReasoningSupport) string {
 	switch normalized := normalizeOpenAIReasoningEffort(effort); normalized {
-	case "max", "ultra":
+	case "max":
+		if support.Max {
+			return normalized
+		}
+		return "xhigh"
+	case "ultra":
+		if support.Ultra {
+			return normalized
+		}
+		if support.Max {
+			return "max"
+		}
 		return "xhigh"
 	default:
 		return normalized
 	}
 }
 
-func applyOpenAIWireReasoningEffort(body []byte) []byte {
+func applyOpenAIWireReasoningEffort(body []byte, modelID string) []byte {
 	if len(body) == 0 {
 		return body
+	}
+	if !hasOpenAIReasoningEffortHint(body) {
+		return body
+	}
+
+	support := openAIWireReasoningSupportForModel(modelID)
+	if !support.Max && !support.Ultra && strings.TrimSpace(modelID) == "" {
+		support = openAIWireReasoningSupportForModel(gjson.GetBytes(body, "model").String())
 	}
 
 	result := body
@@ -139,13 +163,39 @@ func applyOpenAIWireReasoningEffort(body []byte) []byte {
 		if !node.Exists() || node.Type != gjson.String {
 			continue
 		}
-		if effort := openAIWireReasoningEffort(node.String()); effort != "" {
+		if effort := openAIWireReasoningEffort(node.String(), support); effort != "" {
 			if modified, err := sjson.SetBytes(result, path, effort); err == nil {
 				result = modified
 			}
 		}
 	}
 	return result
+}
+
+func openAIWireReasoningSupportForModel(modelID string) openAIWireReasoningSupport {
+	id := openAIWireReasoningModelID(modelID)
+	switch id {
+	case "gpt-5.6-sol", "gpt-5.6-terra":
+		return openAIWireReasoningSupport{Max: true, Ultra: true}
+	case "gpt-5.6-luna":
+		return openAIWireReasoningSupport{Max: true}
+	default:
+		return openAIWireReasoningSupport{}
+	}
+}
+
+func openAIWireReasoningModelID(modelID string) string {
+	id := strings.ToLower(strings.TrimSpace(modelID))
+	if id == "" {
+		return ""
+	}
+	if base, ok := openAICompactBaseModel(id); ok {
+		id = strings.ToLower(strings.TrimSpace(base))
+	}
+	if idx := strings.LastIndexByte(id, '/'); idx >= 0 && idx+1 < len(id) {
+		id = strings.TrimSpace(id[idx+1:])
+	}
+	return id
 }
 
 func hasJSONKeyToken(body, quotedKey []byte) bool {
