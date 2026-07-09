@@ -106,7 +106,8 @@ func isDisabledAccountText(parts ...string) bool {
 	return strings.Contains(combined, "disabled") ||
 		strings.Contains(combined, "deactivated") ||
 		strings.Contains(combined, "suspended") ||
-		strings.Contains(combined, "not an active member of the selected workspace")
+		strings.Contains(combined, "not an active member of the selected workspace") ||
+		strings.Contains(combined, "personal access token owner is inactive")
 }
 
 func isDeactivatedWorkspaceText(parts ...string) bool {

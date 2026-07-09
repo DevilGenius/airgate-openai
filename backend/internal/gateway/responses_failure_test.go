@@ -235,6 +235,13 @@ func TestClassifyHTTPFailureTreatsInactiveWorkspaceMember403AsAccountDead(t *tes
 	}
 }
 
+func TestClassifyHTTPFailureTreatsInactiveOwner403AsAccountDead(t *testing.T) {
+	got := classifyHTTPFailure(403, "Personal access token owner is inactive.")
+	if got != sdk.OutcomeAccountDead {
+		t.Fatalf("expected AccountDead, got %v", got)
+	}
+}
+
 func TestClassifyHTTPFailureTreatsDeactivatedWorkspace402AsAccountDead(t *testing.T) {
 	got := classifyHTTPFailure(http.StatusPaymentRequired, `{"detail":{"code":"deactivated_workspace"}}`)
 	if got != sdk.OutcomeAccountDead {
