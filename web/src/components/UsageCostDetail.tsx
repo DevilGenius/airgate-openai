@@ -19,13 +19,16 @@ interface UsageRecordLike {
   total_cost?: number;
   actual_cost?: number;
   billed_cost?: number;
+  cost?: number;
   account_cost?: number;
   rate_multiplier?: number;
   sell_rate?: number;
+  effective_rate?: number;
   account_rate_multiplier?: number;
   service_tier?: string;
   input_price?: number;
   output_price?: number;
+  cached_input_price?: number;
   cache_creation_price?: number;
   usage_metadata?: Record<string, string>;
 }
@@ -173,7 +176,8 @@ export function UsageCostDetail({ context }: UsageRecordSurfaceProps) {
   const groupRate = finiteNumber(record.rate_multiplier);
   const upstreamRate = finiteNumber(record.account_rate_multiplier);
   const sellRate = finiteNumber(record.sell_rate);
-  const keyBillingCost = record.billed_cost ?? record.actual_cost;
+  const finalRate = finiteNumber(record.effective_rate);
+  const keyBillingCost = record.cost ?? record.billed_cost ?? record.actual_cost;
   const showSellRate = isAdmin && sellRate !== undefined && sellRate !== 1;
   const showUserBalanceCharge = isAdmin
     && record.billed_cost !== undefined
@@ -194,6 +198,8 @@ export function UsageCostDetail({ context }: UsageRecordSurfaceProps) {
   if (unitPrices.length === 0) {
     if (record.input_price && record.input_price > 0)
       unitPrices.push({ label: '输入单价', value: `$${record.input_price.toFixed(4)} / 1M Token` });
+    if (record.cached_input_price && record.cached_input_price > 0)
+      unitPrices.push({ label: '缓存输入单价', value: `$${record.cached_input_price.toFixed(4)} / 1M Token` });
     if (record.output_price && record.output_price > 0)
       unitPrices.push({ label: '输出单价', value: `$${record.output_price.toFixed(4)} / 1M Token` });
     if (record.cache_creation_price && record.cache_creation_price > 0)
@@ -201,9 +207,9 @@ export function UsageCostDetail({ context }: UsageRecordSurfaceProps) {
   }
 
   const hasRateInfo = !!record.service_tier
-    || groupRate !== undefined
-    || (isAdmin && upstreamRate !== undefined)
-    || showSellRate;
+    || (isAdmin
+      ? groupRate !== undefined || upstreamRate !== undefined || showSellRate
+      : finalRate !== undefined);
 
   return (
     <div style={panelStyle}>
@@ -226,8 +232,11 @@ export function UsageCostDetail({ context }: UsageRecordSurfaceProps) {
         {record.service_tier ? (
           <Row label="服务档位" value={<span style={{ textTransform: 'capitalize' }}>{record.service_tier}</span>} />
         ) : null}
-        {groupRate !== undefined ? (
+        {isAdmin && groupRate !== undefined ? (
           <Row label="分组倍率" value={rate(groupRate)} />
+        ) : null}
+        {!isAdmin && finalRate !== undefined ? (
+          <Row label="倍率" value={rate(finalRate)} />
         ) : null}
         {isAdmin && upstreamRate !== undefined ? (
           <Row label="上游倍率" value={rate(upstreamRate)} />
