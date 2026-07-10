@@ -153,7 +153,7 @@ func DialWebSocket(cfg WSConfig) (*websocket.Conn, *http.Response, error) {
 		headers.Set("x-codex-turn-state", cfg.TurnState)
 	}
 	if cfg.Originator != "" && headers.Get("originator") == "" {
-		headers.Set("originator", cfg.Originator)
+		headers.Set("originator", resolveCodexOriginator(cfg.Originator))
 	}
 	if cfg.UserAgent != "" && headers.Get("User-Agent") == "" {
 		headers.Set("User-Agent", cfg.UserAgent)

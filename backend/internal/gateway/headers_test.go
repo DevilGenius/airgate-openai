@@ -8,6 +8,15 @@ import (
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
+func TestResolveCodexOriginatorDefaultsAndPreservesExplicitValue(t *testing.T) {
+	if got := resolveCodexOriginator(""); got != defaultCodexOriginator {
+		t.Fatalf("empty originator = %q, want %q", got, defaultCodexOriginator)
+	}
+	if got := resolveCodexOriginator("  custom_client  "); got != "custom_client" {
+		t.Fatalf("explicit originator = %q, want custom_client", got)
+	}
+}
+
 func TestPassHeadersForAccount_Sub2APIStripsClientIdentityHeaders(t *testing.T) {
 	src := http.Header{}
 	src.Set("User-Agent", "claude-cli/2.1.81 (external, cli)")

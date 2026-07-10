@@ -1789,7 +1789,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 			SessionID:      session.SessionID,
 			ConversationID: session.ConversationID,
 			TurnState:      session.LastTurnState,
-			Originator:     req.Headers.Get("originator"),
+			Originator:     resolveCodexOriginator(req.Headers.Get("originator")),
 		}
 		conn, wsResp, err := DialWebSocket(cfg)
 		if err != nil {

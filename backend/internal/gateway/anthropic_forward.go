@@ -435,6 +435,7 @@ func (g *OpenAIGateway) buildAnthropicUpstreamRequest(
 		if session.LastTurnState != "" {
 			upstreamReq.Header.Set("x-codex-turn-state", session.LastTurnState)
 		}
+		upstreamReq.Header.Set("originator", resolveCodexOriginator(req.Headers.Get("originator")))
 	} else {
 		// API Key 模式
 		setAuthHeaders(upstreamReq, account)

@@ -13,6 +13,16 @@ import (
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
+// defaultCodexOriginator 标识 Codex 客户端；ChatGPT 上游的模型部署解析（尤其 GPT-5.6 Luna）依赖此头。
+const defaultCodexOriginator = "codex_cli_rs"
+
+func resolveCodexOriginator(raw string) string {
+	if originator := strings.TrimSpace(raw); originator != "" {
+		return originator
+	}
+	return defaultCodexOriginator
+}
+
 // setAuthHeaders 设置认证头
 func setAuthHeaders(req *http.Request, account *sdk.Account) {
 	// 优先 API Key

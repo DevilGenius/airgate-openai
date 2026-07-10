@@ -69,9 +69,10 @@ func (g *OpenAIGateway) HandleWebSocket(ctx context.Context, conn sdk.WebSocketC
 // handleWSWithOAuth 使用上游 WebSocket 直通（端到端 WS 桥接）
 func (g *OpenAIGateway) handleWSWithOAuth(ctx context.Context, clientConn sdk.WebSocketConn, account *sdk.Account) (*wsDialResult, error) {
 	cfg := WSConfig{
-		Token:     account.Credentials["access_token"],
-		AccountID: account.Credentials["chatgpt_account_id"],
-		ProxyURL:  account.ProxyURL,
+		Token:      account.Credentials["access_token"],
+		AccountID:  account.Credentials["chatgpt_account_id"],
+		ProxyURL:   account.ProxyURL,
+		Originator: defaultCodexOriginator,
 	}
 	upstreamConn, wsResp, err := DialWebSocket(cfg)
 	if err != nil {

@@ -203,9 +203,7 @@ func (g *OpenAIGateway) forwardOAuthCompact(ctx context.Context, req *sdk.Forwar
 	if session.LastTurnState != "" {
 		upstreamReq.Header.Set("x-codex-turn-state", session.LastTurnState)
 	}
-	if originator := req.Headers.Get("originator"); originator != "" {
-		upstreamReq.Header.Set("originator", originator)
-	}
+	upstreamReq.Header.Set("originator", resolveCodexOriginator(req.Headers.Get("originator")))
 	if ua := req.Headers.Get("User-Agent"); ua != "" {
 		upstreamReq.Header.Set("User-Agent", ua)
 	}
@@ -897,7 +895,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		SessionID:      session.SessionID,
 		ConversationID: session.ConversationID,
 		TurnState:      session.LastTurnState,
-		Originator:     req.Headers.Get("originator"),
+		Originator:     resolveCodexOriginator(req.Headers.Get("originator")),
 	}
 
 	logger.Debug("upstream_request_start",
