@@ -45,35 +45,40 @@ type routeDef struct {
 }
 
 type modelInfo struct {
-	ID               string   `yaml:"id"`
-	Name             string   `yaml:"name"`
-	ContextWindow    int      `yaml:"context_window"`
-	MaxOutputTokens  int      `yaml:"max_output_tokens"`
-	Capabilities     []string `yaml:"capabilities,omitempty"`
-	InputPrice       float64  `yaml:"input_price"`
-	OutputPrice      float64  `yaml:"output_price"`
-	CachedInputPrice float64  `yaml:"cached_input_price,omitempty"`
+	ID                 string   `yaml:"id"`
+	Name               string   `yaml:"name"`
+	ContextWindow      int      `yaml:"context_window"`
+	MaxOutputTokens    int      `yaml:"max_output_tokens"`
+	Capabilities       []string `yaml:"capabilities,omitempty"`
+	InputPrice         float64  `yaml:"input_price"`
+	OutputPrice        float64  `yaml:"output_price"`
+	CachedInputPrice   float64  `yaml:"cached_input_price,omitempty"`
+	CacheCreationPrice float64  `yaml:"cache_creation_price,omitempty"`
 
 	// Priority 档单价（$/1M tokens）
-	InputPricePriority       float64 `yaml:"input_price_priority,omitempty"`
-	OutputPricePriority      float64 `yaml:"output_price_priority,omitempty"`
-	CachedInputPricePriority float64 `yaml:"cached_input_price_priority,omitempty"`
+	InputPricePriority         float64 `yaml:"input_price_priority,omitempty"`
+	OutputPricePriority        float64 `yaml:"output_price_priority,omitempty"`
+	CachedInputPricePriority   float64 `yaml:"cached_input_price_priority,omitempty"`
+	CacheCreationPricePriority float64 `yaml:"cache_creation_price_priority,omitempty"`
 
 	// Fast 档单价（$/1M tokens）
-	InputPriceFast       float64 `yaml:"input_price_fast,omitempty"`
-	OutputPriceFast      float64 `yaml:"output_price_fast,omitempty"`
-	CachedInputPriceFast float64 `yaml:"cached_input_price_fast,omitempty"`
+	InputPriceFast         float64 `yaml:"input_price_fast,omitempty"`
+	OutputPriceFast        float64 `yaml:"output_price_fast,omitempty"`
+	CachedInputPriceFast   float64 `yaml:"cached_input_price_fast,omitempty"`
+	CacheCreationPriceFast float64 `yaml:"cache_creation_price_fast,omitempty"`
 
 	// Flex / Batch 档单价（$/1M tokens）
-	InputPriceFlex       float64 `yaml:"input_price_flex,omitempty"`
-	OutputPriceFlex      float64 `yaml:"output_price_flex,omitempty"`
-	CachedInputPriceFlex float64 `yaml:"cached_input_price_flex,omitempty"`
+	InputPriceFlex         float64 `yaml:"input_price_flex,omitempty"`
+	OutputPriceFlex        float64 `yaml:"output_price_flex,omitempty"`
+	CachedInputPriceFlex   float64 `yaml:"cached_input_price_flex,omitempty"`
+	CacheCreationPriceFlex float64 `yaml:"cache_creation_price_flex,omitempty"`
 
-	// 长上下文阶梯（仅 gpt-5.4 家族）
-	LongContextThreshold        int     `yaml:"long_context_threshold,omitempty"`
-	LongContextInputMultiplier  float64 `yaml:"long_context_input_multiplier,omitempty"`
-	LongContextOutputMultiplier float64 `yaml:"long_context_output_multiplier,omitempty"`
-	LongContextCachedMultiplier float64 `yaml:"long_context_cached_multiplier,omitempty"`
+	// 长上下文阶梯
+	LongContextThreshold               int     `yaml:"long_context_threshold,omitempty"`
+	LongContextInputMultiplier         float64 `yaml:"long_context_input_multiplier,omitempty"`
+	LongContextOutputMultiplier        float64 `yaml:"long_context_output_multiplier,omitempty"`
+	LongContextCachedMultiplier        float64 `yaml:"long_context_cached_multiplier,omitempty"`
+	LongContextCacheCreationMultiplier float64 `yaml:"long_context_cache_creation_multiplier,omitempty"`
 }
 
 type accountType struct {
@@ -190,27 +195,32 @@ func convertModels(models []model.NamedSpec) []modelInfo {
 	for _, m := range models {
 		spec := m.Spec
 		items = append(items, modelInfo{
-			ID:                          m.ID,
-			Name:                        spec.Name,
-			ContextWindow:               spec.ContextWindow,
-			MaxOutputTokens:             spec.MaxOutputTokens,
-			Capabilities:                modelCapabilities(spec),
-			InputPrice:                  spec.InputPrice,
-			OutputPrice:                 spec.OutputPrice,
-			CachedInputPrice:            spec.CachedPrice,
-			InputPricePriority:          spec.InputPricePriority,
-			OutputPricePriority:         spec.OutputPricePriority,
-			CachedInputPricePriority:    spec.CachedPricePriority,
-			InputPriceFast:              spec.InputPriceFast,
-			OutputPriceFast:             spec.OutputPriceFast,
-			CachedInputPriceFast:        spec.CachedPriceFast,
-			InputPriceFlex:              spec.InputPriceFlex,
-			OutputPriceFlex:             spec.OutputPriceFlex,
-			CachedInputPriceFlex:        spec.CachedPriceFlex,
-			LongContextThreshold:        spec.LongContextThreshold,
-			LongContextInputMultiplier:  spec.LongContextInputMultiplier,
-			LongContextOutputMultiplier: spec.LongContextOutputMultiplier,
-			LongContextCachedMultiplier: spec.LongContextCachedMultiplier,
+			ID:                                 m.ID,
+			Name:                               spec.Name,
+			ContextWindow:                      spec.ContextWindow,
+			MaxOutputTokens:                    spec.MaxOutputTokens,
+			Capabilities:                       modelCapabilities(spec),
+			InputPrice:                         spec.InputPrice,
+			OutputPrice:                        spec.OutputPrice,
+			CachedInputPrice:                   spec.CachedPrice,
+			CacheCreationPrice:                 spec.CacheCreationPrice,
+			InputPricePriority:                 spec.InputPricePriority,
+			OutputPricePriority:                spec.OutputPricePriority,
+			CachedInputPricePriority:           spec.CachedPricePriority,
+			CacheCreationPricePriority:         spec.CacheCreationPricePriority,
+			InputPriceFast:                     spec.InputPriceFast,
+			OutputPriceFast:                    spec.OutputPriceFast,
+			CachedInputPriceFast:               spec.CachedPriceFast,
+			CacheCreationPriceFast:             spec.CacheCreationPriceFast,
+			InputPriceFlex:                     spec.InputPriceFlex,
+			OutputPriceFlex:                    spec.OutputPriceFlex,
+			CachedInputPriceFlex:               spec.CachedPriceFlex,
+			CacheCreationPriceFlex:             spec.CacheCreationPriceFlex,
+			LongContextThreshold:               spec.LongContextThreshold,
+			LongContextInputMultiplier:         spec.LongContextInputMultiplier,
+			LongContextOutputMultiplier:        spec.LongContextOutputMultiplier,
+			LongContextCachedMultiplier:        spec.LongContextCachedMultiplier,
+			LongContextCacheCreationMultiplier: spec.LongContextCacheCreationMultiplier,
 		})
 	}
 	return items

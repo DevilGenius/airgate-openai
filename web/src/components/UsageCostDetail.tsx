@@ -41,7 +41,7 @@ const panelStyle: CSSProperties = {
 const headerStyle: CSSProperties = {
   borderBottom: '1px solid var(--ag-border)',
   background: 'var(--ag-default-bg)',
-  padding: '0.375rem 0.625rem',
+  padding: 'var(--ag-usage-tooltip-header-padding, 0.25rem 0.5rem)',
 };
 
 const titleStyle: CSSProperties = {
@@ -52,10 +52,11 @@ const titleStyle: CSSProperties = {
 };
 
 const subtitleStyle: CSSProperties = {
-  marginTop: '0.25rem',
+  marginTop: 'var(--ag-usage-tooltip-subtitle-margin-top, 0.125rem)',
   overflow: 'hidden',
   color: 'var(--ag-text-tertiary)',
   fontSize: '0.75rem',
+  lineHeight: 'var(--ag-usage-tooltip-subtitle-line-height, 0.875rem)',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
 };
@@ -63,19 +64,20 @@ const subtitleStyle: CSSProperties = {
 const bodyStyle: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: '0.125rem',
-  padding: '0.5rem',
+  gap: 'var(--ag-usage-tooltip-body-gap, 0.0625rem)',
+  padding: 'var(--ag-usage-tooltip-body-padding, 0.25rem)',
 };
 
 const rowStyle: CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'minmax(0,1fr) minmax(7rem,max-content)',
   alignItems: 'center',
-  gap: '0.75rem',
+  gap: 'var(--ag-usage-tooltip-row-column-gap, 0.5rem)',
   borderRadius: 'var(--radius)',
   background: 'var(--ag-surface)',
-  padding: '0.25rem 0.5rem',
+  padding: 'var(--ag-usage-tooltip-row-padding, 0.125rem 0.375rem)',
   fontSize: '0.75rem',
+  lineHeight: 'var(--ag-usage-tooltip-row-line-height, 0.875rem)',
 };
 
 const labelStyle: CSSProperties = {
@@ -100,7 +102,7 @@ const valueStyle: CSSProperties = {
 };
 
 const dividerStyle: CSSProperties = {
-  margin: '0.125rem 0',
+  margin: 'var(--ag-usage-tooltip-divider-margin, 0.0625rem 0)',
   borderTop: '1px solid var(--ag-border)',
 };
 

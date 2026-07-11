@@ -31,6 +31,7 @@ const (
 	usageMetricTextInputTokens       = "openai.image.input_text_tokens"
 	usageMetricImageInputTokens      = "openai.image.input_image_tokens"
 	usageMetricCachedInputTokens     = "cached_input_tokens"
+	usageMetricCacheCreationTokens   = "cache_creation_tokens"
 	usageMetricOutputTokens          = "output_tokens"
 	usageMetricReasoningOutputTokens = "reasoning_output_tokens"
 	usageMetricTotalTokens           = "total_tokens"
@@ -216,12 +217,14 @@ func usageMetricValue(usage *sdk.Usage, key string) float64 {
 		return usageMetadataFloat(usage, usageMetricImageInputTokens)
 	case usageMetricCachedInputTokens:
 		return float64(usage.CachedInputTokens)
+	case usageMetricCacheCreationTokens:
+		return float64(usage.CacheCreationTokens)
 	case usageMetricOutputTokens:
 		return float64(usage.OutputTokens)
 	case usageMetricReasoningOutputTokens:
 		return float64(usage.ReasoningOutputTokens)
 	case usageMetricTotalTokens:
-		return float64(usage.InputTokens + usage.CachedInputTokens + usage.OutputTokens)
+		return float64(usage.InputTokens + usage.CachedInputTokens + usage.CacheCreationTokens + usage.OutputTokens)
 	case usageMetricImages:
 		return usageMetadataFloat(usage, usageMetricImages)
 	}
@@ -297,9 +300,10 @@ func recomputeUsageAccountCost(usage *sdk.Usage) {
 }
 
 type tokenPrices struct {
-	input  float64
-	cached float64
-	output float64
+	input         float64
+	cached        float64
+	cacheCreation float64
+	output        float64
 }
 
 func pricesForServiceTier(spec model.Spec, tier string) tokenPrices {
@@ -311,19 +315,25 @@ func pricesForServiceTier(spec model.Spec, tier string) tokenPrices {
 				spec.CachedPricePriority,
 				spec.CachedPrice*2,
 			),
+			cacheCreation: fallbackPrice(
+				spec.CacheCreationPricePriority,
+				spec.CacheCreationPrice*2,
+			),
 			output: fallbackPrice(spec.OutputPricePriority, spec.OutputPrice*2),
 		}
 	case "flex":
 		return tokenPrices{
-			input:  fallbackPrice(spec.InputPriceFlex, spec.InputPrice*0.5),
-			cached: fallbackPrice(spec.CachedPriceFlex, spec.CachedPrice*0.5),
-			output: fallbackPrice(spec.OutputPriceFlex, spec.OutputPrice*0.5),
+			input:         fallbackPrice(spec.InputPriceFlex, spec.InputPrice*0.5),
+			cached:        fallbackPrice(spec.CachedPriceFlex, spec.CachedPrice*0.5),
+			cacheCreation: fallbackPrice(spec.CacheCreationPriceFlex, spec.CacheCreationPrice*0.5),
+			output:        fallbackPrice(spec.OutputPriceFlex, spec.OutputPrice*0.5),
 		}
 	default:
 		return tokenPrices{
-			input:  spec.InputPrice,
-			cached: spec.CachedPrice,
-			output: spec.OutputPrice,
+			input:         spec.InputPrice,
+			cached:        spec.CachedPrice,
+			cacheCreation: spec.CacheCreationPrice,
+			output:        spec.OutputPrice,
 		}
 	}
 }
@@ -335,11 +345,11 @@ func fallbackPrice(value, fallback float64) float64 {
 	return fallback
 }
 
-func applyLongContextPricing(spec model.Spec, prices tokenPrices, inputTokens, cachedInputTokens int) (tokenPrices, bool) {
+func applyLongContextPricing(spec model.Spec, prices tokenPrices, inputTokens, cachedInputTokens, cacheCreationTokens int) (tokenPrices, bool) {
 	if spec.LongContextThreshold <= 0 {
 		return prices, false
 	}
-	if inputTokens+cachedInputTokens <= spec.LongContextThreshold {
+	if inputTokens+cachedInputTokens+cacheCreationTokens < spec.LongContextThreshold {
 		return prices, false
 	}
 	if spec.LongContextInputMultiplier > 0 {
@@ -347,6 +357,9 @@ func applyLongContextPricing(spec model.Spec, prices tokenPrices, inputTokens, c
 	}
 	if spec.LongContextCachedMultiplier > 0 {
 		prices.cached *= spec.LongContextCachedMultiplier
+	}
+	if spec.LongContextCacheCreationMultiplier > 0 {
+		prices.cacheCreation *= spec.LongContextCacheCreationMultiplier
 	}
 	if spec.LongContextOutputMultiplier > 0 {
 		prices.output *= spec.LongContextOutputMultiplier
@@ -374,21 +387,26 @@ func fillUsageCost(usage *sdk.Usage) {
 	inputTokens := usageMetricInt(usage, usageMetricInputTokens)
 	outputTokens := usageMetricInt(usage, usageMetricOutputTokens)
 	cachedInputTokens := usageMetricInt(usage, usageMetricCachedInputTokens)
+	cacheCreationTokens := usageMetricInt(usage, usageMetricCacheCreationTokens)
 	prices, _ := applyLongContextPricing(
 		spec,
 		pricesForServiceTier(spec, serviceTier),
 		inputTokens,
 		cachedInputTokens,
+		cacheCreationTokens,
 	)
 
 	inputCost := tokenCost(inputTokens, prices.input)
 	cachedCost := tokenCost(cachedInputTokens, prices.cached)
+	cacheCreationCost := tokenCost(cacheCreationTokens, prices.cacheCreation)
 	outputCost := tokenCost(outputTokens, prices.output)
 	usage.InputPrice = prices.input
 	usage.CachedInputPrice = prices.cached
+	usage.CacheCreationPrice = prices.cacheCreation
 	usage.OutputPrice = prices.output
 	usage.InputCost = inputCost
 	usage.CachedInputCost = cachedCost
+	usage.CacheCreationCost = cacheCreationCost
 	usage.OutputCost = outputCost
 	recomputeUsageAccountCost(usage)
 
@@ -430,6 +448,9 @@ func addUsageCostForModel(
 	}
 	if source.CachedInputPrice > 0 && usage.CachedInputPrice == 0 {
 		usage.CachedInputPrice = source.CachedInputPrice
+	}
+	if source.CacheCreationPrice > 0 && usage.CacheCreationPrice == 0 {
+		usage.CacheCreationPrice = source.CacheCreationPrice
 	}
 	if source.OutputPrice > 0 && usage.OutputPrice == 0 {
 		usage.OutputPrice = source.OutputPrice

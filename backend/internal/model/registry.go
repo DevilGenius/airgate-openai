@@ -15,10 +15,10 @@ import (
 // Spec 单个模型的完整元数据
 //
 // 定价对齐 OpenAI 官方规则：
-//   - 标准档：Input / Cached / Output
+//   - 标准档：Input / Cached / CacheCreation / Output
 //   - Priority 档：*Priority 字段（通常标准 × 2；gpt-5.5 为 × 2.5），缺省时 SDK 以 × 2 兜底
 //   - Flex / Batch 档：*Flex 字段（= 标准 × 0.5），缺省时 SDK 以 × 0.5 兜底
-//   - 长上下文档：完整 input_tokens 超过 LongContextThreshold
+//   - 长上下文档：完整 input_tokens 达到或超过 LongContextThreshold
 //     时，整次请求全量按倍率计费
 type Spec struct {
 	Name            string
@@ -30,30 +30,35 @@ type Spec struct {
 	ImagePrice float64
 
 	// 标准档单价（$/1M tokens）
-	InputPrice  float64
-	CachedPrice float64
-	OutputPrice float64
+	InputPrice         float64
+	CachedPrice        float64
+	CacheCreationPrice float64
+	OutputPrice        float64
 
 	// Priority 档单价（$/1M tokens）。零值表示未配置，由 SDK 以标准 × 2 兜底。
-	InputPricePriority  float64
-	CachedPricePriority float64
-	OutputPricePriority float64
+	InputPricePriority         float64
+	CachedPricePriority        float64
+	CacheCreationPricePriority float64
+	OutputPricePriority        float64
 
 	// Fast 档单价（$/1M tokens）。当前未使用，保持零值。
-	InputPriceFast  float64
-	CachedPriceFast float64
-	OutputPriceFast float64
+	InputPriceFast         float64
+	CachedPriceFast        float64
+	CacheCreationPriceFast float64
+	OutputPriceFast        float64
 
 	// Flex / Batch 档单价（$/1M tokens）。零值表示未配置，由 SDK 以标准 × 0.5 兜底。
-	InputPriceFlex  float64
-	CachedPriceFlex float64
-	OutputPriceFlex float64
+	InputPriceFlex         float64
+	CachedPriceFlex        float64
+	CacheCreationPriceFlex float64
+	OutputPriceFlex        float64
 
 	// 长上下文阶梯（只对支持长上下文阶梯的模型填非零值）。
-	LongContextThreshold        int
-	LongContextInputMultiplier  float64
-	LongContextOutputMultiplier float64
-	LongContextCachedMultiplier float64
+	LongContextThreshold               int
+	LongContextInputMultiplier         float64
+	LongContextOutputMultiplier        float64
+	LongContextCachedMultiplier        float64
+	LongContextCacheCreationMultiplier float64
 }
 
 // std 快捷构造 standard / priority / flex 价格齐全的 Spec，
@@ -75,9 +80,19 @@ func std(name string, ctx, maxOut int, input, cached, output float64) Spec {
 	}
 }
 
+// withCacheCreationPrice 为明确提供缓存写入价格的模型补齐 standard / priority / flex 档。
+// 未提供该价格的旧模型保持零值，避免推断未经确认的计费规则。
+func withCacheCreationPrice(s Spec, price float64) Spec {
+	s.CacheCreationPrice = price
+	s.CacheCreationPricePriority = price * 2
+	s.CacheCreationPriceFlex = price * 0.5
+	return s
+}
+
 func withPriorityMultiplier(s Spec, multiplier float64) Spec {
 	s.InputPricePriority = s.InputPrice * multiplier
 	s.CachedPricePriority = s.CachedPrice * multiplier
+	s.CacheCreationPricePriority = s.CacheCreationPrice * multiplier
 	s.OutputPricePriority = s.OutputPrice * multiplier
 	return s
 }
@@ -91,12 +106,15 @@ func imgSpec(name string, input, cached, output, pricePerImage float64) Spec {
 }
 
 // withLongCtx 在已构造的 Spec 基础上附加长上下文阶梯。
-// OpenAI 官方：input ×2、cached ×2、output ×1.5，阈值 272k input_tokens。
+// OpenAI 官方：input / cached / cache creation ×2、output ×1.5，阈值 272k input_tokens。
 func withLongCtx(s Spec) Spec {
 	s.LongContextThreshold = 272_000
 	s.LongContextInputMultiplier = 2.0
 	s.LongContextOutputMultiplier = 1.5
 	s.LongContextCachedMultiplier = 2.0
+	if s.CacheCreationPrice > 0 {
+		s.LongContextCacheCreationMultiplier = 2.0
+	}
 	return s
 }
 
@@ -106,9 +124,9 @@ var registry = map[string]Spec{
 	"gpt-5.5": withPriorityMultiplier(std("GPT 5.5", 272000, 128000, 5.0, 0.5, 30.0), 2.5),
 
 	// ── GPT-5.6 ──
-	"gpt-5.6-sol":   std("GPT-5.6-Sol", 372000, 128000, 5.0, 0.5, 30.0),
-	"gpt-5.6-terra": std("GPT-5.6-Terra", 372000, 128000, 2.5, 0.25, 15.0),
-	"gpt-5.6-luna":  std("GPT-5.6-Luna", 372000, 128000, 1.0, 0.1, 6.0),
+	"gpt-5.6-sol":   withLongCtx(withCacheCreationPrice(std("GPT-5.6-Sol", 372000, 128000, 5.0, 0.5, 30.0), 6.25)),
+	"gpt-5.6-terra": withLongCtx(withCacheCreationPrice(std("GPT-5.6-Terra", 372000, 128000, 2.5, 0.25, 15.0), 3.125)),
+	"gpt-5.6-luna":  withLongCtx(withCacheCreationPrice(std("GPT-5.6-Luna", 372000, 128000, 1.0, 0.1, 6.0), 1.25)),
 
 	// ── GPT-5.4 ──
 	"gpt-5.4": withLongCtx(std("GPT 5.4", 1050000, 128000, 2.5, 0.25, 15.0)),

@@ -69,23 +69,30 @@ func TestLookup_KnownModelUnchanged(t *testing.T) {
 		if spec.LongContextThreshold != 272000 {
 			t.Errorf("gpt-5.4 LongContextThreshold = %v, want 272000", spec.LongContextThreshold)
 		}
+		if spec.CacheCreationPrice != 0 {
+			t.Errorf("gpt-5.4 CacheCreationPrice = %v, want 0", spec.CacheCreationPrice)
+		}
+		if spec.LongContextCacheCreationMultiplier != 0 {
+			t.Errorf("gpt-5.4 LongContextCacheCreationMultiplier = %v, want 0", spec.LongContextCacheCreationMultiplier)
+		}
 	})
 
 	t.Run("gpt-5.6", func(t *testing.T) {
 		cases := []struct {
-			model  string
-			input  float64
-			cached float64
-			output float64
+			model         string
+			input         float64
+			cached        float64
+			cacheCreation float64
+			output        float64
 		}{
-			{model: "gpt-5.6-sol", input: 5.0, cached: 0.5, output: 30.0},
-			{model: "gpt-5.6-terra", input: 2.5, cached: 0.25, output: 15.0},
-			{model: "gpt-5.6-luna", input: 1.0, cached: 0.1, output: 6.0},
+			{model: "gpt-5.6-sol", input: 5.0, cached: 0.5, cacheCreation: 6.25, output: 30.0},
+			{model: "gpt-5.6-terra", input: 2.5, cached: 0.25, cacheCreation: 3.125, output: 15.0},
+			{model: "gpt-5.6-luna", input: 1.0, cached: 0.1, cacheCreation: 1.25, output: 6.0},
 		}
 		for _, tc := range cases {
 			spec := Lookup(tc.model)
-			if spec.InputPrice != tc.input || spec.CachedPrice != tc.cached || spec.OutputPrice != tc.output {
-				t.Errorf("%s 定价变化: In=%v Cached=%v Out=%v", tc.model, spec.InputPrice, spec.CachedPrice, spec.OutputPrice)
+			if spec.InputPrice != tc.input || spec.CachedPrice != tc.cached || spec.CacheCreationPrice != tc.cacheCreation || spec.OutputPrice != tc.output {
+				t.Errorf("%s 定价变化: In=%v Cached=%v CacheCreation=%v Out=%v", tc.model, spec.InputPrice, spec.CachedPrice, spec.CacheCreationPrice, spec.OutputPrice)
 			}
 			if spec.ContextWindow != 372000 {
 				t.Errorf("%s ContextWindow = %v, want 372000", tc.model, spec.ContextWindow)
@@ -93,8 +100,14 @@ func TestLookup_KnownModelUnchanged(t *testing.T) {
 			if spec.MaxOutputTokens != 128000 {
 				t.Errorf("%s MaxOutputTokens = %v, want 128000", tc.model, spec.MaxOutputTokens)
 			}
-			if spec.LongContextThreshold != 0 {
-				t.Errorf("%s LongContextThreshold = %v, want 0", tc.model, spec.LongContextThreshold)
+			if spec.LongContextThreshold != 272000 {
+				t.Errorf("%s LongContextThreshold = %v, want 272000", tc.model, spec.LongContextThreshold)
+			}
+			if spec.LongContextInputMultiplier != 2 || spec.LongContextCachedMultiplier != 2 || spec.LongContextCacheCreationMultiplier != 2 || spec.LongContextOutputMultiplier != 1.5 {
+				t.Errorf("%s 长上下文倍率变化: In=%v Cached=%v CacheCreation=%v Out=%v", tc.model, spec.LongContextInputMultiplier, spec.LongContextCachedMultiplier, spec.LongContextCacheCreationMultiplier, spec.LongContextOutputMultiplier)
+			}
+			if spec.CacheCreationPricePriority != tc.cacheCreation*2 || spec.CacheCreationPriceFlex != tc.cacheCreation*0.5 {
+				t.Errorf("%s 缓存写入档位价格变化: Priority=%v Flex=%v", tc.model, spec.CacheCreationPricePriority, spec.CacheCreationPriceFlex)
 			}
 		}
 	})
