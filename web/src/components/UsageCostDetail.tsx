@@ -201,7 +201,7 @@ export function UsageCostDetail({ context }: UsageRecordSurfaceProps) {
     if (record.input_price && record.input_price > 0)
       unitPrices.push({ label: '输入单价', value: `$${record.input_price.toFixed(4)} / 1M Token` });
     if (record.cached_input_price && record.cached_input_price > 0)
-      unitPrices.push({ label: '缓存输入单价', value: `$${record.cached_input_price.toFixed(4)} / 1M Token` });
+      unitPrices.push({ label: '缓存读取单价', value: `$${record.cached_input_price.toFixed(4)} / 1M Token` });
     if (record.output_price && record.output_price > 0)
       unitPrices.push({ label: '输出单价', value: `$${record.output_price.toFixed(4)} / 1M Token` });
     if (record.cache_creation_price && record.cache_creation_price > 0)
