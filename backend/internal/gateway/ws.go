@@ -56,6 +56,7 @@ type WSResult struct {
 	InputTokens           int
 	OutputTokens          int
 	CachedInputTokens     int
+	CacheCreationTokens   int
 	ReasoningOutputTokens int
 	// ToolImageInputTokens / ToolImageOutputTokens 来自 response.usage.tool_usage.image_gen
 	// 或 response.completed 的 tool_usage 字段。按 gpt-image-1.5 单价单独计费，
@@ -624,22 +625,37 @@ func JsonInt(m map[string]any, key string) int {
 	return 0
 }
 
-// extractUsageFromResponseMap 从 Responses API response 对象中提取 usage 到 WSResult
-// cached_tokens 从 input_tokens 中扣除，与 Codex 行为一致
+// extractUsageFromResponseMap 从 Responses API response 对象中提取 usage 到 WSResult。
 func extractUsageFromResponseMap(result *WSResult, resp map[string]any) {
 	if usage, ok := resp["usage"].(map[string]any); ok {
-		result.InputTokens = JsonInt(usage, "input_tokens")
+		rawInputTokens := JsonInt(usage, "input_tokens")
 		result.OutputTokens = JsonInt(usage, "output_tokens")
+		cacheCreationDefined := false
 		if details, ok := usage["input_tokens_details"].(map[string]any); ok {
 			result.CachedInputTokens = JsonInt(details, "cached_tokens")
+			if _, ok := details["cache_write_tokens"]; ok {
+				result.CacheCreationTokens = max(JsonInt(details, "cache_write_tokens"), 0)
+				cacheCreationDefined = true
+			} else if _, ok := details["cache_creation_tokens"]; ok {
+				result.CacheCreationTokens = JsonInt(details, "cache_creation_tokens")
+				cacheCreationDefined = true
+			}
+		}
+		if !cacheCreationDefined {
+			if _, ok := usage["cache_creation_input_tokens"]; ok {
+				result.CacheCreationTokens = max(JsonInt(usage, "cache_creation_input_tokens"), 0)
+			} else if _, ok := usage["cache_write_input_tokens"]; ok {
+				result.CacheCreationTokens = max(JsonInt(usage, "cache_write_input_tokens"), 0)
+			}
 		}
 		if details, ok := usage["output_tokens_details"].(map[string]any); ok {
 			result.ReasoningOutputTokens = JsonInt(details, "reasoning_tokens")
 		}
-		// 从 input_tokens 中扣除缓存部分，避免计费重复计算
-		if result.CachedInputTokens > 0 && result.InputTokens >= result.CachedInputTokens {
-			result.InputTokens -= result.CachedInputTokens
-		}
+		result.InputTokens, result.CachedInputTokens, result.CacheCreationTokens = splitInputTokenBuckets(
+			rawInputTokens,
+			result.CachedInputTokens,
+			result.CacheCreationTokens,
+		)
 	}
 	// ChatGPT OAuth 响应把 image_generation tool 的用量放在 response.tool_usage.image_gen，
 	// 与主 usage 分开上报。这里提取出来让计费层按 gpt-image-1.5 单价额外计费。

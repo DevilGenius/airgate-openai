@@ -706,7 +706,7 @@ func TestTranslateResponsesSSEClosesOpenToolBlocksOnAbruptEOF(t *testing.T) {
 func TestTranslateResponsesSSEContinuationAnchorFailureReturnsReplayError(t *testing.T) {
 	sse := strings.Join([]string{
 		`data: {"type":"response.created","response":{"id":"resp_bad_anchor","model":"gpt-5.4"}}`,
-		`data: {"type":"response.failed","response":{"id":"resp_bad_anchor","error":{"type":"invalid_request_error","code":"previous_response_not_found","message":"Previous response not found"}}}`,
+		`data: {"type":"response.failed","response":{"id":"resp_bad_anchor","usage":{"input_tokens":100,"output_tokens":10,"input_tokens_details":{"cached_tokens":20,"cache_write_tokens":30}},"error":{"type":"invalid_request_error","code":"previous_response_not_found","message":"Previous response not found"}}}`,
 		"",
 	}, "\n")
 	resp := &http.Response{
@@ -735,6 +735,9 @@ func TestTranslateResponsesSSEContinuationAnchorFailureReturnsReplayError(t *tes
 	}
 	if outcome.Kind != sdk.OutcomeClientError {
 		t.Fatalf("outcome kind = %v, want client error", outcome.Kind)
+	}
+	if outcome.Usage == nil || outcome.Usage.InputTokens != 50 || outcome.Usage.CachedInputTokens != 20 || outcome.Usage.CacheCreationTokens != 30 {
+		t.Fatalf("failure usage = %+v, want input/cache-read/cache-write 50/20/30", outcome.Usage)
 	}
 	body := w.Body.String()
 	if count := strings.Count(body, "event: message_start"); count != 1 {

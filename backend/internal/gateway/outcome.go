@@ -119,7 +119,7 @@ func forwardErrForOutcome(outcome sdk.ForwardOutcome, err error) error {
 	return err
 }
 
-func newTokenUsage(modelID, serviceTier string, inputTokens, outputTokens, cachedInputTokens, reasoningOutputTokens int, firstTokenMs int64) *sdk.Usage {
+func newTokenUsage(modelID, serviceTier string, inputTokens, outputTokens, cachedInputTokens, cacheCreationTokens, reasoningOutputTokens int, firstTokenMs int64) *sdk.Usage {
 	billingModel, wireModel := usageBillingModel(modelID)
 	usage := &sdk.Usage{
 		Model:        billingModel,
@@ -130,7 +130,7 @@ func newTokenUsage(modelID, serviceTier string, inputTokens, outputTokens, cache
 		setUsageMetadata(usage, usageAttrWireModel, wireModel)
 	}
 	setUsageServiceTier(usage, serviceTier)
-	setUsageTokens(usage, inputTokens, outputTokens, cachedInputTokens, reasoningOutputTokens)
+	setUsageTokens(usage, inputTokens, outputTokens, cachedInputTokens, cacheCreationTokens, reasoningOutputTokens)
 	return usage
 }
 
@@ -182,14 +182,37 @@ func setUsageResponseID(usage *sdk.Usage, responseID string) {
 	setUsageMetadata(usage, usageAttrResponseID, responseID)
 }
 
-func setUsageTokens(usage *sdk.Usage, inputTokens, outputTokens, cachedInputTokens, reasoningOutputTokens int) {
+func setUsageTokens(usage *sdk.Usage, inputTokens, outputTokens, cachedInputTokens, cacheCreationTokens, reasoningOutputTokens int) {
 	if usage == nil {
 		return
 	}
 	usage.InputTokens = inputTokens
 	usage.OutputTokens = outputTokens
 	usage.CachedInputTokens = cachedInputTokens
+	usage.CacheCreationTokens = cacheCreationTokens
 	usage.ReasoningOutputTokens = reasoningOutputTokens
+}
+
+// splitInputTokenBuckets 把上游完整 input_tokens 拆成互斥的普通输入、缓存读取和缓存写入。
+// 字段缺失或为 0 时不会推算缓存写入；异常超量会被钳制，避免重复计费或负数。
+func splitInputTokenBuckets(rawInputTokens, cachedInputTokens, cacheCreationTokens int) (int, int, int) {
+	if rawInputTokens <= 0 {
+		return 0, 0, 0
+	}
+	if cachedInputTokens < 0 {
+		cachedInputTokens = 0
+	}
+	if cachedInputTokens > rawInputTokens {
+		cachedInputTokens = rawInputTokens
+	}
+	remaining := rawInputTokens - cachedInputTokens
+	if cacheCreationTokens < 0 {
+		cacheCreationTokens = 0
+	}
+	if cacheCreationTokens > remaining {
+		cacheCreationTokens = remaining
+	}
+	return remaining - cacheCreationTokens, cachedInputTokens, cacheCreationTokens
 }
 
 func setUsageInputTokenDetails(usage *sdk.Usage, textInputTokens, imageInputTokens int) {
@@ -395,6 +418,11 @@ func fillUsageCost(usage *sdk.Usage) {
 		cachedInputTokens,
 		cacheCreationTokens,
 	)
+	// 旧模型没有独立缓存写入价时，按当前档位的普通输入价收费，避免非零
+	// cache_write_tokens 被拆出后落入零价。字段为 0 时不会触发该兜底。
+	if cacheCreationTokens > 0 && prices.cacheCreation <= 0 {
+		prices.cacheCreation = prices.input
+	}
 
 	inputCost := tokenCost(inputTokens, prices.input)
 	cachedCost := tokenCost(cachedInputTokens, prices.cached)
@@ -436,12 +464,12 @@ func usageImageSizeOrDefault(size string) string {
 func addUsageCostForModel(
 	usage *sdk.Usage,
 	modelID, serviceTier string,
-	inputTokens, outputTokens, cachedInputTokens, reasoningOutputTokens int,
+	inputTokens, outputTokens, cachedInputTokens, cacheCreationTokens, reasoningOutputTokens int,
 ) {
 	if usage == nil || modelID == "" {
 		return
 	}
-	source := newTokenUsage(modelID, serviceTier, inputTokens, outputTokens, cachedInputTokens, reasoningOutputTokens, 0)
+	source := newTokenUsage(modelID, serviceTier, inputTokens, outputTokens, cachedInputTokens, cacheCreationTokens, reasoningOutputTokens, 0)
 	fillUsageCost(source)
 	if source.InputPrice > 0 && usage.InputPrice == 0 {
 		usage.InputPrice = source.InputPrice

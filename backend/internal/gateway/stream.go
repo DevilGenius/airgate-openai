@@ -115,7 +115,7 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 	w.Header().Set("X-Accel-Buffering", "no")
 	passCodexRateLimitHeaders(resp.Header, w.Header())
 
-	usage := newTokenUsage("", reqServiceTier, 0, 0, 0, 0, 0)
+	usage := newTokenUsage("", reqServiceTier, 0, 0, 0, 0, 0, 0)
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), upstreamSSEMaxLineBytes)
 	var streamErr error
@@ -148,6 +148,7 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 				if id := responseIDFromSSEData(data); id != "" {
 					responseID = id
 				}
+				parseSSEUsage([]byte(data), usage, &toolImageIn, &toolImageOut)
 				if streamErr = parseSSEFailureEvent([]byte(data)); streamErr != nil {
 					logStreamFailure(logger, streamErr, resp, streamStarted, diagnostics)
 					streamErrLogged = true
@@ -190,7 +191,6 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 			usage.FirstTokenMs = time.Since(start).Milliseconds()
 			firstTokenRecorded = true
 		}
-		parseSSEUsage([]byte(data), usage, &toolImageIn, &toolImageOut)
 		if err := writeOrBufferSSELine(w, resp.StatusCode, line, &pending, &streamStarted, diagnostics.hasOutput()); err != nil {
 			streamErr = fmt.Errorf("写入客户端 SSE 失败: %w", err)
 			break
@@ -207,6 +207,18 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 	}
 
 	elapsed := time.Since(start)
+	numImages := imageGenCount
+	if numImages <= 0 {
+		numImages = estimateImageCountFromTokens(toolImageOut)
+	}
+	failureUsage := func() *sdk.Usage {
+		if usage.InputTokens <= 0 && usage.OutputTokens <= 0 && usage.CachedInputTokens <= 0 && usage.CacheCreationTokens <= 0 && numImages <= 0 {
+			return nil
+		}
+		fillUsageCostWithImageTool(usage, numImages, imageGenSize)
+		setUsageResponseID(usage, responseID)
+		return usage
+	}
 	if streamErr != nil {
 		if !streamErrLogged {
 			logStreamFailure(logger, streamErr, resp, streamStarted, diagnostics)
@@ -227,6 +239,7 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 				Reason:        failure.Message,
 				RetryAfter:    failure.RetryAfter,
 				Duration:      elapsed,
+				Usage:         failureUsage(),
 			}, nil
 		}
 		kind := sdk.OutcomeStreamAborted
@@ -240,13 +253,10 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 			Upstream: sdk.UpstreamResponse{StatusCode: statusCode},
 			Reason:   streamErr.Error(),
 			Duration: elapsed,
+			Usage:    failureUsage(),
 		}, streamErr
 	}
 
-	numImages := imageGenCount
-	if numImages <= 0 {
-		numImages = estimateImageCountFromTokens(toolImageOut)
-	}
 	fillUsageCostWithImageTool(usage, numImages, imageGenSize)
 	setUsageResponseID(usage, responseID)
 	return sdk.ForwardOutcome{
@@ -472,6 +482,7 @@ func handleNonStreamResponse(resp *http.Response, w http.ResponseWriter, start t
 		parsed.inputTokens,
 		parsed.outputTokens,
 		parsed.cachedInputTokens,
+		parsed.cacheCreationTokens,
 		parsed.reasoningOutputTokens,
 		elapsed.Milliseconds(),
 	)
@@ -788,7 +799,7 @@ func parseSSEUsage(data []byte, out *sdk.Usage, toolImageIn, toolImageOut *int) 
 	eventType := gjson.GetBytes(data, "type").String()
 
 	switch eventType {
-	case "response.completed", "response.done":
+	case "response.completed", "response.done", "response.failed", "response.incomplete":
 		resp := gjson.GetBytes(data, "response")
 		if !resp.Exists() {
 			return
@@ -799,14 +810,13 @@ func parseSSEUsage(data []byte, out *sdk.Usage, toolImageIn, toolImageOut *int) 
 		}
 		usage := resp.Get("usage")
 		if usage.Exists() {
-			inputTokens := int(usage.Get("input_tokens").Int())
+			rawInputTokens := int(usage.Get("input_tokens").Int())
 			outputTokens := int(usage.Get("output_tokens").Int())
 			cachedInputTokens := int(usage.Get("input_tokens_details.cached_tokens").Int())
+			cacheCreationTokens := cacheCreationTokensFromUsage(usage)
 			reasoningOutputTokens := int(usage.Get("output_tokens_details.reasoning_tokens").Int())
-			if cachedInputTokens > 0 && inputTokens >= cachedInputTokens {
-				inputTokens -= cachedInputTokens
-			}
-			setUsageTokens(out, inputTokens, outputTokens, cachedInputTokens, reasoningOutputTokens)
+			inputTokens, cachedInputTokens, cacheCreationTokens := splitInputTokenBuckets(rawInputTokens, cachedInputTokens, cacheCreationTokens)
+			setUsageTokens(out, inputTokens, outputTokens, cachedInputTokens, cacheCreationTokens, reasoningOutputTokens)
 		}
 		if imgTool := resp.Get("tool_usage.image_gen"); imgTool.Exists() {
 			if toolImageIn != nil {
@@ -822,15 +832,14 @@ func parseSSEUsage(data []byte, out *sdk.Usage, toolImageIn, toolImageOut *int) 
 		if !usage.Exists() {
 			return
 		}
-		inputTokens := int(usage.Get("prompt_tokens").Int())
+		rawInputTokens := int(usage.Get("prompt_tokens").Int())
 		outputTokens := int(usage.Get("completion_tokens").Int())
 		cachedInputTokens := int(usage.Get("prompt_tokens_details.cached_tokens").Int())
+		cacheCreationTokens := cacheCreationTokensFromUsage(usage)
 		reasoningOutputTokens := int(usage.Get("completion_tokens_details.reasoning_tokens").Int())
 		out.Model = gjson.GetBytes(data, "model").String()
-		if cachedInputTokens > 0 && inputTokens >= cachedInputTokens {
-			inputTokens -= cachedInputTokens
-		}
-		setUsageTokens(out, inputTokens, outputTokens, cachedInputTokens, reasoningOutputTokens)
+		inputTokens, cachedInputTokens, cacheCreationTokens := splitInputTokenBuckets(rawInputTokens, cachedInputTokens, cacheCreationTokens)
+		setUsageTokens(out, inputTokens, outputTokens, cachedInputTokens, cacheCreationTokens, reasoningOutputTokens)
 	}
 }
 
@@ -896,6 +905,7 @@ type openaiUsage struct {
 	imageInputTokens      int
 	outputTokens          int
 	cachedInputTokens     int
+	cacheCreationTokens   int
 	reasoningOutputTokens int
 	// image_generation tool 的用量，从 response.tool_usage.image_gen 提取。
 	// 按 gpt-image-1.5 单价单独计费，与主 model 的单价隔离。
@@ -903,6 +913,25 @@ type openaiUsage struct {
 	toolImageOutputTokens int
 	imageGenCallCount     int
 	imageGenCallSize      string
+}
+
+func cacheCreationTokensFromUsage(usage gjson.Result) int {
+	if value := usage.Get("input_tokens_details.cache_write_tokens"); value.Exists() {
+		return max(int(value.Int()), 0)
+	}
+	if value := usage.Get("prompt_tokens_details.cache_write_tokens"); value.Exists() {
+		return max(int(value.Int()), 0)
+	}
+	if value := usage.Get("input_tokens_details.cache_creation_tokens"); value.Exists() {
+		return max(int(value.Int()), 0)
+	}
+	if value := usage.Get("cache_creation_input_tokens"); value.Exists() {
+		return max(int(value.Int()), 0)
+	}
+	if value := usage.Get("cache_write_input_tokens"); value.Exists() {
+		return max(int(value.Int()), 0)
+	}
+	return 0
 }
 
 // parseUsage 从完整响应体解析 usage
@@ -934,8 +963,6 @@ func parseUsage(body []byte) openaiUsage {
 		usage.textInputTokens = rawInputTokens - usage.imageInputTokens
 	}
 
-	// 仅提取 cache read（缓存命中）token，不含 cache creation
-	// cache_creation 按正常输入价计费，已包含在 input_tokens 中无需额外处理
 	cacheRead := int(usageNode.Get("cache_read_input_tokens").Int())
 	if cacheRead == 0 {
 		cacheRead = int(usageNode.Get("input_tokens_details.cached_tokens").Int())
@@ -943,12 +970,12 @@ func parseUsage(body []byte) openaiUsage {
 	if cacheRead == 0 {
 		cacheRead = int(usageNode.Get("prompt_tokens_details.cached_tokens").Int())
 	}
-	usage.cachedInputTokens = cacheRead
-
-	// 从 input_tokens 中扣除缓存部分，避免计费器重复计算
-	if cacheRead > 0 && usage.inputTokens >= cacheRead {
-		usage.inputTokens -= cacheRead
-	}
+	cacheCreation := cacheCreationTokensFromUsage(usageNode)
+	usage.inputTokens, usage.cachedInputTokens, usage.cacheCreationTokens = splitInputTokenBuckets(
+		usage.inputTokens,
+		cacheRead,
+		cacheCreation,
+	)
 
 	// 提取推理 token（o1/o3 等模型）
 	usage.reasoningOutputTokens = int(usageNode.Get("output_tokens_details.reasoning_tokens").Int())

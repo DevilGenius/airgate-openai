@@ -436,9 +436,9 @@ func buildNonStreamChatCompletion(result WSResult, model string) []byte {
 
 	finishReason := mapStopReasonToFinishReason(result.StopReason, len(toolCalls) > 0)
 
-	// ReceiveWSResponse 为了计费已经把 cached_tokens 从 InputTokens 里扣掉了，
+	// ReceiveWSResponse 为了计费已经把缓存读取和缓存写入从 InputTokens 里扣掉了，
 	// Chat Completions 的 prompt_tokens 应当是上游原始输入总量，所以这里加回去。
-	promptTokens := result.InputTokens + result.CachedInputTokens
+	promptTokens := result.InputTokens + result.CachedInputTokens + result.CacheCreationTokens
 	resp := map[string]any{
 		"id":      id,
 		"object":  "chat.completion",
@@ -454,7 +454,8 @@ func buildNonStreamChatCompletion(result WSResult, model string) []byte {
 			"completion_tokens": result.OutputTokens,
 			"total_tokens":      promptTokens + result.OutputTokens,
 			"prompt_tokens_details": map[string]any{
-				"cached_tokens": result.CachedInputTokens,
+				"cached_tokens":      result.CachedInputTokens,
+				"cache_write_tokens": result.CacheCreationTokens,
 			},
 		},
 	}
@@ -473,6 +474,7 @@ func extractChatUsageFromResponse(data []byte) map[string]any {
 	input := int(usageNode.Get("input_tokens").Int())
 	output := int(usageNode.Get("output_tokens").Int())
 	cached := int(usageNode.Get("input_tokens_details.cached_tokens").Int())
+	cacheCreation := cacheCreationTokensFromUsage(usageNode)
 	// Responses 的 input_tokens 是包含 cached 的总量，Chat Completions 的
 	// prompt_tokens 也是总量，这里直接用。
 	return map[string]any{
@@ -480,7 +482,8 @@ func extractChatUsageFromResponse(data []byte) map[string]any {
 		"completion_tokens": output,
 		"total_tokens":      input + output,
 		"prompt_tokens_details": map[string]any{
-			"cached_tokens": cached,
+			"cached_tokens":      cached,
+			"cache_write_tokens": cacheCreation,
 		},
 	}
 }

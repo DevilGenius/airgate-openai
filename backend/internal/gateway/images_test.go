@@ -894,7 +894,7 @@ func TestParseSSEUsage_ToolImageGen(t *testing.T) {
 // TestFillUsageCostWithImageTool 验证主 model token 按其单价计费，image tool
 // 的固定单张价只写入 metadata，由 Core 决定是否替代最终计费。
 func TestFillUsageCostWithImageTool(t *testing.T) {
-	usage := newTokenUsage("gpt-5.4", "", 1000, 500, 0, 0, 0)
+	usage := newTokenUsage("gpt-5.4", "", 1000, 500, 0, 0, 0, 0)
 	fillUsageCostWithImageTool(usage, 1, "1024x1024")
 
 	// 主 gpt-5.4 standard: input=$2.5/1M → 0.0025, output=$15/1M → 0.0075
@@ -915,9 +915,9 @@ func TestFillUsageCostWithImageTool(t *testing.T) {
 }
 
 func TestFillUsageCostPerImageBySize_ReplacesContextCostWithImageModelTokenCost(t *testing.T) {
-	usage := newTokenUsage("gpt-image-2", "", 12, 0, 0, 0, 0)
-	addUsageCostForModel(usage, "gpt-5.4", "", 1000, 500, 0, 0)
-	setUsageTokens(usage, 12, 1056, 0, 0)
+	usage := newTokenUsage("gpt-image-2", "", 12, 0, 0, 0, 0, 0)
+	addUsageCostForModel(usage, "gpt-5.4", "", 1000, 500, 0, 0, 0)
+	setUsageTokens(usage, 12, 1056, 0, 0, 0)
 	fillUsageCostPerImageBySize(usage, 1, "1024x1024")
 
 	if got := usage.InputPrice; !almostEqual(got, 5, 1e-9) {
@@ -945,7 +945,7 @@ func TestFillUsageCostPerImageBySize_ReplacesContextCostWithImageModelTokenCost(
 
 // TestFillUsageCostWithImageTool_NoToolUsage 退化为 fillUsageCost 行为不变。
 func TestFillUsageCostWithImageTool_NoToolUsage(t *testing.T) {
-	usage := newTokenUsage("gpt-5.4", "", 1000, 500, 0, 0, 0)
+	usage := newTokenUsage("gpt-5.4", "", 1000, 500, 0, 0, 0, 0)
 	fillUsageCostWithImageTool(usage, 0, "")
 	if usageMetricInt(usage, usageMetricInputTokens) != 1000 || usageMetricInt(usage, usageMetricOutputTokens) != 500 {
 		t.Errorf("token counts mutated when no image tool usage")
@@ -2147,14 +2147,14 @@ func TestBuildImagesRESTResponse_ChainedCostParity(t *testing.T) {
 	ws := WSResult{ImageGenCalls: []ImageGenCall{{Result: "X"}}}
 	body := buildImagesRESTResponse(ws, promptTokens, imageOut, "gpt-image-2")
 
-	inner := newTokenUsage("gpt-image-2", "", promptTokens, imageOut, 0, 0, 0)
+	inner := newTokenUsage("gpt-image-2", "", promptTokens, imageOut, 0, 0, 0, 0)
 	fillUsageCost(inner)
 	innerCost := inner.AccountCost
 
 	var got map[string]any
 	_ = json.Unmarshal(body, &got)
 	u := got["usage"].(map[string]any)
-	outer := newTokenUsage(got["model"].(string), "", int(u["input_tokens"].(float64)), int(u["output_tokens"].(float64)), 0, 0, 0)
+	outer := newTokenUsage(got["model"].(string), "", int(u["input_tokens"].(float64)), int(u["output_tokens"].(float64)), 0, 0, 0, 0)
 	fillUsageCost(outer)
 	outerCost := outer.AccountCost
 

@@ -6,6 +6,7 @@ interface UsageRecordLike {
   input_tokens?: number;
   output_tokens?: number;
   cached_input_tokens?: number;
+  cache_creation_tokens?: number;
   reasoning_output_tokens?: number;
   reasoning_effort?: string;
   service_tier?: string;
@@ -13,6 +14,7 @@ interface UsageRecordLike {
 }
 
 const TOKEN_COLORS = {
+  cacheCreation: 'var(--ag-usage-token-cache-creation)',
   cacheRead: 'var(--ag-usage-token-cache-read)',
   image: 'var(--ag-text)',
   imageInputText: 'var(--ag-usage-token-image-input-text)',
@@ -226,12 +228,13 @@ export function UsageMetricDetail({ context }: UsageRecordSurfaceProps) {
   const inputTokens = record.input_tokens || 0;
   const outputTokens = record.output_tokens || 0;
   const cachedInputTokens = record.cached_input_tokens || 0;
+  const cacheCreationTokens = record.cache_creation_tokens || 0;
   const reasoningTokens = record.reasoning_output_tokens || 0;
   const imageInputTokens = metadataNumber(metadata, ['openai.image.input_image_tokens']);
   const rawTextInputTokens = metadataNumber(metadata, ['openai.image.input_text_tokens']);
   const textInputTokens = rawTextInputTokens || (imageInputTokens > 0 && inputTokens >= imageInputTokens ? inputTokens - imageInputTokens : 0);
   const images = metadataNumber(metadata, ['openai.image.count']);
-  const totalTokens = inputTokens + outputTokens + cachedInputTokens;
+  const totalTokens = inputTokens + outputTokens + cachedInputTokens + cacheCreationTokens;
 
   return (
     <div style={panelStyle}>
@@ -251,6 +254,7 @@ export function UsageMetricDetail({ context }: UsageRecordSurfaceProps) {
         <Row label="输入 Token" value={inputTokenValue(textInputTokens, imageInputTokens, inputTokens)} tone={TOKEN_COLORS.input} />
         <Row label="输出 Token" value={outputTokenValue(reasoningTokens, outputTokens)} tone={TOKEN_COLORS.output} />
         {cachedInputTokens > 0 ? <Row label="缓存读取 Token" value={formatNumber(cachedInputTokens)} tone={TOKEN_COLORS.cacheRead} /> : null}
+        {cacheCreationTokens > 0 ? <Row label="缓存写入 Token" value={formatNumber(cacheCreationTokens)} tone={TOKEN_COLORS.cacheCreation} /> : null}
         <Row label="总 Token" value={formatNumber(totalTokens)} tone={TOKEN_COLORS.total} strong />
       </div>
     </div>

@@ -516,24 +516,18 @@ func normalizeToolParametersJSON(raw string) string {
 	return schema
 }
 
-// extractResponsesUsage 从 Responses usage 中提取 token 统计（cached_tokens 从 input_tokens 扣除）
-// 返回: inputTokens（不含缓存）, outputTokens, cachedTokens, reasoningTokens
-func extractResponsesUsage(usage gjson.Result) (int64, int64, int64, int64) {
+// extractResponsesUsage 从 Responses usage 中提取互斥的普通输入、缓存读取和缓存写入统计。
+func extractResponsesUsage(usage gjson.Result) (int64, int64, int64, int64, int64) {
 	if !usage.Exists() || usage.Type == gjson.Null {
-		return 0, 0, 0, 0
+		return 0, 0, 0, 0, 0
 	}
-	inputTokens := usage.Get("input_tokens").Int()
+	rawInputTokens := int(usage.Get("input_tokens").Int())
 	outputTokens := usage.Get("output_tokens").Int()
-	cachedTokens := usage.Get("input_tokens_details.cached_tokens").Int()
+	cachedTokens := int(usage.Get("input_tokens_details.cached_tokens").Int())
+	cacheCreationTokens := cacheCreationTokensFromUsage(usage)
 	reasoningTokens := usage.Get("output_tokens_details.reasoning_tokens").Int()
-	if cachedTokens > 0 {
-		if inputTokens >= cachedTokens {
-			inputTokens -= cachedTokens
-		} else {
-			inputTokens = 0
-		}
-	}
-	return inputTokens, outputTokens, cachedTokens, reasoningTokens
+	inputTokens, cachedTokens, cacheCreationTokens := splitInputTokenBuckets(rawInputTokens, cachedTokens, cacheCreationTokens)
+	return int64(inputTokens), outputTokens, int64(cachedTokens), int64(cacheCreationTokens), reasoningTokens
 }
 
 // injectWebSearchToolJSON 向 Responses API JSON 请求体注入 web_search 工具

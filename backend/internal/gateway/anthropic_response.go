@@ -29,6 +29,7 @@ type anthropicStreamState struct {
 	InputTokens           int
 	OutputTokens          int
 	CachedInputTokens     int
+	CacheCreationTokens   int
 	ReasoningOutputTokens int
 	TextBlockOpen         bool // 当前是否已打开 text content block（用于容错上游跳过 content_part.added 的情况）
 	ThinkingBlockOpen     bool // 当前是否已打开 thinking content block
@@ -36,6 +37,18 @@ type anthropicStreamState struct {
 	ToolBlocksByCallID    map[string]*anthropicToolBlock
 	CurrentToolBlock      *anthropicToolBlock
 	reverseNameMap        map[string]string // 缓存 short→original 工具名映射，避免每次事件重建
+}
+
+func applyResponsesUsageToAnthropicState(state *anthropicStreamState, usage gjson.Result) (int64, int64, int64, int64, int64) {
+	inputTokens, outputTokens, cachedTokens, cacheCreationTokens, reasoningTokens := extractResponsesUsage(usage)
+	if state != nil {
+		state.InputTokens = int(inputTokens)
+		state.OutputTokens = int(outputTokens)
+		state.CachedInputTokens = int(cachedTokens)
+		state.CacheCreationTokens = int(cacheCreationTokens)
+		state.ReasoningOutputTokens = int(reasoningTokens)
+	}
+	return inputTokens, outputTokens, cachedTokens, cacheCreationTokens, reasoningTokens
 }
 
 type anthropicToolBlock struct {
@@ -268,11 +281,7 @@ func convertResponsesEventToAnthropic(rawLine []byte, originalRequest []byte, st
 
 	case "response.completed", "response.done":
 		// 提取 usage
-		inputTokens, outputTokens, cachedTokens, reasoningTokens := extractResponsesUsage(root.Get("response.usage"))
-		state.InputTokens = int(inputTokens)
-		state.OutputTokens = int(outputTokens)
-		state.CachedInputTokens = int(cachedTokens)
-		state.ReasoningOutputTokens = int(reasoningTokens)
+		inputTokens, outputTokens, cachedTokens, cacheCreationTokens, _ := applyResponsesUsageToAnthropicState(state, root.Get("response.usage"))
 
 		// 先关闭任何未显式关闭的 text/thinking 内容块，避免 SSE 事件序列不成对
 		prefix := closeOpenTextBlock(state)
@@ -285,8 +294,6 @@ func convertResponsesEventToAnthropic(rawLine []byte, originalRequest []byte, st
 		// - cache_creation 嵌套对象（Claude Code 内部 usage merger 要求）
 		// - service_tier（原生 Anthropic 下发）
 		// 关键：绝不设置 server_tool_use: null —— 会触发 SDK `||` 短路转 undefined → 崩溃链。
-		// cache_creation_input_tokens 保持 0：OpenAI Responses API 不区分 cache creation vs read，
-		// 所有命中缓存的 prompt 都归在 cached_tokens（→ cache_read_input_tokens）。
 		// delta.container / context_management：Claude Code 反序列化对这两字段直接读（非可选链），
 		//   case "message_delta": q.container=$.delta.container, q.context_management=$.context_management
 		//   缺失会让 context_management 逻辑拿到 undefined 而不是 null。
@@ -324,6 +331,7 @@ func convertResponsesEventToAnthropic(rawLine []byte, originalRequest []byte, st
 		template, _ = sjson.Set(template, "usage.input_tokens", inputTokens)
 		template, _ = sjson.Set(template, "usage.output_tokens", outputTokens)
 		template, _ = sjson.Set(template, "usage.cache_read_input_tokens", cachedTokens)
+		template, _ = sjson.Set(template, "usage.cache_creation_input_tokens", cacheCreationTokens)
 
 		// 把上游真实 service_tier 写回 usage，合法枚举：standard / priority / batch
 		if tier := normalizeOpenAIServiceTier(root.Get("response.service_tier").String()); tier != "" {
@@ -335,6 +343,7 @@ func convertResponsesEventToAnthropic(rawLine []byte, originalRequest []byte, st
 		return output
 
 	case "response.failed":
+		applyResponsesUsageToAnthropicState(state, root.Get("response.usage"))
 		errMsg := root.Get("response.error.message").String()
 		if errMsg == "" {
 			errMsg = "upstream response failed"
@@ -346,6 +355,7 @@ func convertResponsesEventToAnthropic(rawLine []byte, originalRequest []byte, st
 		return prefix + buildAnthropicStreamError(errType, errMsg)
 
 	case "response.incomplete":
+		inputTokens, outputTokens, cachedTokens, cacheCreationTokens, _ := applyResponsesUsageToAnthropicState(state, root.Get("response.usage"))
 		reason := root.Get("response.incomplete_details.reason").String()
 		if reason == "" {
 			reason = "unknown"
@@ -354,16 +364,11 @@ func convertResponsesEventToAnthropic(rawLine []byte, originalRequest []byte, st
 		prefix += closeOpenThinkingBlock(state)
 		prefix += closeOpenToolBlocks(state)
 		if reason == "max_output_tokens" {
-			inputTokens, outputTokens, cachedTokens, reasoningTokens := extractResponsesUsage(root.Get("response.usage"))
-			state.InputTokens = int(inputTokens)
-			state.OutputTokens = int(outputTokens)
-			state.CachedInputTokens = int(cachedTokens)
-			state.ReasoningOutputTokens = int(reasoningTokens)
-
 			template := `{"type":"message_delta","delta":{"stop_reason":"max_tokens","stop_sequence":null,"container":null},"context_management":null,"usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"service_tier":"standard","inference_geo":"","iterations":[],"speed":"standard"}}`
 			template, _ = sjson.Set(template, "usage.input_tokens", inputTokens)
 			template, _ = sjson.Set(template, "usage.output_tokens", outputTokens)
 			template, _ = sjson.Set(template, "usage.cache_read_input_tokens", cachedTokens)
+			template, _ = sjson.Set(template, "usage.cache_creation_input_tokens", cacheCreationTokens)
 			if tier := normalizeOpenAIServiceTier(root.Get("response.service_tier").String()); tier != "" {
 				template, _ = sjson.Set(template, "usage.service_tier", tier)
 			}
@@ -656,10 +661,11 @@ func convertResponsesCompletedToAnthropicJSON(
 	// 始终使用原始 Claude 模型名，让 Claude Code 正确识别模型能力
 	out, _ = sjson.Set(out, "model", model)
 
-	inputTokens, outputTokens, cachedTokens, _ := extractResponsesUsage(responseData.Get("usage"))
+	inputTokens, outputTokens, cachedTokens, cacheCreationTokens, _ := extractResponsesUsage(responseData.Get("usage"))
 	out, _ = sjson.Set(out, "usage.input_tokens", inputTokens)
 	out, _ = sjson.Set(out, "usage.output_tokens", outputTokens)
 	out, _ = sjson.Set(out, "usage.cache_read_input_tokens", cachedTokens)
+	out, _ = sjson.Set(out, "usage.cache_creation_input_tokens", cacheCreationTokens)
 
 	// 把上游真实 service_tier 写回 usage，合法枚举：standard / priority / batch
 	if tier := normalizeOpenAIServiceTier(responseData.Get("service_tier").String()); tier != "" {
@@ -951,6 +957,9 @@ func translateResponsesSSEToAnthropicSSE(
 					"response_model", gjson.Get(data, "response.model").String(),
 				)
 			}
+			if eventType == "response.failed" || eventType == "response.incomplete" {
+				applyResponsesUsageToAnthropicState(state, gjson.Get(data, "response.usage"))
+			}
 
 			// 检查错误事件 —— 先让 convertResponsesEventToAnthropic 输出错误事件再终止
 			if eventType == "response.failed" {
@@ -1026,6 +1035,7 @@ done:
 		state.InputTokens,
 		state.OutputTokens,
 		state.CachedInputTokens,
+		state.CacheCreationTokens,
 		state.ReasoningOutputTokens,
 		firstTokenMs,
 	)
@@ -1033,7 +1043,7 @@ done:
 	// 即使流中断 / 上游 response.failed，中断前已产生的 token 上游也已实际计费，
 	// 仍需回传 usage 计费避免漏洞（与 forward.go WS 路径同一模式）。
 	abortUsage := func() *sdk.Usage {
-		if state.InputTokens > 0 || state.OutputTokens > 0 || state.CachedInputTokens > 0 {
+		if state.InputTokens > 0 || state.OutputTokens > 0 || state.CachedInputTokens > 0 || state.CacheCreationTokens > 0 {
 			fillUsageCost(usage)
 			return usage
 		}

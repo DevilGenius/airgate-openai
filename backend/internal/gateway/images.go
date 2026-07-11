@@ -2053,7 +2053,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 	//   1. Responses 主模型的上下文 token；
 	//   2. 生图产出的按张费用。
 	billingModel := imageGenerationBillingModel(wsResult.ToolImageModel, imgReq.Model)
-	usage := newTokenUsage(billingModel, "", inputTokens, 0, 0, 0, handler.firstTokenMs)
+	usage := newTokenUsage(billingModel, "", inputTokens, 0, 0, 0, 0, handler.firstTokenMs)
 	contextModel := strings.TrimSpace(wsResult.Model)
 	if contextModel == "" {
 		contextModel = imagesOAuthChatModel
@@ -2065,6 +2065,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 		wsResult.InputTokens,
 		wsResult.OutputTokens,
 		wsResult.CachedInputTokens,
+		wsResult.CacheCreationTokens,
 		wsResult.ReasoningOutputTokens,
 	)
 	g.logger.Debug("Images OAuth result",
@@ -2119,7 +2120,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 	}
 
 	// 图片尺寸写入 Usage 标准字段和 metadata，后台费用明细可用它解释 1K/2K/4K 分档。
-	setUsageTokens(usage, inputTokens, imageOutputTokens, 0, 0)
+	setUsageTokens(usage, inputTokens, imageOutputTokens, 0, 0, 0)
 	setUsageInputTokenDetails(usage, inputEstimate.TextTokens, inputEstimate.ImageTokens)
 	fillUsageCostPerImageBySize(usage, numImages, billingSize)
 	setUsageResponseID(usage, wsResult.ResponseID)
@@ -2661,7 +2662,7 @@ func handleImagesResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 	)
 
 	elapsed := time.Since(start)
-	usage := newTokenUsage(modelName, "", parsed.inputTokens, parsed.outputTokens, parsed.cachedInputTokens, 0, elapsed.Milliseconds())
+	usage := newTokenUsage(modelName, "", parsed.inputTokens, parsed.outputTokens, parsed.cachedInputTokens, parsed.cacheCreationTokens, 0, elapsed.Milliseconds())
 	setUsageInputTokenDetails(usage, parsed.textInputTokens, parsed.imageInputTokens)
 	fillUsageCostPerImageBySize(usage, summary.NumImages, summary.BillingSize)
 

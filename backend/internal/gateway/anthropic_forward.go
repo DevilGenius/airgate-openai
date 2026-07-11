@@ -523,6 +523,7 @@ func (g *OpenAIGateway) handleAnthropicNonStreamFromResponses(
 		wsResult.InputTokens,
 		wsResult.OutputTokens,
 		wsResult.CachedInputTokens,
+		wsResult.CacheCreationTokens,
 		wsResult.ReasoningOutputTokens,
 		elapsed.Milliseconds(),
 	)
