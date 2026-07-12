@@ -94,11 +94,15 @@ func isNormalizedImageSafetyFailure(failure *responsesFailureError) bool {
 		failure.Message == imageSafetyInvalidRequestMessage
 }
 
+func isNormalizedImageSafetyResponse(statusCode int, body []byte) bool {
+	return statusCode == http.StatusBadRequest &&
+		gjson.GetBytes(body, "error.code").String() == imageSafetyInvalidRequestCode &&
+		gjson.GetBytes(body, "error.message").String() == imageSafetyInvalidRequestMessage
+}
+
 func isNormalizedImageSafetyOutcome(outcome sdk.ForwardOutcome) bool {
 	return outcome.Kind == sdk.OutcomeClientError &&
-		outcome.Upstream.StatusCode == http.StatusBadRequest &&
-		gjson.GetBytes(outcome.Upstream.Body, "error.code").String() == imageSafetyInvalidRequestCode &&
-		gjson.GetBytes(outcome.Upstream.Body, "error.message").String() == imageSafetyInvalidRequestMessage
+		isNormalizedImageSafetyResponse(outcome.Upstream.StatusCode, outcome.Upstream.Body)
 }
 
 func normalizeImageUpstreamError(statusCode int, body []byte, headers http.Header, detail string) (int, []byte, http.Header, string, bool) {
@@ -1994,6 +1998,9 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 		if errors.As(wsResult.Err, &failure) {
 			upstreamFailureMessage := failure.Message
 			failure = normalizeImageSafetyFailure(failure)
+			if isNormalizedImageSafetyFailure(failure) {
+				g.rememberImageSafetyRequest(ctx)
+			}
 			if failure.shouldReturnClientError() {
 				body := buildImagesErrorBodyWithCode(failure.StatusCode, failure.Code, failure.Message)
 				if sseKA != nil {
@@ -2067,6 +2074,9 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 			reason += ": " + detail
 		}
 		if failure := classifyImageGenCallFailures(wsResult.ImageGenCallFailures, reason); failure != nil && failure.shouldReturnClientError() {
+			if isNormalizedImageSafetyFailure(failure) {
+				g.rememberImageSafetyRequest(ctx)
+			}
 			body := buildImagesErrorBodyWithCode(failure.StatusCode, failure.Code, failure.Message)
 			if sseKA != nil {
 				sseKA.Stop()

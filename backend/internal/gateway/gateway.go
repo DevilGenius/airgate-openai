@@ -28,6 +28,7 @@ type OpenAIGateway struct {
 	snapshotStore *codexUsagePersistenceStore
 	transportPool *TransportPool
 	tasks         *TaskRegistry
+	imageSafety   imageSafetyRequestCache
 }
 
 const oauthUsageProbeModel = "gpt-5.4-mini"

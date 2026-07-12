@@ -1098,6 +1098,27 @@ func TestClassifyUpstreamTaskErrorSafetyRejected(t *testing.T) {
 	}
 }
 
+func TestClassifyUpstreamTaskErrorNormalizedSafetyRejected(t *testing.T) {
+	body := buildImagesErrorBodyWithCode(
+		http.StatusBadRequest,
+		imageSafetyInvalidRequestCode,
+		imageSafetyInvalidRequestMessage,
+	)
+	taskErr := classifyUpstreamTaskError(http.StatusBadRequest, body)
+	if taskErr.Type != "invalid_request" {
+		t.Fatalf("Type = %q, want invalid_request", taskErr.Type)
+	}
+	if taskErr.Code != imageSafetyInvalidRequestCode {
+		t.Fatalf("Code = %q, want %q", taskErr.Code, imageSafetyInvalidRequestCode)
+	}
+	if taskErr.Message != imageSafetyInvalidRequestMessage {
+		t.Fatalf("Message = %q, want normalized message", taskErr.Message)
+	}
+	if taskErr.Retryable {
+		t.Fatal("Retryable = true, want false")
+	}
+}
+
 func TestNormalizeImageUpstreamErrorSafetyRejected(t *testing.T) {
 	messages := []string{
 		"非常抱歉，该提示可能违反了我们的内容政策。如果你认为此判断有误，请重试或修改提示语。（traceid: 067e759e4d9ac1185e7ce849d1ceae21）",

@@ -45,7 +45,7 @@ type imageEditHandler struct{}
 func (h imageEditHandler) Type() string { return taskTypeImageEdit }
 
 func (h imageEditHandler) BuildInput(req *sdk.ForwardRequest, _ string) (map[string]any, map[string]string, error) {
-	return buildImageTaskInput(req, "", true)
+	return buildImageTaskInput(req, "/v1/images/edits", true)
 }
 
 func (h imageEditHandler) Execute(ctx context.Context, g *OpenAIGateway, task sdk.HostTask, rt *TaskRuntime) error {
@@ -74,6 +74,9 @@ func buildImageTaskInput(req *sdk.ForwardRequest, reqPath string, isEdit bool) (
 		"prompt": parsed.Prompt,
 		"model":  model,
 		"n":      parsed.N,
+	}
+	if requestHash := imageSafetyRequestHashHex(req, http.MethodPost, reqPath); requestHash != "" {
+		input[imageSafetyRequestHashInputKey] = requestHash
 	}
 	if parsed.Size != "" {
 		input["size"] = parsed.Size
@@ -188,9 +191,8 @@ func executeImageTask(ctx context.Context, g *OpenAIGateway, task sdk.HostTask, 
 
 	resp, err := g.forwardViaHost(ctx, task.UserID, groupID, apiKeyID, model, http.MethodPost, defaultPath, headers, reqBody, false, withHostForwardTask(task.ID, upstreamTaskID))
 	if err != nil {
-		// err 这里只来自 gRPC host-invoke 自身失败（断开 / 序列化错误），上游
-		// 上游安全拒绝走的是 resp.StatusCode + resp.Body，由下方 classifyUpstreamTaskError
-		// 处理。所以这里没必要再对 err.Error() 做 safety 关键词匹配。
+		// err 这里只来自 gRPC host-invoke 自身失败（断开 / 序列化错误）。
+		// 上游安全拒绝通过 resp.StatusCode + resp.Body 由下方分类处理。
 		return rt.Fail(ctx, &TaskError{
 			Type:      "upstream_error",
 			Message:   "upstream 转发失败: " + err.Error(),
@@ -200,6 +202,11 @@ func executeImageTask(ctx context.Context, g *OpenAIGateway, task sdk.HostTask, 
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		taskErr := classifyUpstreamTaskError(resp.StatusCode, resp.Body)
+		if taskErr.Type == "invalid_request" && taskErr.Code == imageSafetyInvalidRequestCode {
+			if requestHash, _ := task.Input[imageSafetyRequestHashInputKey].(string); requestHash != "" {
+				g.rememberImageSafetyRequestHex(requestHash)
+			}
+		}
 		return rt.Fail(ctx, taskErr)
 	}
 
@@ -250,6 +257,13 @@ func executeImageTask(ctx context.Context, g *OpenAIGateway, task sdk.HostTask, 
 
 // classifyUpstreamTaskError 把上游 HTTP 错误映射为结构化 TaskError。
 func classifyUpstreamTaskError(statusCode int, body []byte) *TaskError {
+	if isNormalizedImageSafetyResponse(statusCode, body) {
+		return &TaskError{
+			Type:    "invalid_request",
+			Code:    imageSafetyInvalidRequestCode,
+			Message: imageSafetyInvalidRequestMessage,
+		}
+	}
 	msg, errType, errCode := parseUpstreamTaskErrorBody(statusCode, body)
 	if isImageSafetyRejectionText(errType, errCode, msg) {
 		return &TaskError{

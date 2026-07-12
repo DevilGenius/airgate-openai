@@ -205,6 +205,19 @@ func (g *OpenAIGateway) forwardImagesViaWebReverse(ctx context.Context, req *sdk
 	imgRes, err := client.GenerateImage(ctx, prompt, imageInputs)
 	if err != nil {
 		if imgRes == nil || len(imgRes.Images) == 0 {
+			if isImageSafetyRejectionText(err.Error()) {
+				g.rememberImageSafetyRequest(ctx)
+				if sseKA != nil {
+					sseKA.Stop()
+					g.logger.Warn("Images WebReverse 安全拒绝，已归一化客户端响应",
+						"model", imgReq.Model, "error", err)
+					writeImageInvalidRequestSSEIfStarted(req.Writer, sseKA)
+				}
+				outcome := imageSafetyClientOutcome()
+				outcome.Duration = time.Since(start)
+				outcome.Usage = newTokenUsage(imagesWebReverseModel, "", 0, 0, 0, 0, 0, 0)
+				return outcome, nil
+			}
 			status := classifyWebReverseError(err)
 			if sseKA != nil {
 				sseKA.Stop()

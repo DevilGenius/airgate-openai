@@ -60,7 +60,7 @@ func (g *OpenAIGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest
 
 	// 统一预处理请求体。multipart 请求（images/edits 上传图片）body 是二进制，
 	// 不能按 JSON 处理否则会被 sjson 覆盖丢失数据。
-	_, reqPath := resolveAPIKeyRoute(req)
+	reqMethod, reqPath := resolveAPIKeyRoute(req)
 	if denied, ok := enforceOperationPolicies(req, reqPath); ok {
 		return denied, nil
 	}
@@ -116,6 +116,18 @@ func (g *OpenAIGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest
 			return g.handleTaskList(ctx, req, handler)
 		}
 		return g.handleTaskQuery(ctx, req, handler)
+	}
+
+	if isImagesRequest(reqPath) {
+		var cachedOutcome *sdk.ForwardOutcome
+		ctx, cachedOutcome = g.checkImageSafetyRequest(ctx, req, reqMethod, reqPath)
+		if cachedOutcome != nil {
+			sdk.LoggerFromContext(ctx).Info("image_safety_request_cache_hit",
+				sdk.LogFieldModel, req.Model,
+				sdk.LogFieldPath, reqPath,
+			)
+			return *cachedOutcome, nil
+		}
 	}
 
 	if !isImagesRequest(reqPath) && model.IsImageOnly(req.Model) {
@@ -727,6 +739,9 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 				clientHeaders,
 				errDetail,
 			)
+			if imageSafetyRejected {
+				g.rememberImageSafetyRequest(ctx)
+			}
 		}
 		if sseKA != nil && finalAttempt {
 			sseKA.Stop()
