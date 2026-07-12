@@ -406,7 +406,6 @@ func isSafetyRejectionText(values ...string) bool {
 		"blocked by our safety",
 		"moderation_blocked",
 		"moderation blocked",
-		"safety system",
 	} {
 		if strings.Contains(text, kw) {
 			return true

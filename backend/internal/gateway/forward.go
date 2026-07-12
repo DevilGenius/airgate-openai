@@ -434,6 +434,16 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 				}
 				return g.handleImagesResponse(mockResp, req.Writer, nil, start, req.Model, imagesRespOpts)
 			}
+			if _, ok := normalizedImageSafetyFailureFromError(pollErr); ok {
+				logger.Warn("images_async_task_recovery_safety_rejected",
+					"upstream_task_id", recoveryID,
+					sdk.LogFieldError, pollErr,
+				)
+				g.rememberImageSafetyRequest(ctx)
+				outcome := imageSafetyClientOutcome()
+				outcome.Duration = time.Since(start)
+				return outcome, nil
+			}
 			reason := fmt.Sprintf("上游异步任务恢复失败: %v", pollErr)
 			logger.Warn("images_async_task_recovery_failed",
 				"upstream_task_id", recoveryID,
@@ -556,7 +566,7 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 		if !shouldRetryImageFallback(outcome, err) {
 			if sseKA != nil {
 				sseKA.Stop()
-				writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
+				writeImageOutcomeErrorSSEIfStarted(req.Writer, sseKA, outcome)
 			}
 			return outcome, err
 		}
@@ -698,6 +708,24 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 	resp, cancel, err := g.doStreamableUpstream(ctx, client, upstreamReq, streamable)
 	if err != nil {
 		dur := time.Since(start)
+		if isImagesRequest(reqPath) {
+			if _, ok := normalizedImageSafetyFailureFromError(err); ok {
+				g.rememberImageSafetyRequest(ctx)
+				logger.Warn("images_apikey_safety_error_normalized",
+					sdk.LogFieldPath, reqPath,
+					sdk.LogFieldModel, req.Model,
+					sdk.LogFieldDurationMs, dur.Milliseconds(),
+					sdk.LogFieldError, err,
+				)
+				if sseKA != nil && finalAttempt {
+					sseKA.Stop()
+					writeImageInvalidRequestSSEIfStarted(req.Writer, sseKA)
+				}
+				outcome := imageSafetyClientOutcome()
+				outcome.Duration = dur
+				return outcome, nil
+			}
+		}
 		if sseKA != nil && finalAttempt {
 			sseKA.Stop()
 			logger.Warn("images_apikey_stream_failed_redacted",
@@ -822,13 +850,23 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 
 			finalBody, pollErr := g.pollAsyncImageTask(ctx, account, taskID, logger)
 			if pollErr != nil {
-				reason := fmt.Sprintf("异步图片任务轮询失败: %v", pollErr)
 				logger.Warn("images_async_task_poll_failed",
 					sdk.LogFieldAccountID, account.ID,
 					sdk.LogFieldModel, req.Model,
 					"task_id", taskID,
 					sdk.LogFieldError, pollErr,
 				)
+				if _, ok := normalizedImageSafetyFailureFromError(pollErr); ok {
+					g.rememberImageSafetyRequest(ctx)
+					outcome := imageSafetyClientOutcome()
+					outcome.Duration = time.Since(start)
+					if sseKA != nil && finalAttempt {
+						sseKA.Stop()
+						writeImageInvalidRequestSSEIfStarted(req.Writer, sseKA)
+					}
+					return outcome, nil
+				}
+				reason := fmt.Sprintf("异步图片任务轮询失败: %v", pollErr)
 				if sseKA != nil && finalAttempt {
 					sseKA.Stop()
 					writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)

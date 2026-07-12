@@ -191,8 +191,17 @@ func executeImageTask(ctx context.Context, g *OpenAIGateway, task sdk.HostTask, 
 
 	resp, err := g.forwardViaHost(ctx, task.UserID, groupID, apiKeyID, model, http.MethodPost, defaultPath, headers, reqBody, false, withHostForwardTask(task.ID, upstreamTaskID))
 	if err != nil {
-		// err 这里只来自 gRPC host-invoke 自身失败（断开 / 序列化错误）。
-		// 上游安全拒绝通过 resp.StatusCode + resp.Body 由下方分类处理。
+		if failure, ok := normalizedImageSafetyFailureFromError(err); ok {
+			if requestHash, _ := task.Input[imageSafetyRequestHashInputKey].(string); requestHash != "" {
+				g.rememberImageSafetyRequestHex(requestHash)
+			}
+			return rt.Fail(ctx, &TaskError{
+				Type:    "invalid_request",
+				Code:    failure.Code,
+				Message: failure.Message,
+			})
+		}
+		// 其余 err 来自 gRPC host-invoke 自身失败（断开 / 序列化错误）。
 		return rt.Fail(ctx, &TaskError{
 			Type:      "upstream_error",
 			Message:   "upstream 转发失败: " + err.Error(),

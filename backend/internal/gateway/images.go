@@ -87,6 +87,22 @@ func normalizeImageSafetyFailure(failure *responsesFailureError) *responsesFailu
 	return imageSafetyFailure()
 }
 
+func normalizedImageSafetyFailureFromError(err error) (*responsesFailureError, bool) {
+	if err == nil {
+		return nil, false
+	}
+	var failure *responsesFailureError
+	if errors.As(err, &failure) {
+		failure = normalizeImageSafetyFailure(failure)
+		return failure, isNormalizedImageSafetyFailure(failure)
+	}
+	if isImageSafetyRejectionText(err.Error()) {
+		failure = imageSafetyFailure()
+		return failure, true
+	}
+	return nil, false
+}
+
 func isNormalizedImageSafetyFailure(failure *responsesFailureError) bool {
 	return failure != nil &&
 		failure.StatusCode == http.StatusBadRequest &&
@@ -107,7 +123,7 @@ func isNormalizedImageSafetyOutcome(outcome sdk.ForwardOutcome) bool {
 
 func normalizeImageUpstreamError(statusCode int, body []byte, headers http.Header, detail string) (int, []byte, http.Header, string, bool) {
 	message, errType, errCode := parseUpstreamTaskErrorBody(statusCode, body)
-	if !isImageSafetyRejectionText(errType, errCode, message, detail, string(body)) {
+	if !isImageSafetyRejectionText(errType, errCode, message, detail) {
 		return statusCode, body, headers, detail, false
 	}
 	normalizedBody := buildImagesErrorBodyWithCode(
@@ -131,6 +147,14 @@ func writeImageInvalidRequestSSEIfStarted(w http.ResponseWriter, ka *ssePingKeep
 		imageSafetyInvalidRequestMessage,
 	))
 	writeSSEDone(w)
+}
+
+func writeImageOutcomeErrorSSEIfStarted(w http.ResponseWriter, ka *ssePingKeepAlive, outcome sdk.ForwardOutcome) {
+	if isNormalizedImageSafetyOutcome(outcome) {
+		writeImageInvalidRequestSSEIfStarted(w, ka)
+		return
+	}
+	writeSSEErrorIfStarted(w, ka, sanitizedImageSSEErrorMessage)
 }
 
 // maxEditInputImageBytes 图生图（/images/edits）参考图单张上限。
@@ -1994,13 +2018,29 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 	}
 
 	if wsResult.Err != nil {
+		if failure, ok := normalizedImageSafetyFailureFromError(wsResult.Err); ok {
+			g.rememberImageSafetyRequest(ctx)
+			body := buildImagesErrorBodyWithCode(failure.StatusCode, failure.Code, failure.Message)
+			if sseKA != nil {
+				sseKA.Stop()
+				g.logger.Warn("Images OAuth 上游安全拒绝，已归一化客户端响应",
+					"path", reqPath, "model", imgReq.Model, "reason", wsResult.Err)
+				writeImageInvalidRequestSSEIfStarted(req.Writer, sseKA)
+			}
+			return sdk.ForwardOutcome{
+				Kind: sdk.OutcomeClientError,
+				Upstream: sdk.UpstreamResponse{
+					StatusCode: failure.StatusCode,
+					Headers:    http.Header{"Content-Type": []string{"application/json"}},
+					Body:       body,
+				},
+				Reason:   failure.Message,
+				Duration: elapsed,
+			}, nil
+		}
 		var failure *responsesFailureError
 		if errors.As(wsResult.Err, &failure) {
 			upstreamFailureMessage := failure.Message
-			failure = normalizeImageSafetyFailure(failure)
-			if isNormalizedImageSafetyFailure(failure) {
-				g.rememberImageSafetyRequest(ctx)
-			}
 			if failure.shouldReturnClientError() {
 				body := buildImagesErrorBodyWithCode(failure.StatusCode, failure.Code, failure.Message)
 				if sseKA != nil {
@@ -2011,11 +2051,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 					if failure.StatusCode == http.StatusRequestEntityTooLarge {
 						clientMsg = imageTooLargeSSEErrorMessage
 					}
-					if isNormalizedImageSafetyFailure(failure) {
-						writeImageInvalidRequestSSEIfStarted(req.Writer, sseKA)
-					} else {
-						writeSSEErrorIfStarted(req.Writer, sseKA, clientMsg)
-					}
+					writeSSEErrorIfStarted(req.Writer, sseKA, clientMsg)
 				}
 				outcome := sdk.ForwardOutcome{
 					Kind:          sdk.OutcomeClientError,
@@ -2849,14 +2885,7 @@ func (g *OpenAIGateway) pollAsyncImageTask(
 		case "completed":
 			return transformAsyncImageResult(body)
 		case "failed", "error":
-			reason := gjson.GetBytes(body, "data.result.error").String()
-			if reason == "" {
-				reason = gjson.GetBytes(body, "data.error").String()
-			}
-			if reason == "" {
-				reason = "unknown error"
-			}
-			return nil, fmt.Errorf("异步图片任务失败: %s", reason)
+			return nil, classifyAsyncImageTaskFailure(body)
 		}
 
 		if err := waitAsyncImagePoll(ctx, asyncImagePollInterval); err != nil {
@@ -2864,6 +2893,26 @@ func (g *OpenAIGateway) pollAsyncImageTask(
 		}
 	}
 	return nil, fmt.Errorf("异步图片任务 %s 超时", taskID)
+}
+
+func classifyAsyncImageTaskFailure(body []byte) error {
+	reason := gjson.GetBytes(body, "data.result.error").String()
+	if reason == "" {
+		reason = gjson.GetBytes(body, "data.error").String()
+	}
+	if reason == "" {
+		reason = "unknown error"
+	}
+	if isImageSafetyRejectionText(reason) {
+		return &responsesFailureError{
+			Kind:               responsesFailureKindClient,
+			StatusCode:         http.StatusBadRequest,
+			AnthropicErrorType: "invalid_request_error",
+			Code:               "safety_rejected",
+			Message:            reason,
+		}
+	}
+	return fmt.Errorf("异步图片任务失败: %s", reason)
 }
 
 // transformAsyncImageResult 将异步任务完成响应转换为 OpenAI Images API 标准格式。

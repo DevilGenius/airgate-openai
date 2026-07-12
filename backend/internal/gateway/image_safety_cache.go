@@ -1,13 +1,18 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
-	"hash/maphash"
+	"fmt"
+	"mime"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/cespare/xxhash/v2"
 
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
@@ -16,11 +21,11 @@ const (
 	imageSafetyRequestCacheTTL        = 10 * time.Minute
 	imageSafetyRequestCacheMaxEntries = 8192
 	imageSafetyRequestHashInputKey    = "_image_safety_request_hash"
+	imageSafetyRequestHashSeed        = uint64(0x9e3779b185ebca87)
+	imageSafetyMultipartHashSeed      = uint64(0xc2b2ae3d27d4eb4f)
 )
 
 type imageSafetyRequestContextKey struct{}
-
-var imageSafetyRequestHashSeed = maphash.MakeSeed()
 
 type imageSafetyRequestCache struct {
 	mu         sync.Mutex
@@ -86,20 +91,97 @@ func imageSafetyRequestHash(req *sdk.ForwardRequest, method, path string) (uint6
 	if req == nil || !isImagesRequest(path) {
 		return 0, false
 	}
-	var hasher maphash.Hash
-	hasher.SetSeed(imageSafetyRequestHashSeed)
-	writeImageSafetyHashPart := func(value []byte) {
-		var size [8]byte
-		binary.BigEndian.PutUint64(size[:], uint64(len(value)))
-		_, _ = hasher.Write(size[:])
-		_, _ = hasher.Write(value)
+	rawContentType := strings.TrimSpace(req.Headers.Get("Content-Type"))
+	contentType := strings.ToLower(rawContentType)
+	boundary := ""
+	if strings.Contains(rawContentType, ";") {
+		if mediaType, params, err := mime.ParseMediaType(rawContentType); err == nil {
+			contentType = strings.ToLower(strings.TrimSpace(mediaType))
+			boundary = params["boundary"]
+		}
 	}
-	writeImageSafetyHashPart([]byte(method))
-	writeImageSafetyHashPart([]byte(path))
-	writeImageSafetyHashPart([]byte(req.Model))
-	writeImageSafetyHashPart([]byte(req.Headers.Get("Content-Type")))
-	writeImageSafetyHashPart(req.Body)
+	var hasher xxhash.Digest
+	hasher.ResetWithSeed(imageSafetyRequestHashSeed)
+	writeImageSafetyHashPart(&hasher, []byte(method))
+	writeImageSafetyHashPart(&hasher, []byte(path))
+	writeImageSafetyHashPart(&hasher, []byte(req.Model))
+	writeImageSafetyHashPart(&hasher, []byte(contentType))
+	if isImagesEditRequest(path) && contentType == "multipart/form-data" {
+		if multipartDigest, err := imageSafetyMultipartDigest(req.Body, boundary); err == nil {
+			writeImageSafetyHashPart(&hasher, []byte("multipart"))
+			writeImageSafetyHashUint64(&hasher, multipartDigest)
+			return hasher.Sum64(), true
+		}
+	}
+	writeImageSafetyHashPart(&hasher, []byte("raw"))
+	writeImageSafetyHashUint64(&hasher, uint64(len(req.Body)))
+	writeImageSafetyHashUint64(&hasher, xxhash.Sum64(req.Body))
 	return hasher.Sum64(), true
+}
+
+func imageSafetyMultipartDigest(body []byte, boundary string) (uint64, error) {
+	if boundary == "" {
+		return 0, fmt.Errorf("multipart content-type 缺少 boundary")
+	}
+	var delimiterStorage [72]byte
+	var delimiter []byte
+	if len(boundary) <= len(delimiterStorage)-2 {
+		delimiter = delimiterStorage[:len(boundary)+2]
+		copy(delimiter, "--")
+		copy(delimiter[2:], boundary)
+	} else {
+		delimiter = append([]byte("--"), boundary...)
+	}
+	var hasher xxhash.Digest
+	hasher.ResetWithSeed(imageSafetyMultipartHashSeed)
+	searchFrom := 0
+	writtenFrom := 0
+	foundBoundary := false
+	for {
+		relative := bytes.Index(body[searchFrom:], delimiter)
+		if relative < 0 {
+			break
+		}
+		position := searchFrom + relative
+		afterDelimiter := position + len(delimiter)
+		if !isImageSafetyMultipartDelimiter(body, position, afterDelimiter) {
+			searchFrom = position + 1
+			continue
+		}
+		_, _ = hasher.Write(body[writtenFrom:position])
+		_, _ = hasher.WriteString("--<boundary>")
+		writtenFrom = afterDelimiter
+		searchFrom = afterDelimiter
+		foundBoundary = true
+	}
+	if !foundBoundary {
+		return 0, fmt.Errorf("multipart body 中未找到 boundary")
+	}
+	_, _ = hasher.Write(body[writtenFrom:])
+	return hasher.Sum64(), nil
+}
+
+func isImageSafetyMultipartDelimiter(body []byte, position, afterDelimiter int) bool {
+	validPrefix := position == 0 ||
+		(position >= 2 && body[position-2] == '\r' && body[position-1] == '\n')
+	if !validPrefix || afterDelimiter+2 > len(body) {
+		return false
+	}
+	return (body[afterDelimiter] == '\r' && body[afterDelimiter+1] == '\n') ||
+		(body[afterDelimiter] == '-' && body[afterDelimiter+1] == '-')
+}
+
+func writeImageSafetyHashPart(dst *xxhash.Digest, value []byte) {
+	var size [8]byte
+	binary.BigEndian.PutUint64(size[:], uint64(len(value)))
+	_, _ = dst.Write(size[:])
+	_, _ = dst.Write(value)
+}
+
+func writeImageSafetyHashUint64(dst *xxhash.Digest, value uint64) {
+	var encoded [8]byte
+	binary.BigEndian.PutUint64(encoded[:], value)
+	_, _ = dst.Write(encoded[:])
 }
 
 func withImageSafetyRequestHash(ctx context.Context, hash uint64) context.Context {

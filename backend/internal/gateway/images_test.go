@@ -28,6 +28,8 @@ import (
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
+const imageSafetyNudityHTTP500TestMessage = "HTTP 500: 非常抱歉，该提示可能违反了关于裸露、色情或情色内容的防护限制。如果你认为此判断有误，请重试或修改提示语。（traceid: 0df283b10a9dc11875c7e8499f511fca）"
+
 func testPNGDataURL(width, height int, pixel func(int, int) color.RGBA) string {
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	for y := 0; y < height; y++ {
@@ -297,6 +299,28 @@ func TestStartSSEPingKeepAliveDoesNotCommitImmediately(t *testing.T) {
 	}
 	if got := w.Header().Get("Content-Type"); got != "text/event-stream" {
 		t.Fatalf("Content-Type = %q, want text/event-stream", got)
+	}
+}
+
+func TestWriteImageOutcomeErrorSSEUsesNormalizedSafetyError(t *testing.T) {
+	w := httptest.NewRecorder()
+	sseKA := &ssePingKeepAlive{w: w}
+	sseKA.wrote.Store(true)
+
+	writeImageOutcomeErrorSSEIfStarted(w, sseKA, imageSafetyClientOutcome())
+
+	body := w.Body.String()
+	if !strings.Contains(body, `"code":"`+imageSafetyInvalidRequestCode+`"`) {
+		t.Fatalf("body = %q, want normalized safety code", body)
+	}
+	if !strings.Contains(body, imageSafetyInvalidRequestMessage) {
+		t.Fatalf("body = %q, want normalized safety message", body)
+	}
+	if strings.Contains(body, `"type":"server_error"`) {
+		t.Fatalf("body = %q, should not contain server_error", body)
+	}
+	if !strings.Contains(body, "data: [DONE]") {
+		t.Fatalf("body = %q, want done marker", body)
 	}
 }
 
@@ -1079,6 +1103,7 @@ func TestClassifyUpstreamTaskErrorSafetyRejected(t *testing.T) {
 		"非常抱歉，该提示可能违反了我们的内容政策。如果你认为此判断有误，请重试或修改提示语。（traceid: 067e759e4d9ac1185e7ce849d1ceae21）",
 		"非常抱歉，该提示可能违反了关于暴力内容的防护限制。如果你认为此判断有误，请重试或修改提示语。（traceid: 298f0d0f709ac118eb7fe849920c2eed）",
 		"非常抱歉，生成的图片可能违反了关于青少年与儿童形象适当描绘的防护限制。如果你认为此判断有误，请重试或修改提示语。（traceid: f3db43f09497c118843ae849d4d350ea）",
+		imageSafetyNudityHTTP500TestMessage,
 	}
 	for _, message := range messages {
 		body, _ := json.Marshal(map[string]any{"error": map[string]any{"message": message}})
@@ -1124,6 +1149,7 @@ func TestNormalizeImageUpstreamErrorSafetyRejected(t *testing.T) {
 		"非常抱歉，该提示可能违反了我们的内容政策。如果你认为此判断有误，请重试或修改提示语。（traceid: 067e759e4d9ac1185e7ce849d1ceae21）",
 		"非常抱歉，该提示可能违反了关于暴力内容的防护限制。如果你认为此判断有误，请重试或修改提示语。（traceid: 298f0d0f709ac118eb7fe849920c2eed）",
 		"非常抱歉，生成的图片可能违反了关于青少年与儿童形象适当描绘的防护限制。如果你认为此判断有误，请重试或修改提示语。（traceid: f3db43f09497c118843ae849d4d350ea）",
+		imageSafetyNudityHTTP500TestMessage,
 	}
 	for _, message := range messages {
 		body, _ := json.Marshal(map[string]any{"error": map[string]any{"message": message}})
@@ -1172,6 +1198,58 @@ func TestNormalizeImageUpstreamErrorKeepsUnrelatedServerError(t *testing.T) {
 	)
 	if ok || status != http.StatusInternalServerError || string(gotBody) != string(body) || detail != "upstream storage failed" || gotHeaders.Get("Content-Type") != "application/json" {
 		t.Fatalf("unrelated error changed: ok=%v status=%d detail=%q body=%s headers=%v", ok, status, detail, gotBody, gotHeaders)
+	}
+}
+
+func TestNormalizeImageUpstreamErrorKeepsSafetySystemOutage(t *testing.T) {
+	body := []byte(`{"error":{"message":"safety system unavailable"}}`)
+	headers := http.Header{"Content-Type": []string{"application/json"}}
+	status, gotBody, gotHeaders, detail, ok := normalizeImageUpstreamError(
+		http.StatusServiceUnavailable,
+		body,
+		headers,
+		"safety system unavailable",
+	)
+	if ok || status != http.StatusServiceUnavailable || string(gotBody) != string(body) || detail != "safety system unavailable" || gotHeaders.Get("Content-Type") != "application/json" {
+		t.Fatalf("safety outage changed: ok=%v status=%d detail=%q body=%s headers=%v", ok, status, detail, gotBody, gotHeaders)
+	}
+}
+
+func TestClassifyAsyncImageTaskFailureSafetyRejected(t *testing.T) {
+	body, _ := json.Marshal(map[string]any{
+		"data": map[string]any{
+			"status": "failed",
+			"result": map[string]any{"error": imageSafetyNudityHTTP500TestMessage},
+		},
+	})
+	err := classifyAsyncImageTaskFailure(body)
+	failure, ok := normalizedImageSafetyFailureFromError(err)
+	if !ok {
+		t.Fatalf("error = %v, want normalized safety failure", err)
+	}
+	if failure.StatusCode != http.StatusBadRequest || failure.Code != imageSafetyInvalidRequestCode || failure.Message != imageSafetyInvalidRequestMessage {
+		t.Fatalf("failure = %#v, want normalized client error", failure)
+	}
+}
+
+func TestNormalizedImageSafetyFailureFromPlainHTTP500Error(t *testing.T) {
+	failure, ok := normalizedImageSafetyFailureFromError(errors.New(imageSafetyNudityHTTP500TestMessage))
+	if !ok {
+		t.Fatal("plain HTTP 500 safety error should be normalized")
+	}
+	if failure.StatusCode != http.StatusBadRequest || failure.Code != imageSafetyInvalidRequestCode || failure.Message != imageSafetyInvalidRequestMessage {
+		t.Fatalf("failure = %#v, want normalized client error", failure)
+	}
+}
+
+func TestClassifyAsyncImageTaskFailureKeepsSafetySystemOutage(t *testing.T) {
+	body := []byte(`{"data":{"status":"failed","result":{"error":"safety system unavailable"}}}`)
+	err := classifyAsyncImageTaskFailure(body)
+	if _, ok := normalizedImageSafetyFailureFromError(err); ok {
+		t.Fatalf("error = %v, safety service outage must remain transient", err)
+	}
+	if !strings.Contains(err.Error(), "safety system unavailable") {
+		t.Fatalf("error = %v, want original outage detail", err)
 	}
 }
 

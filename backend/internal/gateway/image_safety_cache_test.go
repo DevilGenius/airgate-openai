@@ -1,16 +1,22 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
+	"mime/multipart"
 	"net/http"
 	"testing"
 	"time"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/tidwall/gjson"
 
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
+
+var imageSafetyRequestHashBenchmarkSink uint64
 
 func TestImageSafetyRequestCacheTTLAndCapacity(t *testing.T) {
 	cache := imageSafetyRequestCache{
@@ -68,6 +74,86 @@ func TestImageSafetyRequestHashSeparatesDifferentRequests(t *testing.T) {
 	}
 }
 
+func TestImageSafetyRequestHashUsesStableDigest(t *testing.T) {
+	req := &sdk.ForwardRequest{
+		Body:    []byte(`{"prompt":"same prompt","model":"gpt-image-2"}`),
+		Headers: http.Header{"Content-Type": []string{"application/json; charset=utf-8"}},
+		Model:   "gpt-image-2",
+	}
+	got, ok := imageSafetyRequestHash(req, http.MethodPost, "/v1/images/generations")
+	if !ok {
+		t.Fatal("image request should produce a hash")
+	}
+
+	hasher := xxhash.NewWithSeed(imageSafetyRequestHashSeed)
+	for _, part := range [][]byte{
+		[]byte(http.MethodPost),
+		[]byte("/v1/images/generations"),
+		[]byte("gpt-image-2"),
+		[]byte("application/json"),
+		[]byte("raw"),
+	} {
+		var size [8]byte
+		binary.BigEndian.PutUint64(size[:], uint64(len(part)))
+		_, _ = hasher.Write(size[:])
+		_, _ = hasher.Write(part)
+	}
+	var bodySize [8]byte
+	binary.BigEndian.PutUint64(bodySize[:], uint64(len(req.Body)))
+	_, _ = hasher.Write(bodySize[:])
+	var bodyHash [8]byte
+	binary.BigEndian.PutUint64(bodyHash[:], xxhash.Sum64(req.Body))
+	_, _ = hasher.Write(bodyHash[:])
+	want := hasher.Sum64()
+	if got != want {
+		t.Fatalf("hash = %x, want stable XXH64 value %x", got, want)
+	}
+}
+
+func TestImageSafetyRequestHashIgnoresMultipartBoundary(t *testing.T) {
+	buildRequest := func(boundary string) *sdk.ForwardRequest {
+		t.Helper()
+		var body bytes.Buffer
+		writer := multipart.NewWriter(&body)
+		if err := writer.SetBoundary(boundary); err != nil {
+			t.Fatalf("SetBoundary(%q): %v", boundary, err)
+		}
+		if err := writer.WriteField("model", "gpt-image-2"); err != nil {
+			t.Fatalf("WriteField(model): %v", err)
+		}
+		if err := writer.WriteField("prompt", "same prompt"); err != nil {
+			t.Fatalf("WriteField(prompt): %v", err)
+		}
+		part, err := writer.CreateFormFile("image", "input.png")
+		if err != nil {
+			t.Fatalf("CreateFormFile: %v", err)
+		}
+		if _, err := part.Write([]byte("same-image-bytes--image-safety-boundary-one-not-a-delimiter")); err != nil {
+			t.Fatalf("write image: %v", err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatalf("close multipart writer: %v", err)
+		}
+		return &sdk.ForwardRequest{
+			Body:    body.Bytes(),
+			Headers: http.Header{"Content-Type": []string{writer.FormDataContentType()}},
+			Model:   "gpt-image-2",
+		}
+	}
+
+	first, ok := imageSafetyRequestHash(buildRequest("image-safety-boundary-one"), http.MethodPost, "/v1/images/edits")
+	if !ok {
+		t.Fatal("first multipart request should produce a hash")
+	}
+	second, ok := imageSafetyRequestHash(buildRequest("Image-Safety-Boundary-Two"), http.MethodPost, "/v1/images/edits")
+	if !ok {
+		t.Fatal("second multipart request should produce a hash")
+	}
+	if first != second {
+		t.Fatalf("equivalent multipart hashes differ: %x != %x", first, second)
+	}
+}
+
 func TestImageSafetyRequestCacheRejectsDuplicateWithoutAccountFailure(t *testing.T) {
 	gateway := &OpenAIGateway{}
 	req := &sdk.ForwardRequest{
@@ -111,5 +197,81 @@ func TestImageTaskInputCarriesOriginalSafetyRequestHash(t *testing.T) {
 	}
 	if got, _ := input[imageSafetyRequestHashInputKey].(string); got == "" || got != want {
 		t.Fatalf("task request hash = %q, want %q", got, want)
+	}
+}
+
+func BenchmarkImageSafetyRequestHash(b *testing.B) {
+	for _, testCase := range []struct {
+		name string
+		size int
+	}{
+		{name: "1MiB", size: 1 << 20},
+		{name: "5MiB", size: 5 << 20},
+		{name: "20MiB", size: 20 << 20},
+	} {
+		b.Run(testCase.name, func(b *testing.B) {
+			body := bytes.Repeat([]byte{'a'}, testCase.size)
+			req := &sdk.ForwardRequest{
+				Body:    body,
+				Headers: http.Header{"Content-Type": []string{"application/json"}},
+				Model:   "gpt-image-2",
+			}
+			b.ReportAllocs()
+			b.SetBytes(int64(testCase.size))
+			b.ResetTimer()
+			var hash uint64
+			for i := 0; i < b.N; i++ {
+				hash, _ = imageSafetyRequestHash(req, http.MethodPost, "/v1/images/generations")
+			}
+			imageSafetyRequestHashBenchmarkSink = hash
+		})
+	}
+}
+
+func BenchmarkImageSafetyRequestHashMultipart(b *testing.B) {
+	for _, testCase := range []struct {
+		name string
+		size int
+	}{
+		{name: "1MiB", size: 1 << 20},
+		{name: "5MiB", size: 5 << 20},
+		{name: "20MiB", size: 20 << 20},
+	} {
+		b.Run(testCase.name, func(b *testing.B) {
+			var body bytes.Buffer
+			writer := multipart.NewWriter(&body)
+			if err := writer.SetBoundary("image-safety-benchmark-boundary"); err != nil {
+				b.Fatal(err)
+			}
+			if err := writer.WriteField("model", "gpt-image-2"); err != nil {
+				b.Fatal(err)
+			}
+			if err := writer.WriteField("prompt", "benchmark prompt"); err != nil {
+				b.Fatal(err)
+			}
+			part, err := writer.CreateFormFile("image", "input.png")
+			if err != nil {
+				b.Fatal(err)
+			}
+			if _, err := part.Write(bytes.Repeat([]byte{'a'}, testCase.size)); err != nil {
+				b.Fatal(err)
+			}
+			if err := writer.Close(); err != nil {
+				b.Fatal(err)
+			}
+			req := &sdk.ForwardRequest{
+				Body:    body.Bytes(),
+				Headers: http.Header{"Content-Type": []string{writer.FormDataContentType()}},
+				Model:   "gpt-image-2",
+			}
+			b.ReportAllocs()
+			b.SetBytes(int64(len(req.Body)))
+			b.ResetTimer()
+			var hash uint64
+			for i := 0; i < b.N; i++ {
+				hash, _ = imageSafetyRequestHash(req, http.MethodPost, "/v1/images/edits")
+			}
+			imageSafetyRequestHashBenchmarkSink = hash
+		})
 	}
 }
