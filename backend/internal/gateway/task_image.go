@@ -189,7 +189,7 @@ func executeImageTask(ctx context.Context, g *OpenAIGateway, task sdk.HostTask, 
 	resp, err := g.forwardViaHost(ctx, task.UserID, groupID, apiKeyID, model, http.MethodPost, defaultPath, headers, reqBody, false, withHostForwardTask(task.ID, upstreamTaskID))
 	if err != nil {
 		// err 这里只来自 gRPC host-invoke 自身失败（断开 / 序列化错误），上游
-		// 4xx 安全拒绝走的是 resp.StatusCode + resp.Body，由下方 classifyUpstreamTaskError
+		// 上游安全拒绝走的是 resp.StatusCode + resp.Body，由下方 classifyUpstreamTaskError
 		// 处理。所以这里没必要再对 err.Error() 做 safety 关键词匹配。
 		return rt.Fail(ctx, &TaskError{
 			Type:      "upstream_error",
@@ -251,8 +251,12 @@ func executeImageTask(ctx context.Context, g *OpenAIGateway, task sdk.HostTask, 
 // classifyUpstreamTaskError 把上游 HTTP 错误映射为结构化 TaskError。
 func classifyUpstreamTaskError(statusCode int, body []byte) *TaskError {
 	msg, errType, errCode := parseUpstreamTaskErrorBody(statusCode, body)
-	if isSafetyRejectionText(errType, errCode, msg) {
-		return &TaskError{Type: "invalid_request", Code: "safety_rejected", Message: msg}
+	if isImageSafetyRejectionText(errType, errCode, msg) {
+		return &TaskError{
+			Type:    "invalid_request",
+			Code:    imageSafetyInvalidRequestCode,
+			Message: imageSafetyInvalidRequestMessage,
+		}
 	}
 
 	switch {

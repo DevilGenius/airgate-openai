@@ -51,10 +51,83 @@ const maxRemoteImageBytes = 25 * 1024 * 1024
 
 const sanitizedImageSSEErrorMessage = "请求暂时无法完成，请稍后重试"
 
+const (
+	imageSafetyInvalidRequestCode    = "invalid_request"
+	imageSafetyInvalidRequestMessage = "The request could not be processed. Please revise the prompt and try again."
+)
+
 // 历史变量名保留，但实际对外提示保持统一的重试文案，不再暗示用户压缩图片。
 const imageTooLargeSSEErrorMessage = sanitizedImageSSEErrorMessage
 
 var imageDownloadHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
+func imageSafetyFailure() *responsesFailureError {
+	return &responsesFailureError{
+		Kind:               responsesFailureKindClient,
+		StatusCode:         http.StatusBadRequest,
+		AnthropicErrorType: "invalid_request_error",
+		Code:               imageSafetyInvalidRequestCode,
+		Message:            imageSafetyInvalidRequestMessage,
+	}
+}
+
+func isImageSafetyRejectionText(values ...string) bool {
+	if isSafetyRejectionText(values...) {
+		return true
+	}
+	text := strings.ToLower(strings.Join(values, " "))
+	return strings.Contains(text, "可能违反") &&
+		(strings.Contains(text, "内容政策") || strings.Contains(text, "防护限制"))
+}
+
+func normalizeImageSafetyFailure(failure *responsesFailureError) *responsesFailureError {
+	if failure == nil || !isImageSafetyRejectionText(failure.AnthropicErrorType, failure.Code, failure.Message) {
+		return failure
+	}
+	return imageSafetyFailure()
+}
+
+func isNormalizedImageSafetyFailure(failure *responsesFailureError) bool {
+	return failure != nil &&
+		failure.StatusCode == http.StatusBadRequest &&
+		failure.Code == imageSafetyInvalidRequestCode &&
+		failure.Message == imageSafetyInvalidRequestMessage
+}
+
+func isNormalizedImageSafetyOutcome(outcome sdk.ForwardOutcome) bool {
+	return outcome.Kind == sdk.OutcomeClientError &&
+		outcome.Upstream.StatusCode == http.StatusBadRequest &&
+		gjson.GetBytes(outcome.Upstream.Body, "error.code").String() == imageSafetyInvalidRequestCode &&
+		gjson.GetBytes(outcome.Upstream.Body, "error.message").String() == imageSafetyInvalidRequestMessage
+}
+
+func normalizeImageUpstreamError(statusCode int, body []byte, headers http.Header, detail string) (int, []byte, http.Header, string, bool) {
+	message, errType, errCode := parseUpstreamTaskErrorBody(statusCode, body)
+	if !isImageSafetyRejectionText(errType, errCode, message, detail, string(body)) {
+		return statusCode, body, headers, detail, false
+	}
+	normalizedBody := buildImagesErrorBodyWithCode(
+		http.StatusBadRequest,
+		imageSafetyInvalidRequestCode,
+		imageSafetyInvalidRequestMessage,
+	)
+	return http.StatusBadRequest, normalizedBody, http.Header{
+		"Content-Type":   []string{"application/json"},
+		"Content-Length": []string{strconv.Itoa(len(normalizedBody))},
+	}, imageSafetyInvalidRequestMessage, true
+}
+
+func writeImageInvalidRequestSSEIfStarted(w http.ResponseWriter, ka *ssePingKeepAlive) {
+	if ka == nil || !ka.Wrote() {
+		return
+	}
+	writeSSEData(w, buildImagesErrorBodyWithCode(
+		http.StatusBadRequest,
+		imageSafetyInvalidRequestCode,
+		imageSafetyInvalidRequestMessage,
+	))
+	writeSSEDone(w)
+}
 
 // maxEditInputImageBytes 图生图（/images/edits）参考图单张上限。
 // API Key 和 Web Reverse 路径在转发前把超限图片压缩到此阈值以内，
@@ -215,6 +288,9 @@ func shouldRetryImageFallback(outcome sdk.ForwardOutcome, err error) bool {
 	if outcome.Kind == sdk.OutcomeSuccess {
 		return false
 	}
+	if isNormalizedImageSafetyOutcome(outcome) {
+		return false
+	}
 	switch outcome.Kind {
 	case sdk.OutcomeAccountRateLimited, sdk.OutcomeAccountDead, sdk.OutcomeAccountUnavailable:
 		return false
@@ -226,7 +302,7 @@ func shouldRetryImageFallback(outcome sdk.ForwardOutcome, err error) bool {
 	if err != nil {
 		reason += " " + err.Error()
 	}
-	return !isSafetyRejectionText(reason)
+	return !isImageSafetyRejectionText(reason)
 }
 
 func calculateGPTImageOutputTokensForImages(modelName, size, quality string, numImages int) int {
@@ -1518,28 +1594,12 @@ func imageGenCallDiagnosticsDetail(wsResult WSResult) string {
 
 func classifyImageGenCallFailures(failures []ImageGenCallFailure, fallbackDetail string) *responsesFailureError {
 	for _, failure := range failures {
-		if isSafetyRejectionText(failure.ErrorType, failure.ErrorCode, failure.Message, failure.IncompleteReason) {
-			msg := strings.TrimSpace(failure.Message)
-			if msg == "" {
-				msg = "Your request was rejected by the safety system."
-			}
-			return &responsesFailureError{
-				Kind:               responsesFailureKindClient,
-				StatusCode:         http.StatusBadRequest,
-				AnthropicErrorType: "invalid_request_error",
-				Code:               "safety_rejected",
-				Message:            msg,
-			}
+		if isImageSafetyRejectionText(failure.ErrorType, failure.ErrorCode, failure.Message, failure.IncompleteReason) {
+			return imageSafetyFailure()
 		}
 	}
-	if isSafetyRejectionText(fallbackDetail) {
-		return &responsesFailureError{
-			Kind:               responsesFailureKindClient,
-			StatusCode:         http.StatusBadRequest,
-			AnthropicErrorType: "invalid_request_error",
-			Code:               "safety_rejected",
-			Message:            "Your request was rejected by the safety system.",
-		}
+	if isImageSafetyRejectionText(fallbackDetail) {
+		return imageSafetyFailure()
 	}
 	return nil
 }
@@ -1932,17 +1992,23 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 	if wsResult.Err != nil {
 		var failure *responsesFailureError
 		if errors.As(wsResult.Err, &failure) {
+			upstreamFailureMessage := failure.Message
+			failure = normalizeImageSafetyFailure(failure)
 			if failure.shouldReturnClientError() {
 				body := buildImagesErrorBodyWithCode(failure.StatusCode, failure.Code, failure.Message)
 				if sseKA != nil {
 					sseKA.Stop()
 					g.logger.Warn("Images OAuth 上游返回客户端错误，已脱敏响应",
-						"path", reqPath, "model", imgReq.Model, "status_code", failure.StatusCode, "code", failure.Code, "reason", failure.Message)
+						"path", reqPath, "model", imgReq.Model, "status_code", failure.StatusCode, "code", failure.Code, "reason", upstreamFailureMessage)
 					clientMsg := sanitizedImageSSEErrorMessage
 					if failure.StatusCode == http.StatusRequestEntityTooLarge {
 						clientMsg = imageTooLargeSSEErrorMessage
 					}
-					writeSSEErrorIfStarted(req.Writer, sseKA, clientMsg)
+					if isNormalizedImageSafetyFailure(failure) {
+						writeImageInvalidRequestSSEIfStarted(req.Writer, sseKA)
+					} else {
+						writeSSEErrorIfStarted(req.Writer, sseKA, clientMsg)
+					}
 				}
 				outcome := sdk.ForwardOutcome{
 					Kind:          sdk.OutcomeClientError,
@@ -2007,7 +2073,11 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 				g.logger.Warn("Images OAuth 图像工具返回客户端错误，已脱敏响应",
 					"path", reqPath, "model", imgReq.Model, "status_code", failure.StatusCode,
 					"code", failure.Code, "reason", reason)
-				writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
+				if isNormalizedImageSafetyFailure(failure) {
+					writeImageInvalidRequestSSEIfStarted(req.Writer, sseKA)
+				} else {
+					writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
+				}
 			}
 			outcome := sdk.ForwardOutcome{
 				Kind: sdk.OutcomeClientError,

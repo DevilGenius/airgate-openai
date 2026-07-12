@@ -1059,26 +1059,98 @@ func TestClassifyImageGenCallFailuresSafetyRejected(t *testing.T) {
 	if failure.StatusCode != http.StatusBadRequest {
 		t.Fatalf("StatusCode = %d, want 400", failure.StatusCode)
 	}
-	if failure.Code != "safety_rejected" {
-		t.Fatalf("Code = %q, want safety_rejected", failure.Code)
+	if failure.Code != imageSafetyInvalidRequestCode {
+		t.Fatalf("Code = %q, want %q", failure.Code, imageSafetyInvalidRequestCode)
+	}
+	if failure.Message != imageSafetyInvalidRequestMessage {
+		t.Fatalf("Message = %q, want normalized message", failure.Message)
 	}
 	body := buildImagesErrorBodyWithCode(failure.StatusCode, failure.Code, failure.Message)
-	if got := gjson.GetBytes(body, "error.code").String(); got != "safety_rejected" {
-		t.Fatalf("error.code = %q, want safety_rejected; body=%s", got, body)
+	if got := gjson.GetBytes(body, "error.code").String(); got != imageSafetyInvalidRequestCode {
+		t.Fatalf("error.code = %q, want %q; body=%s", got, imageSafetyInvalidRequestCode, body)
+	}
+	if got := gjson.GetBytes(body, "error.message").String(); got != imageSafetyInvalidRequestMessage {
+		t.Fatalf("error.message = %q, want normalized message; body=%s", got, body)
 	}
 }
 
 func TestClassifyUpstreamTaskErrorSafetyRejected(t *testing.T) {
-	body := []byte(`{"error":{"message":"Your request was rejected by the safety system.","type":"invalid_request_error","code":"content_policy_violation"}}`)
-	taskErr := classifyUpstreamTaskError(http.StatusBadGateway, body)
-	if taskErr.Type != "invalid_request" {
-		t.Fatalf("Type = %q, want invalid_request", taskErr.Type)
+	messages := []string{
+		"非常抱歉，该提示可能违反了我们的内容政策。如果你认为此判断有误，请重试或修改提示语。（traceid: 067e759e4d9ac1185e7ce849d1ceae21）",
+		"非常抱歉，该提示可能违反了关于暴力内容的防护限制。如果你认为此判断有误，请重试或修改提示语。（traceid: 298f0d0f709ac118eb7fe849920c2eed）",
+		"非常抱歉，生成的图片可能违反了关于青少年与儿童形象适当描绘的防护限制。如果你认为此判断有误，请重试或修改提示语。（traceid: f3db43f09497c118843ae849d4d350ea）",
 	}
-	if taskErr.Code != "safety_rejected" {
-		t.Fatalf("Code = %q, want safety_rejected", taskErr.Code)
+	for _, message := range messages {
+		body, _ := json.Marshal(map[string]any{"error": map[string]any{"message": message}})
+		taskErr := classifyUpstreamTaskError(http.StatusInternalServerError, body)
+		if taskErr.Type != "invalid_request" {
+			t.Fatalf("Type = %q, want invalid_request", taskErr.Type)
+		}
+		if taskErr.Code != imageSafetyInvalidRequestCode {
+			t.Fatalf("Code = %q, want %q", taskErr.Code, imageSafetyInvalidRequestCode)
+		}
+		if taskErr.Message != imageSafetyInvalidRequestMessage {
+			t.Fatalf("Message = %q, want normalized message", taskErr.Message)
+		}
+		if taskErr.Retryable {
+			t.Fatalf("Retryable = true, want false")
+		}
 	}
-	if taskErr.Retryable {
-		t.Fatalf("Retryable = true, want false")
+}
+
+func TestNormalizeImageUpstreamErrorSafetyRejected(t *testing.T) {
+	messages := []string{
+		"非常抱歉，该提示可能违反了我们的内容政策。如果你认为此判断有误，请重试或修改提示语。（traceid: 067e759e4d9ac1185e7ce849d1ceae21）",
+		"非常抱歉，该提示可能违反了关于暴力内容的防护限制。如果你认为此判断有误，请重试或修改提示语。（traceid: 298f0d0f709ac118eb7fe849920c2eed）",
+		"非常抱歉，生成的图片可能违反了关于青少年与儿童形象适当描绘的防护限制。如果你认为此判断有误，请重试或修改提示语。（traceid: f3db43f09497c118843ae849d4d350ea）",
+	}
+	for _, message := range messages {
+		body, _ := json.Marshal(map[string]any{"error": map[string]any{"message": message}})
+		status, normalizedBody, headers, detail, ok := normalizeImageUpstreamError(
+			http.StatusInternalServerError,
+			body,
+			http.Header{"X-Upstream-Trace": []string{"secret"}},
+			message,
+		)
+		if !ok || status != http.StatusBadRequest {
+			t.Fatalf("normalized = %v status = %d, want true/400", ok, status)
+		}
+		if detail != imageSafetyInvalidRequestMessage {
+			t.Fatalf("detail = %q, want normalized message", detail)
+		}
+		if got := gjson.GetBytes(normalizedBody, "error.type").String(); got != "invalid_request_error" {
+			t.Fatalf("error.type = %q, want invalid_request_error; body=%s", got, normalizedBody)
+		}
+		if got := gjson.GetBytes(normalizedBody, "error.code").String(); got != imageSafetyInvalidRequestCode {
+			t.Fatalf("error.code = %q, want %q; body=%s", got, imageSafetyInvalidRequestCode, normalizedBody)
+		}
+		if got := gjson.GetBytes(normalizedBody, "error.message").String(); got != imageSafetyInvalidRequestMessage {
+			t.Fatalf("error.message = %q, want normalized message; body=%s", got, normalizedBody)
+		}
+		if strings.Contains(string(normalizedBody), "traceid") || strings.Contains(string(normalizedBody), "防护限制") || strings.Contains(string(normalizedBody), "内容政策") {
+			t.Fatalf("normalized body leaked upstream safety detail: %s", normalizedBody)
+		}
+		if headers.Get("Content-Type") != "application/json" || headers.Get("X-Upstream-Trace") != "" {
+			t.Fatalf("headers = %v, want sanitized JSON headers", headers)
+		}
+		outcome := failureOutcome(status, normalizedBody, headers, detail, 0)
+		if shouldRetryImageFallback(outcome, nil) {
+			t.Fatal("normalized safety rejection should not use image size fallback")
+		}
+	}
+}
+
+func TestNormalizeImageUpstreamErrorKeepsUnrelatedServerError(t *testing.T) {
+	body := []byte(`{"error":{"message":"upstream storage failed"}}`)
+	headers := http.Header{"Content-Type": []string{"application/json"}}
+	status, gotBody, gotHeaders, detail, ok := normalizeImageUpstreamError(
+		http.StatusInternalServerError,
+		body,
+		headers,
+		"upstream storage failed",
+	)
+	if ok || status != http.StatusInternalServerError || string(gotBody) != string(body) || detail != "upstream storage failed" || gotHeaders.Get("Content-Type") != "application/json" {
+		t.Fatalf("unrelated error changed: ok=%v status=%d detail=%q body=%s headers=%v", ok, status, detail, gotBody, gotHeaders)
 	}
 }
 

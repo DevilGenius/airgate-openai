@@ -715,6 +715,19 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 			errDetail = truncate(string(respBody), 200)
 		}
 		dur := time.Since(start)
+		clientStatus := resp.StatusCode
+		clientBody := respBody
+		clientHeaders := resp.Header.Clone()
+		clientDetail := errDetail
+		imageSafetyRejected := false
+		if isImagesRequest(reqPath) {
+			clientStatus, clientBody, clientHeaders, clientDetail, imageSafetyRejected = normalizeImageUpstreamError(
+				resp.StatusCode,
+				respBody,
+				clientHeaders,
+				errDetail,
+			)
+		}
 		if sseKA != nil && finalAttempt {
 			sseKA.Stop()
 			logger.Warn("images_apikey_upstream_error_redacted",
@@ -723,7 +736,11 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 				sdk.LogFieldStatus, resp.StatusCode,
 				sdk.LogFieldReason, errDetail,
 			)
-			writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
+			if imageSafetyRejected {
+				writeImageInvalidRequestSSEIfStarted(req.Writer, sseKA)
+			} else {
+				writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
+			}
 		}
 		logger.Warn("upstream_request_non_2xx",
 			sdk.LogFieldAccountID, account.ID,
@@ -732,7 +749,7 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 			sdk.LogFieldDurationMs, dur.Milliseconds(),
 			sdk.LogFieldReason, errDetail,
 		)
-		outcome := failureOutcome(resp.StatusCode, respBody, resp.Header.Clone(), errDetail, extractRetryAfterHeader(resp.Header))
+		outcome := failureOutcome(clientStatus, clientBody, clientHeaders, clientDetail, extractRetryAfterHeader(clientHeaders))
 		if isImagesRequest(reqPath) {
 			applyImageRateLimitPolicy(&outcome)
 		}
