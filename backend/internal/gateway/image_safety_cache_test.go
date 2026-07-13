@@ -19,6 +19,9 @@ import (
 var imageSafetyRequestHashBenchmarkSink uint64
 
 func TestImageSafetyRequestCacheTTLAndCapacity(t *testing.T) {
+	if imageSafetyRequestCacheTTL != time.Hour {
+		t.Fatalf("default TTL = %s, want 1h", imageSafetyRequestCacheTTL)
+	}
 	cache := imageSafetyRequestCache{
 		ttl:        10 * time.Minute,
 		maxEntries: 2,

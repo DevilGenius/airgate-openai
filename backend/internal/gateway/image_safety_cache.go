@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	imageSafetyRequestCacheTTL        = 10 * time.Minute
+	imageSafetyRequestCacheTTL        = 60 * time.Minute
 	imageSafetyRequestCacheMaxEntries = 8192
 	imageSafetyRequestHashInputKey    = "_image_safety_request_hash"
 	imageSafetyRequestHashSeed        = uint64(0x9e3779b185ebca87)
