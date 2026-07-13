@@ -127,12 +127,44 @@ func requestCanRecoverPreviousResponseNotFound(body []byte) bool {
 }
 
 func sanitizeEncryptedReasoningItems(reqData map[string]any) bool {
+	return sanitizeEncryptedReplayItems(reqData, false)
+}
+
+func sanitizeAnchoredEncryptedReplayBody(body []byte) []byte {
+	if !bytes.Contains(body, []byte(`"previous_response_id"`)) ||
+		!bytes.Contains(body, []byte(`"encrypted_content"`)) {
+		return body
+	}
+	var reqData map[string]any
+	if err := json.Unmarshal(body, &reqData); err != nil {
+		return body
+	}
+	if !sanitizeAnchoredEncryptedReplayItems(reqData) {
+		return body
+	}
+	patched, err := json.Marshal(reqData)
+	if err != nil {
+		return body
+	}
+	return patched
+}
+
+// previous_response_id 与加密 replay item 是两种上下文承载方式。续链锚点存在时，
+// 重复回传 reasoning/compaction 密文既无必要，也可能因路由到不同加密域而校验失败。
+func sanitizeAnchoredEncryptedReplayItems(reqData map[string]any) bool {
+	if strings.TrimSpace(jsonString(reqData["previous_response_id"])) == "" {
+		return false
+	}
+	return sanitizeEncryptedReplayItems(reqData, true)
+}
+
+func sanitizeEncryptedReplayItems(reqData map[string]any, dropCompaction bool) bool {
 	if len(reqData) == 0 {
 		return false
 	}
 	changed := false
 	if input, ok := reqData["input"]; ok {
-		next, inputChanged, keep := sanitizeEncryptedReasoningValue(input)
+		next, inputChanged, keep := sanitizeEncryptedReplayValue(input, dropCompaction)
 		if inputChanged {
 			changed = true
 			if keep {
@@ -143,7 +175,7 @@ func sanitizeEncryptedReasoningItems(reqData map[string]any) bool {
 		}
 	}
 	if messages, ok := reqData["messages"]; ok {
-		next, messagesChanged, keep := sanitizeEncryptedReasoningValue(messages)
+		next, messagesChanged, keep := sanitizeEncryptedReplayValue(messages, dropCompaction)
 		if messagesChanged {
 			changed = true
 			if keep {
@@ -156,13 +188,13 @@ func sanitizeEncryptedReasoningItems(reqData map[string]any) bool {
 	return changed
 }
 
-func sanitizeEncryptedReasoningValue(value any) (next any, changed bool, keep bool) {
+func sanitizeEncryptedReplayValue(value any, dropCompaction bool) (next any, changed bool, keep bool) {
 	switch v := value.(type) {
 	case []any:
 		filtered := v[:0]
 		changed := false
 		for _, item := range v {
-			nextItem, itemChanged, keepItem := sanitizeEncryptedReasoningItem(item)
+			nextItem, itemChanged, keepItem := sanitizeEncryptedReplayItem(item, dropCompaction)
 			if itemChanged {
 				changed = true
 			}
@@ -178,18 +210,19 @@ func sanitizeEncryptedReasoningValue(value any) (next any, changed bool, keep bo
 		}
 		return filtered, true, true
 	case map[string]any:
-		return sanitizeEncryptedReasoningItem(v)
+		return sanitizeEncryptedReplayItem(v, dropCompaction)
 	default:
 		return value, false, true
 	}
 }
 
-func sanitizeEncryptedReasoningItem(item any) (next any, changed bool, keep bool) {
+func sanitizeEncryptedReplayItem(item any, dropCompaction bool) (next any, changed bool, keep bool) {
 	itemMap, ok := item.(map[string]any)
 	if !ok {
 		return item, false, true
 	}
-	if strings.TrimSpace(jsonString(itemMap["type"])) != "reasoning" {
+	itemType := strings.TrimSpace(jsonString(itemMap["type"]))
+	if itemType != "reasoning" && !(dropCompaction && isCompactionReplayItemType(itemType)) {
 		return item, false, true
 	}
 	if strings.TrimSpace(jsonString(itemMap["encrypted_content"])) == "" {

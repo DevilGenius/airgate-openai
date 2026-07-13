@@ -347,6 +347,28 @@ func TestBuildCodexWSRequestBackfillsPreviousResponseIDAfterResponsesPreprocess(
 	}
 }
 
+func TestBuildCodexWSRequestDropsEncryptedReplayWhenAddingPreviousResponseID(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.4","input":[{"type":"reasoning","id":"rs_1","encrypted_content":"sealed"},{"type":"compaction_summary","encrypted_content":"summary"},{"type":"function_call_output","call_id":"call_prev","output":"ok"}]}`)
+	preprocessed := preprocessRequestBody(body, "gpt-5.4", "/v1/responses")
+
+	got, err := buildCodexWSRequest(preprocessed, "gpt-5.4", openAISessionResolution{PreviousRespID: "resp_prev"})
+	if err != nil {
+		t.Fatalf("buildCodexWSRequest: %v", err)
+	}
+	if previous := gjson.GetBytes(got, "previous_response_id").String(); previous != "resp_prev" {
+		t.Fatalf("previous_response_id = %q, want resp_prev; body=%s", previous, got)
+	}
+	if bytes.Contains([]byte(gjson.GetBytes(got, "input").Raw), []byte("encrypted_content")) {
+		t.Fatalf("encrypted replay content was not removed: %s", got)
+	}
+	if count := gjson.GetBytes(got, "input.#").Int(); count != 1 {
+		t.Fatalf("input item count = %d, want 1; body=%s", count, got)
+	}
+	if typ := gjson.GetBytes(got, "input.0.type").String(); typ != "function_call_output" {
+		t.Fatalf("input.0.type = %q, want function_call_output; body=%s", typ, got)
+	}
+}
+
 func TestBuildCodexWSRequestConvertsChatCompletionsMessages(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.5","messages":[{"role":"system","content":"be concise"},{"role":"user","content":"hi"}],"stream_options":{"include_usage":true},"max_completion_tokens":32}`)
 
@@ -623,6 +645,25 @@ func TestPreprocessRequestBodyAppliesDelegatedContinuationRecovery(t *testing.T)
 	}
 	if !delegatedContinuationRecoveryApplied(got, headers) {
 		t.Fatalf("expected delegated recovery to be marked applied: %s", got)
+	}
+}
+
+func TestPreprocessRequestBodyDropsEncryptedReplayFromAnchoredContinuation(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.4","previous_response_id":"resp_old","input":[{"type":"reasoning","id":"rs_1","encrypted_content":"sealed"},{"type":"compaction","encrypted_content":"compact"},{"type":"compaction_summary","encrypted_content":"summary"},{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}]}`)
+
+	got := preprocessRequestBody(body, "gpt-5.4", "/v1/responses")
+
+	if previous := gjson.GetBytes(got, "previous_response_id").String(); previous != "resp_old" {
+		t.Fatalf("previous_response_id = %q, want resp_old; body=%s", previous, got)
+	}
+	if bytes.Contains([]byte(gjson.GetBytes(got, "input").Raw), []byte("encrypted_content")) {
+		t.Fatalf("encrypted replay content was not removed: %s", got)
+	}
+	if count := gjson.GetBytes(got, "input.#").Int(); count != 1 {
+		t.Fatalf("input item count = %d, want 1; body=%s", count, got)
+	}
+	if text := gjson.GetBytes(got, "input.0.content.0.text").String(); text != "continue" {
+		t.Fatalf("input text = %q, want continue; body=%s", text, got)
 	}
 }
 

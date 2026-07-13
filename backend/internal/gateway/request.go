@@ -197,8 +197,9 @@ func buildAPIKeyURL(account *sdk.Account, reqPath string) string {
 //  1. model 同步（使用 Core 选出的上游模型）
 //  2. data:image 输入保持原样（对齐 Codex，不在网关内重采样用户图片）
 //  3. 按 Core 委托恢复信号移除失效续链锚点
-//  4. input 规范化（/v1/responses 的 string input → list，messages → input 转换）
-//  5. Responses API 强制禁用上游存储（store=false）
+//  4. 已有 previous_response_id 时移除重复的加密 replay item
+//  5. input 规范化（/v1/responses 的 string input → list，messages → input 转换）
+//  6. Responses API 强制禁用上游存储（store=false）
 func preprocessRequestBody(body []byte, model, reqPath string, headers ...http.Header) []byte {
 	if len(body) == 0 {
 		return body
@@ -238,6 +239,9 @@ func preprocessRequestBody(body []byte, model, reqPath string, headers ...http.H
 		return result
 	}
 
+	if isResponsesRequestPath(reqPath) {
+		result = sanitizeAnchoredEncryptedReplayBody(result)
+	}
 	result = normalizeResponsesInput(result, reqPath)
 	result = forceResponsesStoreFalse(result, reqPath)
 	return result
@@ -301,8 +305,10 @@ func preserveOpenAIConversationImages(body []byte) []byte {
 // 对完整 input 列表中的 system item，沿用 Chat Completions 转换策略：提取为
 // top-level instructions，避免上游 Codex/Responses 兼容层拒绝 system message。
 //
-// 对 reasoning replay，保留 encrypted_content/content/summary 等上下文字段，仅
-// 移除 store=false 下会触发服务端存储查找的 rs_* id，并补齐上游要求的 summary。
+// 对没有 previous_response_id 的无状态 reasoning replay，保留
+// encrypted_content/content/summary 等上下文字段，仅移除 store=false 下会触发
+// 服务端存储查找的 rs_* id，并补齐上游要求的 summary。已有续链锚点的请求会在
+// 外层移除重复的加密 replay item。
 func normalizeResponsesInput(body []byte, reqPath string) []byte {
 	if !isResponsesRequestPath(reqPath) {
 		return body
@@ -680,6 +686,7 @@ func applyContinuationState(reqData map[string]any, session openAISessionResolut
 
 	if previous, ok := reqData["previous_response_id"].(string); ok {
 		if strings.TrimSpace(previous) != "" {
+			sanitizeAnchoredEncryptedReplayItems(reqData)
 			return reqData
 		}
 		delete(reqData, "previous_response_id")
@@ -687,6 +694,7 @@ func applyContinuationState(reqData map[string]any, session openAISessionResolut
 	if requestNeedsPreviousResponseID(reqData) && strings.TrimSpace(session.PreviousRespID) != "" {
 		reqData["previous_response_id"] = strings.TrimSpace(session.PreviousRespID)
 	}
+	sanitizeAnchoredEncryptedReplayItems(reqData)
 	sanitizeUnmatchedToolCallOutputsFromMap(reqData, true)
 	return reqData
 }
