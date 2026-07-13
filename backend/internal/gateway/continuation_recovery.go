@@ -222,7 +222,7 @@ func sanitizeEncryptedReplayItem(item any, dropCompaction bool) (next any, chang
 		return item, false, true
 	}
 	itemType := strings.TrimSpace(jsonString(itemMap["type"]))
-	if itemType != "reasoning" && !(dropCompaction && isCompactionReplayItemType(itemType)) {
+	if itemType != "reasoning" && (!dropCompaction || !isCompactionReplayItemType(itemType)) {
 		return item, false, true
 	}
 	if strings.TrimSpace(jsonString(itemMap["encrypted_content"])) == "" {
