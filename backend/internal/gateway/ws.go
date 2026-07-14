@@ -124,8 +124,8 @@ type WSEventHandler interface {
 	OnRateLimits(usedPercent float64)
 }
 
-// DialWebSocket 建立到上游的 WebSocket 连接
-func DialWebSocket(cfg WSConfig) (*websocket.Conn, *http.Response, error) {
+// DialWebSocket establishes an upstream WebSocket connection and observes ctx cancellation.
+func DialWebSocket(ctx context.Context, cfg WSConfig) (*websocket.Conn, *http.Response, error) {
 	targetURL := cfg.URL
 	if strings.TrimSpace(targetURL) == "" {
 		targetURL = ChatGPTWSURL
@@ -160,10 +160,10 @@ func DialWebSocket(cfg WSConfig) (*websocket.Conn, *http.Response, error) {
 		headers.Set("User-Agent", cfg.UserAgent)
 	}
 
-	return dialWebSocket(targetURL, cfg.ProxyURL, headers)
+	return dialWebSocket(ctx, targetURL, cfg.ProxyURL, headers)
 }
 
-func dialWebSocket(targetURL, proxyURL string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+func dialWebSocket(ctx context.Context, targetURL, proxyURL string, headers http.Header) (*websocket.Conn, *http.Response, error) {
 	dialer := &websocket.Dialer{
 		TLSClientConfig:  &tls.Config{MinVersion: tls.VersionTLS12},
 		HandshakeTimeout: 30 * time.Second,
@@ -180,7 +180,7 @@ func dialWebSocket(targetURL, proxyURL string, headers http.Header) (*websocket.
 		}
 	}
 
-	conn, resp, err := dialer.Dial(targetURL, headers)
+	conn, resp, err := dialer.DialContext(ctx, targetURL, headers)
 	if err != nil {
 		return nil, resp, formatWebSocketDialError(resp, err)
 	}

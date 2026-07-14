@@ -124,7 +124,7 @@ func (s *wsSession) connect() error {
 	cfg.Originator = "codex_cli_rs"
 	cfg.TurnState = s.turnState
 
-	conn, resp, err := gateway.DialWebSocket(cfg)
+	conn, resp, err := gateway.DialWebSocket(context.Background(), cfg)
 	if err != nil {
 		return err
 	}

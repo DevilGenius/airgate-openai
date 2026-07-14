@@ -977,7 +977,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		"account_type", "oauth",
 	)
 
-	conn, wsResp, err := DialWebSocket(cfg)
+	conn, wsResp, err := DialWebSocket(ctx, cfg)
 	if err != nil {
 		dur := time.Since(start)
 		// WS 握手失败：按 HTTP 响应码归类。无响应则视为网络层 transient。

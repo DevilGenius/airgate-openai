@@ -74,7 +74,7 @@ func (g *OpenAIGateway) handleWSWithOAuth(ctx context.Context, clientConn sdk.We
 		ProxyURL:   account.ProxyURL,
 		Originator: defaultCodexOriginator,
 	}
-	upstreamConn, wsResp, err := DialWebSocket(cfg)
+	upstreamConn, wsResp, err := DialWebSocket(ctx, cfg)
 	if err != nil {
 		var info *wsDialResult
 		if wsResp != nil {
@@ -97,7 +97,7 @@ func (g *OpenAIGateway) handleWSWithAPIKey(ctx context.Context, clientConn sdk.W
 		Token:    account.Credentials["api_key"],
 		ProxyURL: account.ProxyURL,
 	}
-	upstreamConn, wsResp, err := DialWebSocket(cfg)
+	upstreamConn, wsResp, err := DialWebSocket(ctx, cfg)
 	if err != nil {
 		var info *wsDialResult
 		if wsResp != nil {
