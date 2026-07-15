@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -977,7 +976,9 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		"account_type", "oauth",
 	)
 
+	wsDialStart := time.Now()
 	conn, wsResp, err := DialWebSocket(ctx, cfg)
+	wsDialMs := time.Since(wsDialStart).Milliseconds()
 	if err != nil {
 		dur := time.Since(start)
 		// WS 握手失败：按 HTTP 响应码归类。无响应则视为网络层 transient。
@@ -1077,7 +1078,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 			silent := &chatCompletionsSilentHandler{
 				accountID:  account.ID,
 				sessionKey: session.SessionKey,
-				start:      start,
+				timing:     newResponseEventTiming(start),
 			}
 			lastChatSilent = silent
 			handler = silent
@@ -1086,7 +1087,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 			silent := &responsesSilentHandler{
 				accountID:  account.ID,
 				sessionKey: session.SessionKey,
-				start:      start,
+				timing:     newResponseEventTiming(start),
 			}
 			lastResponsesSilent = silent
 			handler = silent
@@ -1096,7 +1097,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 				w:          w,
 				accountID:  account.ID,
 				sessionKey: session.SessionKey,
-				start:      start,
+				timing:     newResponseEventTiming(start),
 			}
 			if f, ok := w.(http.Flusher); ok {
 				sseHandler.flusher = f
@@ -1240,16 +1241,24 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 	}
 
 	elapsed := time.Since(start)
-	firstTokenMs := elapsed.Milliseconds()
+	firstEventMs := elapsed.Milliseconds()
+	var firstTokenMs int64
 	switch {
-	case lastChatWriter != nil && lastChatWriter.firstTokenMs > 0:
-		firstTokenMs = lastChatWriter.firstTokenMs
-	case lastSSEHandler != nil && lastSSEHandler.firstTokenMs > 0:
-		firstTokenMs = lastSSEHandler.firstTokenMs
-	case lastChatSilent != nil && lastChatSilent.firstTokenMs > 0:
-		firstTokenMs = lastChatSilent.firstTokenMs
-	case lastResponsesSilent != nil && lastResponsesSilent.firstTokenMs > 0:
-		firstTokenMs = lastResponsesSilent.firstTokenMs
+	case lastChatWriter != nil:
+		firstEventMs = lastChatWriter.timing.firstEventMs
+		firstTokenMs = lastChatWriter.timing.firstTokenMs
+	case lastSSEHandler != nil:
+		firstEventMs = lastSSEHandler.timing.firstEventMs
+		firstTokenMs = lastSSEHandler.timing.firstTokenMs
+	case lastChatSilent != nil:
+		firstEventMs = lastChatSilent.timing.firstEventMs
+		firstTokenMs = lastChatSilent.timing.firstTokenMs
+	case lastResponsesSilent != nil:
+		firstEventMs = lastResponsesSilent.timing.firstEventMs
+		firstTokenMs = lastResponsesSilent.timing.firstTokenMs
+	}
+	if firstEventMs <= 0 {
+		firstEventMs = elapsed.Milliseconds()
 	}
 
 	usage := newTokenUsage(
@@ -1260,8 +1269,10 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		result.CachedInputTokens,
 		result.CacheCreationTokens,
 		result.ReasoningOutputTokens,
-		firstTokenMs,
+		firstEventMs,
 	)
+	usage.FirstTokenMs = firstTokenMs
+	usage.WSDialMs = wsDialMs
 	numImages := len(result.ImageGenCalls)
 	imageToolSize := ""
 	if numImages > 0 {
@@ -1365,7 +1376,9 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		sdk.LogFieldModel, req.Model,
 		sdk.LogFieldStatus, http.StatusOK,
 		sdk.LogFieldDurationMs, elapsed.Milliseconds(),
+		"first_event_ms", firstEventMs,
 		"first_token_ms", firstTokenMs,
+		"ws_dial_ms", wsDialMs,
 		"input_tokens", result.InputTokens,
 		"output_tokens", result.OutputTokens,
 		"stream", req.Stream,
@@ -1390,9 +1403,7 @@ type sseEventWriter struct {
 	flusher                http.Flusher
 	accountID              int64 // 用于存储 Codex 用量快照
 	sessionKey             string
-	start                  time.Time // 请求开始时间，用于计算首 token 延迟
-	firstTokenMs           int64     // 首 token 到达时间（毫秒）
-	firstTokenOnce         sync.Once // 确保只记录一次
+	timing                 responseEventTiming
 	wrote                  bool
 	terminalErrorForwarded bool
 }
@@ -1413,10 +1424,7 @@ func (s *sseEventWriter) OnRawEvent(eventType string, data []byte) {
 		return
 	}
 	terminalErrorEvent := eventType == "response.failed" || eventType == "error"
-	// 记录首 token 延迟（第一个有效事件到达客户端的时间）
-	s.firstTokenOnce.Do(func() {
-		s.firstTokenMs = time.Since(s.start).Milliseconds()
-	})
+	s.timing.observe(eventType, data)
 	// 过滤不需要转发给客户端的内部事件，并捕获用量
 	switch eventType {
 	case "codex.rate_limits":

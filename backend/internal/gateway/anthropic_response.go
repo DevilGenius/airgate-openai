@@ -889,10 +889,10 @@ func translateResponsesSSEToAnthropicSSE(
 	scanner.Buffer(make([]byte, 64*1024), upstreamSSEMaxLineBytes)
 
 	var streamErr error
-	var firstTokenMs int64
+	timing := newResponseEventTiming(start)
 	serviceTier := firstNonEmptyTier(requestServiceTier)
 	skipCurrentOutput := false
-	firstTokenRecorded := false
+	outputWritten := false
 	responseID := ""
 	terminalEventReceived := false
 
@@ -916,6 +916,7 @@ func translateResponsesSSEToAnthropicSSE(
 				compactIdleTimer.Reset(compactEventIdleTimeout)
 			}
 			eventType := gjson.Get(data, "type").String()
+			timing.observe(eventType, []byte(data))
 			if eventType != "response.output_text.delta" &&
 				eventType != "response.reasoning_summary_text.delta" &&
 				eventType != "response.function_call_arguments.delta" {
@@ -966,7 +967,7 @@ func translateResponsesSSEToAnthropicSSE(
 				terminalEventReceived = true
 				if failure := classifyResponsesFailure([]byte(data)); failure != nil {
 					streamErr = failure
-					skipCurrentOutput = failure.isContinuationAnchorError() && !firstTokenRecorded
+					skipCurrentOutput = failure.isContinuationAnchorError() && !outputWritten
 				} else {
 					errMsg := gjson.Get(data, "response.error.message").String()
 					if errMsg == "" {
@@ -1000,11 +1001,7 @@ func translateResponsesSSEToAnthropicSSE(
 					"output_bytes", len(output),
 				)
 			}
-			// 记录首 token 延迟（首次产生有效输出事件）
-			if !firstTokenRecorded {
-				firstTokenMs = time.Since(start).Milliseconds()
-				firstTokenRecorded = true
-			}
+			outputWritten = true
 			_, _ = fmt.Fprint(w, output)
 			if flusher != nil {
 				flusher.Flush()
@@ -1037,8 +1034,9 @@ done:
 		state.CachedInputTokens,
 		state.CacheCreationTokens,
 		state.ReasoningOutputTokens,
-		firstTokenMs,
+		timing.firstEventMs,
 	)
+	usage.FirstTokenMs = timing.firstTokenMs
 
 	// 即使流中断 / 上游 response.failed，中断前已产生的 token 上游也已实际计费，
 	// 仍需回传 usage 计费避免漏洞（与 forward.go WS 路径同一模式）。
@@ -1074,7 +1072,7 @@ done:
 				RetryAfter:    failure.RetryAfter,
 				Duration:      elapsed,
 				Usage:         abortUsage(),
-			}, continuationAnchorReplayErr(failure, firstTokenRecorded)
+			}, continuationAnchorReplayErr(failure, outputWritten)
 		}
 		errBody := anthropicErrorJSON("api_error", streamErr.Error())
 		return sdk.ForwardOutcome{

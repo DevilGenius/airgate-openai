@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -90,10 +89,8 @@ type chatCompletionsStreamWriter struct {
 	usage              map[string]any
 	toolArgsDeltas     map[int]bool
 
-	firstTokenOnce sync.Once
-	firstTokenMs   int64
-	start          time.Time
-	wrote          bool
+	timing responseEventTiming
+	wrote  bool
 
 	accountID  int64
 	sessionKey string
@@ -114,7 +111,7 @@ func newChatCompletionsStreamWriter(
 		created:            time.Now().Unix(),
 		outputIdxToToolIdx: make(map[int]int),
 		toolArgsDeltas:     make(map[int]bool),
-		start:              start,
+		timing:             newResponseEventTiming(start),
 		accountID:          accountID,
 		sessionKey:         sessionKey,
 		includeUsage:       includeUsage,
@@ -141,9 +138,7 @@ func (s *chatCompletionsStreamWriter) OnRawEvent(eventType string, data []byte) 
 	if s.w == nil || eventType == "" {
 		return
 	}
-	s.firstTokenOnce.Do(func() {
-		s.firstTokenMs = time.Since(s.start).Milliseconds()
-	})
+	s.timing.observe(eventType, data)
 
 	// 捕获内部事件：用量快照与会话状态，但不转发给客户端
 	switch eventType {
@@ -484,11 +479,9 @@ func extractChatUsageFromResponse(data []byte) map[string]any {
 // 不往客户端写任何东西，只捕获用量快照和会话状态，真正的响应体由
 // forwardOAuth 在 ReceiveWSResponse 完成后用 WSResult 合成并一次性写回。
 type chatCompletionsSilentHandler struct {
-	accountID      int64
-	sessionKey     string
-	start          time.Time
-	firstTokenOnce sync.Once
-	firstTokenMs   int64
+	accountID  int64
+	sessionKey string
+	timing     responseEventTiming
 }
 
 func (h *chatCompletionsSilentHandler) OnTextDelta(string)      {}
@@ -507,9 +500,7 @@ func (h *chatCompletionsSilentHandler) OnRawEvent(eventType string, data []byte)
 	if eventType == "" {
 		return
 	}
-	h.firstTokenOnce.Do(func() {
-		h.firstTokenMs = time.Since(h.start).Milliseconds()
-	})
+	h.timing.observe(eventType, data)
 	switch eventType {
 	case "codex.rate_limits":
 		if h.accountID > 0 {
@@ -535,11 +526,9 @@ func (h *chatCompletionsSilentHandler) OnRawEvent(eventType string, data []byte)
 // 抽出 response 字段一次性回写 JSON。行为和 chatCompletionsSilentHandler 完全一致，
 // 单独起个类型只是为了在 forward.go 里按场景区分时更显眼。
 type responsesSilentHandler struct {
-	accountID      int64
-	sessionKey     string
-	start          time.Time
-	firstTokenOnce sync.Once
-	firstTokenMs   int64
+	accountID  int64
+	sessionKey string
+	timing     responseEventTiming
 }
 
 func (h *responsesSilentHandler) OnTextDelta(string)      {}
@@ -558,9 +547,7 @@ func (h *responsesSilentHandler) OnRawEvent(eventType string, data []byte) {
 	if eventType == "" {
 		return
 	}
-	h.firstTokenOnce.Do(func() {
-		h.firstTokenMs = time.Since(h.start).Milliseconds()
-	})
+	h.timing.observe(eventType, data)
 	switch eventType {
 	case "codex.rate_limits":
 		if h.accountID > 0 {

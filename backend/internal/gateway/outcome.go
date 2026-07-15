@@ -119,12 +119,12 @@ func forwardErrForOutcome(outcome sdk.ForwardOutcome, err error) error {
 	return err
 }
 
-func newTokenUsage(modelID, serviceTier string, inputTokens, outputTokens, cachedInputTokens, cacheCreationTokens, reasoningOutputTokens int, firstTokenMs int64) *sdk.Usage {
+func newTokenUsage(modelID, serviceTier string, inputTokens, outputTokens, cachedInputTokens, cacheCreationTokens, reasoningOutputTokens int, firstEventMs int64) *sdk.Usage {
 	billingModel, wireModel := usageBillingModel(modelID)
 	usage := &sdk.Usage{
 		Model:        billingModel,
 		Currency:     usageCurrencyUSD,
-		FirstTokenMs: firstTokenMs,
+		FirstEventMs: firstEventMs,
 	}
 	if wireModel != "" {
 		setUsageMetadata(usage, usageAttrWireModel, wireModel)

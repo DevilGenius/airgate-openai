@@ -20,7 +20,6 @@ import (
 	"net/textproto"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
 
@@ -438,13 +437,11 @@ func isImagesEditRequest(reqPath string) bool {
 }
 
 // imagesSilentHandler 在 REST→tools 翻译路径下作为 WSEventHandler，只用来
-// 记录首 token 与速率限制，不往客户端写任何 SSE 内容（因为我们最后要以
+// 记录首事件与速率限制，不往客户端写任何 SSE 内容（因为我们最后要以
 // Images REST JSON 形式一次性写给客户端）。
 type imagesSilentHandler struct {
-	accountID      int64
-	start          time.Time
-	firstTokenMs   int64
-	firstTokenOnce sync.Once
+	accountID int64
+	timing    responseEventTiming
 }
 
 func (h *imagesSilentHandler) OnTextDelta(string)      {}
@@ -457,13 +454,11 @@ func (h *imagesSilentHandler) OnRateLimits(used float64) {
 		})
 	}
 }
-func (h *imagesSilentHandler) OnRawEvent(eventType string, _ []byte) {
+func (h *imagesSilentHandler) OnRawEvent(eventType string, data []byte) {
 	if eventType == "" {
 		return
 	}
-	h.firstTokenOnce.Do(func() {
-		h.firstTokenMs = time.Since(h.start).Milliseconds()
-	})
+	h.timing.observe(eventType, data)
 }
 
 // estimatePromptTokens 对用户 prompt 做粗略 token 估算。
@@ -1817,6 +1812,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 	var wsResult WSResult
 	var inputEstimate imagesInputTokenEstimate
 	var n int
+	var wsDialMs int64
 	downgradedBillingSize := ""
 	elapsed := time.Since(start)
 	attempts := imageSizeAttemptsForRequest(imgReq.Size)
@@ -1879,7 +1875,9 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 			TurnState:      session.LastTurnState,
 			Originator:     resolveCodexOriginator(req.Headers.Get("originator")),
 		}
+		wsDialStart := time.Now()
 		conn, wsResp, err := DialWebSocket(ctx, cfg)
+		attemptWSDialMs := time.Since(wsDialStart).Milliseconds()
 		if err != nil {
 			var outcome sdk.ForwardOutcome
 			if wsResp != nil {
@@ -1910,6 +1908,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 				updateSessionStateTurnState(session.SessionKey, turnState)
 			}
 		}
+		wsDialMs = attemptWSDialMs
 
 		if req.TraceFinalError {
 			captureFinalErrorWebSocketRequest(ctx, targetURL, cfg, createMsg)
@@ -1938,7 +1937,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 			sseKA = startSSEPingKeepAlive(req.Writer)
 		}
 
-		handler = &imagesSilentHandler{accountID: account.ID, start: start}
+		handler = &imagesSilentHandler{accountID: account.ID, timing: newResponseEventTiming(start)}
 		wsResult = ReceiveWSResponse(ctx, conn, handler)
 		if req.TraceFinalError && len(wsResult.FailedEventRaw) > 0 {
 			captureFinalErrorUpstreamBody(ctx, wsResult.FailedEventRaw)
@@ -2175,7 +2174,8 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 	//   1. Responses 主模型的上下文 token；
 	//   2. 生图产出的按张费用。
 	billingModel := imageGenerationBillingModel(wsResult.ToolImageModel, imgReq.Model)
-	usage := newTokenUsage(billingModel, "", inputTokens, 0, 0, 0, 0, handler.firstTokenMs)
+	usage := newTokenUsage(billingModel, "", inputTokens, 0, 0, 0, 0, handler.timing.firstEventMs)
+	usage.WSDialMs = wsDialMs
 	contextModel := strings.TrimSpace(wsResult.Model)
 	if contextModel == "" {
 		contextModel = imagesOAuthChatModel

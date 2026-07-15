@@ -15,7 +15,7 @@ func TestSSEEventWriterForwardsFailureAfterCreated(t *testing.T) {
 	writer := &sseEventWriter{
 		w:       recorder,
 		flusher: recorder,
-		start:   time.Now(),
+		timing:  newResponseEventTiming(time.Now()),
 	}
 
 	writer.OnRawEvent("response.created", []byte(`{"type":"response.created","response":{"id":"resp_abc"}}`))
@@ -49,7 +49,7 @@ func TestSSEEventWriterSynthesizesFailureAfterCreated(t *testing.T) {
 	writer := &sseEventWriter{
 		w:       recorder,
 		flusher: recorder,
-		start:   time.Now(),
+		timing:  newResponseEventTiming(time.Now()),
 	}
 
 	writer.OnRawEvent("response.created", []byte(`{"type":"response.created","response":{"id":"resp_abc"}}`))

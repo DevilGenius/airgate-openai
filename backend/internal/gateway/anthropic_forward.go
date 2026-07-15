@@ -462,7 +462,8 @@ func (g *OpenAIGateway) handleAnthropicNonStreamFromResponses(
 	session openAISessionResolution,
 	accountID int64,
 ) (sdk.ForwardOutcome, error) {
-	wsResult := ParseSSEStream(resp.Body, nil)
+	timing := newResponseEventTiming(start)
+	wsResult := ParseSSEStream(resp.Body, responseTimingObserver{timing: &timing})
 	if wsResult.Err != nil {
 		var failure *responsesFailureError
 		if errors.As(wsResult.Err, &failure) {
@@ -528,8 +529,9 @@ func (g *OpenAIGateway) handleAnthropicNonStreamFromResponses(
 		wsResult.CachedInputTokens,
 		wsResult.CacheCreationTokens,
 		wsResult.ReasoningOutputTokens,
-		elapsed.Milliseconds(),
+		timing.firstEventMs,
 	)
+	usage.FirstTokenMs = timing.firstTokenMs
 	fillUsageCost(usage)
 	setUsageResponseID(usage, wsResult.ResponseID)
 	return sdk.ForwardOutcome{

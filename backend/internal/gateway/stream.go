@@ -117,10 +117,10 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 	passCodexRateLimitHeaders(resp.Header, w.Header())
 
 	usage := newTokenUsage("", reqServiceTier, 0, 0, 0, 0, 0, 0)
+	timing := newResponseEventTiming(start)
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), upstreamSSEMaxLineBytes)
 	var streamErr error
-	firstTokenRecorded := false
 	streamStarted := false
 	completed := false
 	streamErrLogged := false
@@ -145,11 +145,13 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 				completed = true
 				diagnostics.completionEvent = "[DONE]"
 			} else if data != "" {
+				eventData := []byte(data)
+				timing.observe(gjson.Get(data, "type").String(), eventData)
 				if id := responseIDFromSSEData(data); id != "" {
 					responseID = id
 				}
-				parseSSEUsage([]byte(data), usage, &toolImageIn, &toolImageOut)
-				if streamErr = parseSSEFailureEvent([]byte(data)); streamErr != nil {
+				parseSSEUsage(eventData, usage, &toolImageIn, &toolImageOut)
+				if streamErr = parseSSEFailureEvent(eventData); streamErr != nil {
 					logStreamFailure(logger, streamErr, resp, streamStarted, diagnostics)
 					streamErrLogged = true
 					if streamStarted {
@@ -157,7 +159,7 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 					}
 					break
 				}
-				if ok, size := collectImageGenCallSummary([]byte(data)); ok {
+				if ok, size := collectImageGenCallSummary(eventData); ok {
 					imageGenCount++
 					if imageGenSize == "" && size != "" {
 						imageGenSize = size
@@ -187,10 +189,6 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 			}
 			continue
 		}
-		if !firstTokenRecorded {
-			usage.FirstTokenMs = time.Since(start).Milliseconds()
-			firstTokenRecorded = true
-		}
 		if err := writeSSELine(w, resp.StatusCode, line, &streamStarted); err != nil {
 			streamErr = fmt.Errorf("写入客户端 SSE 失败: %w", err)
 			break
@@ -207,6 +205,8 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 	}
 
 	elapsed := time.Since(start)
+	usage.FirstEventMs = timing.firstEventMs
+	usage.FirstTokenMs = timing.firstTokenMs
 	numImages := imageGenCount
 	if numImages <= 0 {
 		numImages = estimateImageCountFromTokens(toolImageOut)
@@ -473,6 +473,8 @@ func handleNonStreamResponse(resp *http.Response, w http.ResponseWriter, start t
 		parsed.reasoningOutputTokens,
 		elapsed.Milliseconds(),
 	)
+	// 非流式 HTTP 响应无法观察 token 级事件，完整响应到达时间同时作为 TTFT。
+	usage.FirstTokenMs = elapsed.Milliseconds()
 	numImages := parsed.imageGenCallCount
 	if numImages <= 0 {
 		numImages = estimateImageCountFromTokens(parsed.toolImageOutputTokens)
