@@ -1911,6 +1911,9 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 			}
 		}
 
+		if req.TraceFinalError {
+			captureFinalErrorWebSocketRequest(ctx, targetURL, cfg, createMsg)
+		}
 		if err := writeWebSocketJSON(conn, json.RawMessage(createMsg)); err != nil {
 			_ = conn.Close()
 			reason := fmt.Sprintf("发送 WebSocket 消息失败: %v", err)
@@ -1937,6 +1940,9 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 
 		handler = &imagesSilentHandler{accountID: account.ID, start: start}
 		wsResult = ReceiveWSResponse(ctx, conn, handler)
+		if req.TraceFinalError && len(wsResult.FailedEventRaw) > 0 {
+			captureFinalErrorUpstreamBody(ctx, wsResult.FailedEventRaw)
+		}
 		_ = conn.Close()
 		if wsResult.ResponseID != "" && session.SessionKey != "" {
 			updateSessionStateResponseID(session.SessionKey, wsResult.ResponseID, account.ID)

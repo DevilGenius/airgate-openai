@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cespare/xxhash/v2"
+	"github.com/zeebo/xxh3"
 
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
@@ -21,8 +21,8 @@ const (
 	imageSafetyRequestCacheTTL        = 60 * time.Minute
 	imageSafetyRequestCacheMaxEntries = 8192
 	imageSafetyRequestHashInputKey    = "_image_safety_request_hash"
-	imageSafetyRequestHashSeed        = uint64(0x9e3779b185ebca87)
-	imageSafetyMultipartHashSeed      = uint64(0xc2b2ae3d27d4eb4f)
+	imageSafetyRequestHashDomain      = "airgate:image-safety-request:xxh3-64:v1"
+	imageSafetyMultipartHashDomain    = "airgate:image-safety-multipart:xxh3-64:v1"
 )
 
 type imageSafetyRequestContextKey struct{}
@@ -100,22 +100,22 @@ func imageSafetyRequestHash(req *sdk.ForwardRequest, method, path string) (uint6
 			boundary = params["boundary"]
 		}
 	}
-	var hasher xxhash.Digest
-	hasher.ResetWithSeed(imageSafetyRequestHashSeed)
-	writeImageSafetyHashPart(&hasher, []byte(method))
-	writeImageSafetyHashPart(&hasher, []byte(path))
-	writeImageSafetyHashPart(&hasher, []byte(req.Model))
-	writeImageSafetyHashPart(&hasher, []byte(contentType))
+	var hasher xxh3.Hasher
+	writeImageSafetyHashStringPart(&hasher, imageSafetyRequestHashDomain)
+	writeImageSafetyHashStringPart(&hasher, method)
+	writeImageSafetyHashStringPart(&hasher, path)
+	writeImageSafetyHashStringPart(&hasher, req.Model)
+	writeImageSafetyHashStringPart(&hasher, contentType)
 	if isImagesEditRequest(path) && contentType == "multipart/form-data" {
 		if multipartDigest, err := imageSafetyMultipartDigest(req.Body, boundary); err == nil {
-			writeImageSafetyHashPart(&hasher, []byte("multipart"))
+			writeImageSafetyHashStringPart(&hasher, "multipart")
 			writeImageSafetyHashUint64(&hasher, multipartDigest)
 			return hasher.Sum64(), true
 		}
 	}
-	writeImageSafetyHashPart(&hasher, []byte("raw"))
+	writeImageSafetyHashStringPart(&hasher, "raw")
 	writeImageSafetyHashUint64(&hasher, uint64(len(req.Body)))
-	writeImageSafetyHashUint64(&hasher, xxhash.Sum64(req.Body))
+	writeImageSafetyHashUint64(&hasher, xxh3.Hash(req.Body))
 	return hasher.Sum64(), true
 }
 
@@ -132,8 +132,8 @@ func imageSafetyMultipartDigest(body []byte, boundary string) (uint64, error) {
 	} else {
 		delimiter = append([]byte("--"), boundary...)
 	}
-	var hasher xxhash.Digest
-	hasher.ResetWithSeed(imageSafetyMultipartHashSeed)
+	var hasher xxh3.Hasher
+	writeImageSafetyHashStringPart(&hasher, imageSafetyMultipartHashDomain)
 	searchFrom := 0
 	writtenFrom := 0
 	foundBoundary := false
@@ -171,14 +171,14 @@ func isImageSafetyMultipartDelimiter(body []byte, position, afterDelimiter int) 
 		(body[afterDelimiter] == '-' && body[afterDelimiter+1] == '-')
 }
 
-func writeImageSafetyHashPart(dst *xxhash.Digest, value []byte) {
+func writeImageSafetyHashStringPart(dst *xxh3.Hasher, value string) {
 	var size [8]byte
 	binary.BigEndian.PutUint64(size[:], uint64(len(value)))
 	_, _ = dst.Write(size[:])
-	_, _ = dst.Write(value)
+	_, _ = dst.WriteString(value)
 }
 
-func writeImageSafetyHashUint64(dst *xxhash.Digest, value uint64) {
+func writeImageSafetyHashUint64(dst *xxh3.Hasher, value uint64) {
 	var encoded [8]byte
 	binary.BigEndian.PutUint64(encoded[:], value)
 	_, _ = dst.Write(encoded[:])

@@ -109,6 +109,10 @@ func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (s
 	}
 	ctx = sdk.WithLogger(ctx, logger)
 	ctx = sdk.WithRequestID(ctx, rid)
+	var traceCapture *finalErrorTraceCapture
+	if req.TraceFinalError {
+		ctx, traceCapture = withFinalErrorTrace(ctx)
+	}
 
 	method, path := resolveAPIKeyRoute(req)
 	logger.Debug("plugin_request_received",
@@ -135,7 +139,11 @@ func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (s
 		"proxy_target", redactProxyURL(proxyURL),
 	)
 
-	return g.forwardHTTP(ctx, req)
+	outcome, err := g.forwardHTTP(ctx, req)
+	if traceCapture != nil && shouldAttachFinalErrorDiagnostic(outcome, err) {
+		outcome.FinalErrorDiagnostic = traceCapture.snapshot()
+	}
+	return outcome, err
 }
 
 // redactProxyURL 去掉 proxy URL 中的 user:pass，避免日志泄露代理凭证。

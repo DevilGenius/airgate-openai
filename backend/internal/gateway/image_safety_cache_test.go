@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cespare/xxhash/v2"
 	"github.com/tidwall/gjson"
+	"github.com/zeebo/xxh3"
 
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
@@ -88,8 +88,9 @@ func TestImageSafetyRequestHashUsesStableDigest(t *testing.T) {
 		t.Fatal("image request should produce a hash")
 	}
 
-	hasher := xxhash.NewWithSeed(imageSafetyRequestHashSeed)
+	var hasher xxh3.Hasher
 	for _, part := range [][]byte{
+		[]byte(imageSafetyRequestHashDomain),
 		[]byte(http.MethodPost),
 		[]byte("/v1/images/generations"),
 		[]byte("gpt-image-2"),
@@ -105,11 +106,11 @@ func TestImageSafetyRequestHashUsesStableDigest(t *testing.T) {
 	binary.BigEndian.PutUint64(bodySize[:], uint64(len(req.Body)))
 	_, _ = hasher.Write(bodySize[:])
 	var bodyHash [8]byte
-	binary.BigEndian.PutUint64(bodyHash[:], xxhash.Sum64(req.Body))
+	binary.BigEndian.PutUint64(bodyHash[:], xxh3.Hash(req.Body))
 	_, _ = hasher.Write(bodyHash[:])
 	want := hasher.Sum64()
 	if got != want {
-		t.Fatalf("hash = %x, want stable XXH64 value %x", got, want)
+		t.Fatalf("hash = %x, want stable XXH3-64 value %x", got, want)
 	}
 }
 

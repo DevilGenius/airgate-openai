@@ -444,6 +444,7 @@ func ReceiveWSResponse(ctx context.Context, conn *websocket.Conn, handler WSEven
 				result.CompletedEventRaw = append([]byte(nil), msg...)
 				result.StopReason = reason
 			} else {
+				result.FailedEventRaw = append([]byte(nil), msg...)
 				result.Err = fmt.Errorf("响应不完整: %s", reason)
 			}
 			finalizeWSResult(&result, &textBuilder, &reasoningBuilder, start)

@@ -227,7 +227,7 @@ func (g *OpenAIGateway) forwardOAuthCompact(ctx context.Context, req *sdk.Forwar
 		"account_type", "oauth",
 	)
 
-	resp, err := g.buildHTTPClient(account).Do(upstreamReq)
+	resp, err := g.buildForwardHTTPClient(ctx, req, account).Do(upstreamReq)
 	if err != nil {
 		dur := time.Since(start)
 		logger.Warn("upstream_request_failed",
@@ -472,7 +472,7 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 	)
 
 	streamable := req.Stream && req.Writer != nil && !isImageReq
-	client := g.buildHTTPClient(account)
+	client := g.buildForwardHTTPClient(ctx, req, account)
 	if streamable {
 		client.Timeout = 0
 	}
@@ -1053,6 +1053,9 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 
 	currentModel := req.Model
 	runAttempt := func(msg []byte, w http.ResponseWriter, delayCreated bool, attemptModel string) (WSResult, error) {
+		if req.TraceFinalError {
+			captureFinalErrorWebSocketRequest(ctx, ChatGPTWSURL, cfg, msg)
+		}
 		if err := writeWebSocketJSON(conn, json.RawMessage(msg)); err != nil {
 			return WSResult{}, fmt.Errorf("发送 WebSocket 消息失败: %w", err)
 		}
@@ -1100,7 +1103,11 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 			lastSSEHandler = sseHandler
 			handler = sseHandler
 		}
-		return ReceiveWSResponse(ctx, conn, handler), nil
+		result := ReceiveWSResponse(ctx, conn, handler)
+		if req.TraceFinalError && len(result.FailedEventRaw) > 0 {
+			captureFinalErrorUpstreamBody(ctx, result.FailedEventRaw)
+		}
+		return result, nil
 	}
 
 	w := req.Writer
