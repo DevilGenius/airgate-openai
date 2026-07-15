@@ -218,7 +218,7 @@ func finalizeAnthropicResponsesBody(responsesBody []byte, originalBody []byte, s
 		result, _ = sjson.DeleteBytes(result, "tool_choice")
 		result, _ = sjson.DeleteBytes(result, "parallel_tool_calls")
 	}
-	return result
+	return normalizeResponsesToolCompatibility(result)
 }
 
 func explicitAnthropicRequestServiceTier(req *sdk.ForwardRequest) string {

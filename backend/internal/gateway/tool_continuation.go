@@ -29,7 +29,7 @@ func analyzeToolContinuationSignalsFromMap(reqData map[string]any) toolContinuat
 		case isOpenAIToolOutputItemType(itemType):
 			signals.hasToolOutput = true
 		case isOpenAIToolCallContextItemType(itemType):
-			if strings.TrimSpace(jsonString(itemMap["call_id"])) != "" {
+			if isValidResponsesToolCallContextItem(itemType, itemMap) {
 				signals.hasToolCallContext = true
 			}
 		}
@@ -77,79 +77,6 @@ func requestNeedsPreviousResponseID(reqData map[string]any) bool {
 	return signals.hasToolOutput && !signals.hasToolCallContext
 }
 
-func sanitizeUnmatchedToolCallOutputs(body []byte, allowPreviousContext bool) []byte {
-	var reqData map[string]any
-	if err := json.Unmarshal(body, &reqData); err != nil {
-		return body
-	}
-	if !sanitizeUnmatchedToolCallOutputsFromMap(reqData, allowPreviousContext) {
-		return body
-	}
-	patched, err := json.Marshal(reqData)
-	if err != nil {
-		return body
-	}
-	return patched
-}
-
-func sanitizeUnmatchedToolCallOutputsFromMap(reqData map[string]any, allowPreviousContext bool) bool {
-	if reqData == nil {
-		return false
-	}
-	if allowPreviousContext && strings.TrimSpace(jsonString(reqData["previous_response_id"])) != "" {
-		return false
-	}
-	input, ok := reqData["input"].([]any)
-	if !ok || len(input) == 0 {
-		return false
-	}
-
-	callIDsByType := make(map[string]map[string]struct{})
-	for _, item := range input {
-		itemMap, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		itemType := strings.TrimSpace(jsonString(itemMap["type"]))
-		if !isOpenAIToolCallContextItemType(itemType) {
-			continue
-		}
-		if callID := strings.TrimSpace(jsonString(itemMap["call_id"])); callID != "" {
-			if callIDsByType[itemType] == nil {
-				callIDsByType[itemType] = make(map[string]struct{})
-			}
-			callIDsByType[itemType][callID] = struct{}{}
-		}
-	}
-
-	filtered := make([]any, 0, len(input))
-	changed := false
-	for _, item := range input {
-		itemMap, ok := item.(map[string]any)
-		if !ok {
-			filtered = append(filtered, item)
-			continue
-		}
-		itemType := strings.TrimSpace(jsonString(itemMap["type"]))
-		callType := matchingToolCallTypeForOutputType(itemType)
-		if callType == "" {
-			filtered = append(filtered, item)
-			continue
-		}
-		callID := strings.TrimSpace(jsonString(itemMap["call_id"]))
-		if _, ok := callIDsByType[callType][callID]; ok {
-			filtered = append(filtered, item)
-			continue
-		}
-		changed = true
-	}
-	if !changed {
-		return false
-	}
-	reqData["input"] = filtered
-	return true
-}
-
 func functionCallOutputRecoveryBody(body []byte) ([]byte, bool) {
 	var reqData map[string]any
 	if err := json.Unmarshal(body, &reqData); err != nil {
@@ -161,7 +88,7 @@ func functionCallOutputRecoveryBody(body []byte) ([]byte, bool) {
 		delete(reqData, "previous_response_id")
 		changed = true
 	}
-	if sanitizeUnmatchedToolCallOutputsFromMap(reqData, false) {
+	if normalizeResponsesToolCompatibilityFromMap(reqData) {
 		changed = true
 	}
 	if sanitizeEncryptedReasoningItems(reqData) {

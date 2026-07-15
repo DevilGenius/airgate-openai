@@ -687,6 +687,7 @@ func applyContinuationState(reqData map[string]any, session openAISessionResolut
 	if previous, ok := reqData["previous_response_id"].(string); ok {
 		if strings.TrimSpace(previous) != "" {
 			sanitizeAnchoredEncryptedReplayItems(reqData)
+			normalizeResponsesToolCompatibilityFromMap(reqData)
 			return reqData
 		}
 		delete(reqData, "previous_response_id")
@@ -695,6 +696,6 @@ func applyContinuationState(reqData map[string]any, session openAISessionResolut
 		reqData["previous_response_id"] = strings.TrimSpace(session.PreviousRespID)
 	}
 	sanitizeAnchoredEncryptedReplayItems(reqData)
-	sanitizeUnmatchedToolCallOutputsFromMap(reqData, true)
+	normalizeResponsesToolCompatibilityFromMap(reqData)
 	return reqData
 }

@@ -269,7 +269,7 @@ func analyzePreviousResponseInputItemSignals(item map[string]any, signals *previ
 	case isOpenAIToolOutputItemType(itemType):
 		signals.hasToolOutput = true
 	case isOpenAIToolCallContextItemType(itemType):
-		if strings.TrimSpace(jsonString(item["call_id"])) != "" {
+		if isValidResponsesToolCallContextItem(itemType, item) {
 			signals.hasToolCallContext = true
 		}
 	}

@@ -137,9 +137,10 @@ func TestApplyContinuationStateDoesNotBackfillWithToolCallContext(t *testing.T) 
 	reqBody := map[string]any{
 		"input": []any{
 			map[string]any{
-				"type":    "function_call",
-				"call_id": "call_1",
-				"name":    "lookup",
+				"type":      "function_call",
+				"call_id":   "call_1",
+				"name":      "lookup",
+				"arguments": "{}",
 			},
 			map[string]any{
 				"type":    "function_call_output",
@@ -269,6 +270,7 @@ func TestApplyContinuationStatePreservesMatchedCustomToolOutput(t *testing.T) {
 				"type":    "custom_tool_call",
 				"call_id": "call_1",
 				"name":    "apply_patch",
+				"input":   "patch",
 			},
 			map[string]any{
 				"type":    "custom_tool_call_output",
@@ -480,7 +482,7 @@ func TestPreviousResponseNotFoundRecoveryBodyRejectsToolOutputWithoutContext(t *
 }
 
 func TestPreviousResponseNotFoundRecoveryBodyAllowsToolOutputWithContext(t *testing.T) {
-	body := []byte(`{"model":"gpt-5.4","previous_response_id":"resp_old","input":[{"type":"function_call","call_id":"call_1","name":"lookup"},{"type":"function_call_output","call_id":"call_1","output":"ok"}]}`)
+	body := []byte(`{"model":"gpt-5.4","previous_response_id":"resp_old","input":[{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{}"},{"type":"function_call_output","call_id":"call_1","output":"ok"}]}`)
 
 	got, ok := previousResponseNotFoundRecoveryBody(body)
 	if !ok {
