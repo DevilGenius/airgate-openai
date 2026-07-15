@@ -8,8 +8,9 @@ import (
 	"strings"
 	"sync"
 
-	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 	"github.com/zeebo/xxh3"
+
+	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
 const (
