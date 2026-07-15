@@ -398,18 +398,18 @@ func TestHandleStreamResponseTreatsCompletedEmptyStreamAsFailure(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected empty stream error")
 	}
-	if outcome.Kind != sdk.OutcomeUpstreamTransient {
-		t.Fatalf("expected OutcomeUpstreamTransient, got %v", outcome.Kind)
+	if outcome.Kind != sdk.OutcomeStreamAborted {
+		t.Fatalf("expected OutcomeStreamAborted, got %v", outcome.Kind)
 	}
 	if !strings.Contains(outcome.Reason, "上游流式响应为空") {
 		t.Fatalf("unexpected reason %q", outcome.Reason)
 	}
-	if w.Body.Len() != 0 {
-		t.Fatalf("empty stream should not be forwarded before validation, got %q", w.Body.String())
+	if got := w.Body.String(); !strings.Contains(got, `"role":"assistant"`) || !strings.Contains(got, "data: [DONE]") {
+		t.Fatalf("empty stream prelude should be forwarded immediately, got %q", got)
 	}
 }
 
-func TestHandleStreamResponseFlushesBufferedPreludeWhenOutputArrives(t *testing.T) {
+func TestHandleStreamResponseForwardsPreludeAndOutput(t *testing.T) {
 	body := strings.Join([]string{
 		`data: {"id":"chatcmpl_test","choices":[{"delta":{"role":"assistant"},"finish_reason":null}]}`,
 		"",
@@ -436,7 +436,7 @@ func TestHandleStreamResponseFlushesBufferedPreludeWhenOutputArrives(t *testing.
 	}
 	got := w.Body.String()
 	if !strings.Contains(got, `"role":"assistant"`) || !strings.Contains(got, `"content":"ok"`) || !strings.Contains(got, "data: [DONE]") {
-		t.Fatalf("buffered stream was not forwarded completely: %q", got)
+		t.Fatalf("stream was not forwarded completely: %q", got)
 	}
 }
 

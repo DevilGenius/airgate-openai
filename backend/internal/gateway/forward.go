@@ -596,7 +596,8 @@ func (g *OpenAIGateway) retryAPIKeyWithContextTooLargeFallback(
 	client *http.Client,
 	logMessage string,
 ) (sdk.ForwardOutcome, error) {
-	if !outcomeIsContextTooLarge(outcome) || responseWriterWritten(req.Writer) {
+	// 流式响应立即透传，不为压缩模型降级保留响应缓存；最终失败交由 Trace 记录。
+	if req.Stream || !outcomeIsContextTooLarge(outcome) || responseWriterWritten(req.Writer) {
 		return outcome, nil
 	}
 	fallbackBody, fallbackModel, ok := responsesCompressionFallbackBody(body, req.Model)
@@ -624,12 +625,13 @@ func retryWSWithContextTooLargeFallback(
 	currentModel string,
 	body []byte,
 	w http.ResponseWriter,
-	delayCreated bool,
+	stream bool,
 	streamOutputStarted func() bool,
-	runAttempt func([]byte, http.ResponseWriter, bool, string) (WSResult, error),
+	runAttempt func([]byte, http.ResponseWriter, string) (WSResult, error),
 	logMessage string,
 ) (WSResult, string, error) {
-	if !isContextTooLargeErrorResult(result.Err) || streamOutputStarted() {
+	// WebSocket 流同样不延迟 response.created；仅非流式请求允许透明压缩降级。
+	if stream || !isContextTooLargeErrorResult(result.Err) || streamOutputStarted() {
 		return result, currentModel, nil
 	}
 	fallbackMsg, fallbackModel, ok := responsesCompressionFallbackBody(body, currentModel)
@@ -644,7 +646,7 @@ func retryWSWithContextTooLargeFallback(
 		"account_type", "oauth",
 		"session", sessionKey,
 	)
-	fallbackResult, err := runAttempt(fallbackMsg, w, delayCreated, fallbackModel)
+	fallbackResult, err := runAttempt(fallbackMsg, w, fallbackModel)
 	if err != nil {
 		return result, fallbackModel, err
 	}
@@ -1052,7 +1054,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 	)
 
 	currentModel := req.Model
-	runAttempt := func(msg []byte, w http.ResponseWriter, delayCreated bool, attemptModel string) (WSResult, error) {
+	runAttempt := func(msg []byte, w http.ResponseWriter, attemptModel string) (WSResult, error) {
 		if req.TraceFinalError {
 			captureFinalErrorWebSocketRequest(ctx, ChatGPTWSURL, cfg, msg)
 		}
@@ -1067,7 +1069,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		switch {
 		case isChatCompletions && req.Stream:
 			writer := newChatCompletionsStreamWriter(
-				w, attemptModel, account.ID, session.SessionKey, chatStreamInclude, start, delayCreated,
+				w, attemptModel, account.ID, session.SessionKey, chatStreamInclude, start,
 			)
 			lastChatWriter = writer
 			handler = writer
@@ -1091,11 +1093,10 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		default:
 			// 原生 /v1/responses 流式：SSE 透传
 			sseHandler := &sseEventWriter{
-				w:            w,
-				accountID:    account.ID,
-				sessionKey:   session.SessionKey,
-				start:        start,
-				delayCreated: delayCreated,
+				w:          w,
+				accountID:  account.ID,
+				sessionKey: session.SessionKey,
+				start:      start,
 			}
 			if f, ok := w.(http.Flusher); ok {
 				sseHandler.flusher = f
@@ -1122,7 +1123,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 	}
 
 	delegatedRecoveryApplied := delegatedContinuationRecoveryApplied(createMsg, req.Headers)
-	result, err := runAttempt(createMsg, w, delegatedRecoveryApplied, currentModel)
+	result, err := runAttempt(createMsg, w, currentModel)
 	if err != nil {
 		logger.Warn("upstream_request_failed",
 			sdk.LogFieldAccountID, account.ID,
@@ -1169,7 +1170,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 				"session", session.SessionKey,
 			)
 			clearSessionStateResponseID(session.SessionKey)
-			result, err = runAttempt(retryMsg, w, req.Stream, currentModel)
+			result, err = runAttempt(retryMsg, w, currentModel)
 			if err != nil {
 				logger.Warn("upstream_request_failed",
 					sdk.LogFieldAccountID, account.ID,
@@ -1205,7 +1206,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 				"session", session.SessionKey,
 			)
 			clearSessionStateResponseID(session.SessionKey)
-			result, err = runAttempt(retryMsg, w, req.Stream, currentModel)
+			result, err = runAttempt(retryMsg, w, currentModel)
 			if err != nil {
 				logger.Warn("upstream_request_failed",
 					sdk.LogFieldAccountID, account.ID,
@@ -1351,9 +1352,6 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 	default:
 		// /v1/responses 流式：补 [DONE] 标记
 		if w != nil {
-			if lastSSEHandler != nil {
-				lastSSEHandler.flushPendingCreated()
-			}
 			if _, err := fmt.Fprint(w, "data: [DONE]\n\n"); err == nil {
 				if flusher, ok := w.(http.Flusher); ok {
 					flusher.Flush()
@@ -1396,8 +1394,6 @@ type sseEventWriter struct {
 	firstTokenMs           int64     // 首 token 到达时间（毫秒）
 	firstTokenOnce         sync.Once // 确保只记录一次
 	wrote                  bool
-	delayCreated           bool
-	pendingCreated         string
 	terminalErrorForwarded bool
 }
 
@@ -1431,13 +1427,7 @@ func (s *sseEventWriter) OnRawEvent(eventType string, data []byte) {
 		}
 		return
 	case "response.failed", "error":
-		if s.pendingCreated != "" && isContextTooLargeRawEvent(eventType, data) {
-			return
-		}
-		if !s.wrote && s.pendingCreated == "" {
-			return
-		}
-		if !s.flushPendingCreated() {
+		if !s.wrote {
 			return
 		}
 	case "response.created", "response.completed", "response.done":
@@ -1445,17 +1435,6 @@ func (s *sseEventWriter) OnRawEvent(eventType string, data []byte) {
 			if responseID := gjson.GetBytes(data, "response.id").String(); strings.TrimSpace(responseID) != "" {
 				updateSessionStateResponseID(s.sessionKey, responseID, s.accountID)
 			}
-		}
-		if eventType == "response.created" && s.delayCreated {
-			s.pendingCreated = formatSSEEvent(eventType, data)
-			return
-		}
-		if !s.flushPendingCreated() {
-			return
-		}
-	default:
-		if !s.flushPendingCreated() {
-			return
 		}
 	}
 	if _, err := fmt.Fprint(s.w, formatSSEEvent(eventType, data)); err != nil {
@@ -1469,38 +1448,8 @@ func (s *sseEventWriter) OnRawEvent(eventType string, data []byte) {
 		s.flusher.Flush()
 	}
 }
-
-func (s *sseEventWriter) flushPendingCreated() bool {
-	if s == nil || s.w == nil || s.pendingCreated == "" {
-		return true
-	}
-	if _, err := fmt.Fprint(s.w, s.pendingCreated); err != nil {
-		return false
-	}
-	s.pendingCreated = ""
-	s.wrote = true
-	return true
-}
-
 func formatSSEEvent(eventType string, data []byte) string {
 	return fmt.Sprintf("event: %s\ndata: %s\n\n", eventType, strings.ReplaceAll(string(data), "\n", ""))
-}
-
-func isContextTooLargeRawEvent(eventType string, data []byte) bool {
-	switch eventType {
-	case "response.failed":
-		if failure := classifyResponsesFailure(data); failure != nil {
-			return isContextTooLargeFailure(failure)
-		}
-	case "error":
-		if failure := classifyWSErrorEvent(data); failure != nil {
-			return isContextTooLargeFailure(failure)
-		}
-		if failure := classifyGenericSSEErrorEvent(data); failure != nil {
-			return isContextTooLargeFailure(failure)
-		}
-	}
-	return isContextTooLargeError(string(data))
 }
 
 func (s *sseEventWriter) writeTerminalErrorIfNeeded(statusCode int, code, message, responseID string) {

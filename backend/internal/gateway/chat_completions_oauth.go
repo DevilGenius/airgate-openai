@@ -94,8 +94,6 @@ type chatCompletionsStreamWriter struct {
 	firstTokenMs   int64
 	start          time.Time
 	wrote          bool
-	delayCreated   bool
-	pendingChunks  [][]byte
 
 	accountID  int64
 	sessionKey string
@@ -108,7 +106,6 @@ func newChatCompletionsStreamWriter(
 	sessionKey string,
 	includeUsage bool,
 	start time.Time,
-	delayCreated bool,
 ) *chatCompletionsStreamWriter {
 	s := &chatCompletionsStreamWriter{
 		w:                  w,
@@ -121,7 +118,6 @@ func newChatCompletionsStreamWriter(
 		accountID:          accountID,
 		sessionKey:         sessionKey,
 		includeUsage:       includeUsage,
-		delayCreated:       delayCreated,
 	}
 	if f, ok := w.(http.Flusher); ok {
 		s.flusher = f
@@ -167,10 +163,6 @@ func (s *chatCompletionsStreamWriter) OnRawEvent(eventType string, data []byte) 
 	}
 
 	chunks := s.translateEvent(eventType, data)
-	if s.delayCreated && eventType == "response.created" && len(chunks) > 0 {
-		s.pendingChunks = append(s.pendingChunks, chunks...)
-		return
-	}
 	if len(chunks) == 0 {
 		return
 	}
@@ -185,10 +177,6 @@ func (s *chatCompletionsStreamWriter) OnRawEvent(eventType string, data []byte) 
 func (s *chatCompletionsStreamWriter) writeChunks(chunks [][]byte) bool {
 	if s == nil || s.w == nil {
 		return false
-	}
-	if len(s.pendingChunks) > 0 {
-		chunks = append(append([][]byte(nil), s.pendingChunks...), chunks...)
-		s.pendingChunks = nil
 	}
 	for _, chunk := range chunks {
 		if _, err := fmt.Fprintf(s.w, "data: %s\n\n", chunk); err != nil {

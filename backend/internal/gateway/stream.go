@@ -100,7 +100,8 @@ func (g *stallGuardBody) Close() error {
 }
 
 // handleStreamResponse 处理 SSE 流式响应。调用者保证 resp.StatusCode 是 2xx
-// （4xx/5xx 由调用者预先归类，不会进到这里）。
+// （4xx/5xx 由调用者预先归类，不会进到这里）。上游事件立即透传，不缓存
+// response.created 等前置事件来换取透明重试窗口；最终失败由 Trace 留存诊断。
 func handleStreamResponse(resp *http.Response, w http.ResponseWriter, start time.Time, reqServiceTier string) (sdk.ForwardOutcome, error) {
 	return handleStreamResponseWithLogger(slog.Default(), resp, w, start, reqServiceTier)
 }
@@ -125,7 +126,6 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 	streamErrLogged := false
 	debugUpstreamSSE := os.Getenv(debugUpstreamSSEEnv) == "1"
 	diagnostics := streamResponseDiagnostics{}
-	var pending strings.Builder
 	var toolImageIn, toolImageOut int // 接收 response.tool_usage.image_gen，用于图像工具计费。
 	var imageGenCount int
 	var imageGenSize string
@@ -181,7 +181,7 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 		}
 
 		if !ok || data == "" || data == "[DONE]" {
-			if err := writeOrBufferSSELine(w, resp.StatusCode, line, &pending, &streamStarted, diagnostics.hasOutput()); err != nil {
+			if err := writeSSELine(w, resp.StatusCode, line, &streamStarted); err != nil {
 				streamErr = fmt.Errorf("写入客户端 SSE 失败: %w", err)
 				break
 			}
@@ -191,7 +191,7 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 			usage.FirstTokenMs = time.Since(start).Milliseconds()
 			firstTokenRecorded = true
 		}
-		if err := writeOrBufferSSELine(w, resp.StatusCode, line, &pending, &streamStarted, diagnostics.hasOutput()); err != nil {
+		if err := writeSSELine(w, resp.StatusCode, line, &streamStarted); err != nil {
 			streamErr = fmt.Errorf("写入客户端 SSE 失败: %w", err)
 			break
 		}
@@ -412,27 +412,14 @@ func logStreamFailure(logger *slog.Logger, err error, resp *http.Response, strea
 	logger.Warn("上游 SSE 返回异常或空响应，已记录诊断详情", attrs...)
 }
 
-func writeOrBufferSSELine(w http.ResponseWriter, statusCode int, line string, pending *strings.Builder, streamStarted *bool, shouldFlush bool) error {
-	if *streamStarted {
-		if _, err := fmt.Fprintf(w, "%s\n", line); err != nil {
-			return err
-		}
-		flushResponseWriter(w)
-		return nil
+func writeSSELine(w http.ResponseWriter, statusCode int, line string, streamStarted *bool) error {
+	if !*streamStarted {
+		w.WriteHeader(statusCode)
+		*streamStarted = true
 	}
-
-	pending.WriteString(line)
-	pending.WriteByte('\n')
-	if !shouldFlush {
-		return nil
-	}
-
-	w.WriteHeader(statusCode)
-	if _, err := fmt.Fprint(w, pending.String()); err != nil {
+	if _, err := fmt.Fprintf(w, "%s\n", line); err != nil {
 		return err
 	}
-	pending.Reset()
-	*streamStarted = true
 	flushResponseWriter(w)
 	return nil
 }
