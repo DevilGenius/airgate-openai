@@ -54,6 +54,43 @@ func TestClassifyWSErrorEventRequestTooLarge(t *testing.T) {
 	}
 }
 
+func TestClassifyResponsesFailureInvalidImageInput(t *testing.T) {
+	upstreamMessage := "The image data you provided does not represent a valid image. Please check your input and try again with one of the supported image formats: ['image/jpeg', 'image/png', 'image/gif', 'image/webp']."
+	raw := []byte(`{"type":"response.failed","response":{"error":{"type":"invalid_request_error","message":"` + upstreamMessage + `"}}}`)
+	failure := classifyResponsesFailure(raw)
+	if failure == nil {
+		t.Fatal("expected failure")
+	}
+	if failure.Kind != responsesFailureKindClient || failure.StatusCode != http.StatusBadRequest {
+		t.Fatalf("failure = %#v, want client error 400", failure)
+	}
+	if failure.Code != invalidImageInputCode || failure.Message != invalidImageInputMessage {
+		t.Fatalf("code/message = %q/%q", failure.Code, failure.Message)
+	}
+	if failure.upstreamReason() != upstreamMessage {
+		t.Fatalf("upstream reason = %q, want original message", failure.upstreamReason())
+	}
+	if !strings.Contains(failure.Error(), upstreamMessage) {
+		t.Fatalf("error = %q, want original upstream message", failure.Error())
+	}
+
+	status, body, headers, detail, normalized := normalizeInvalidImageInputUpstreamError(
+		http.StatusBadRequest,
+		openAIErrorJSON("invalid_request_error", "", upstreamMessage),
+		http.Header{"X-Request-Id": []string{"req_123"}},
+		upstreamMessage,
+	)
+	if !normalized || status != http.StatusBadRequest || detail != invalidImageInputMessage {
+		t.Fatalf("normalized = %v status=%d detail=%q", normalized, status, detail)
+	}
+	if !strings.Contains(string(body), invalidImageInputCode) || !strings.Contains(string(body), invalidImageInputMessage) {
+		t.Fatalf("normalized body = %s", body)
+	}
+	if headers.Get("X-Request-Id") != "req_123" || headers.Get("Content-Type") != "application/json" {
+		t.Fatalf("normalized headers = %#v", headers)
+	}
+}
+
 func TestClassifyResponsesFailureSafetyRejected(t *testing.T) {
 	raw := []byte(`{"type":"response.failed","response":{"error":{"type":"invalid_request_error","code":"content_policy_violation","message":"Your request was rejected by the safety system. If you believe this is an error, contact us at help.openai.com and include the request ID 916c6516-5f37-9121-b05a-a604888c0055."}}}`)
 	failure := classifyResponsesFailure(raw)

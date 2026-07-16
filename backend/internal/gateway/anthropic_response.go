@@ -559,12 +559,19 @@ func normalizeAnthropicMessageID(id string) string {
 // buildAnthropicStreamError 构建 Anthropic SSE 错误事件
 // errType: Anthropic 错误类型（invalid_request_error, rate_limit_error, api_error 等）
 func buildAnthropicStreamError(errType, message string) string {
+	return buildAnthropicStreamErrorWithCode(errType, "", message)
+}
+
+func buildAnthropicStreamErrorWithCode(errType, code, message string) string {
 	if errType == "" {
 		errType = "api_error"
 	}
 	template := `{"type":"error","error":{"type":"","message":""}}`
 	template, _ = sjson.Set(template, "error.type", errType)
 	template, _ = sjson.Set(template, "error.message", message)
+	if code != "" {
+		template, _ = sjson.Set(template, "error.code", code)
+	}
 	return "event: error\n" + fmt.Sprintf("data: %s\n\n", template)
 }
 
@@ -939,7 +946,9 @@ func translateResponsesSSEToAnthropicSSE(
 			if eventResponseID != "" {
 				responseID = eventResponseID
 			}
-			if eventType == "response.completed" || eventType == "response.done" {
+			// 终止事件集中分发，避免为 safety 单独扫描或判断正常 delta。
+			switch eventType {
+			case "response.completed", "response.done":
 				terminalEventReceived = true
 				if session.SessionKey != "" && eventResponseID != "" {
 					updateSessionStateResponseID(session.SessionKey, eventResponseID, session.AccountID)
@@ -957,26 +966,32 @@ func translateResponsesSSEToAnthropicSSE(
 					"output_tokens", usageNode.Get("output_tokens").Int(),
 					"response_model", gjson.Get(data, "response.model").String(),
 				)
-			}
-			if eventType == "response.failed" || eventType == "response.incomplete" {
-				applyResponsesUsageToAnthropicState(state, gjson.Get(data, "response.usage"))
-			}
 
-			// 检查错误事件 —— 先让 convertResponsesEventToAnthropic 输出错误事件再终止
-			if eventType == "response.failed" {
+			case "response.failed":
+				applyResponsesUsageToAnthropicState(state, gjson.Get(data, "response.usage"))
 				terminalEventReceived = true
-				if failure := classifyResponsesFailure([]byte(data)); failure != nil {
-					streamErr = failure
+				streamErr = parseResponsesFailureEvent(eventType, []byte(data))
+				var failure *responsesFailureError
+				if errors.As(streamErr, &failure) {
 					skipCurrentOutput = failure.isContinuationAnchorError() && !outputWritten
-				} else {
+				} else if streamErr == nil {
 					errMsg := gjson.Get(data, "response.error.message").String()
 					if errMsg == "" {
 						errMsg = "上游返回 response.failed"
 					}
 					streamErr = fmt.Errorf("上游错误: %s", errMsg)
 				}
-			}
-			if eventType == "response.incomplete" {
+
+			case "error":
+				streamErr = parseResponsesFailureEvent(eventType, []byte(data))
+				if streamErr == nil {
+					streamErr = fmt.Errorf("上游错误: %s", data)
+				}
+				// Anthropic 转换器没有原生 error 事件映射，由 done 分支统一补写错误帧。
+				skipCurrentOutput = true
+
+			case "response.incomplete":
+				applyResponsesUsageToAnthropicState(state, gjson.Get(data, "response.usage"))
 				terminalEventReceived = true
 				reason := gjson.Get(data, "response.incomplete_details.reason").String()
 				if reason != "max_output_tokens" {
@@ -1048,16 +1063,21 @@ done:
 		return nil
 	}
 	if streamErr != nil {
+		var failure *responsesFailureError
+		hasFailure := errors.As(streamErr, &failure)
 		if !terminalEventReceived {
 			output := closeOpenAnthropicContentBlocks(state)
-			output += buildAnthropicStreamError("api_error", streamErr.Error())
+			if hasFailure {
+				output += buildAnthropicStreamErrorWithCode(failure.AnthropicErrorType, failure.Code, failure.Message)
+			} else {
+				output += buildAnthropicStreamError("api_error", streamErr.Error())
+			}
 			_, _ = fmt.Fprint(w, output)
 			if flusher != nil {
 				flusher.Flush()
 			}
 		}
-		var failure *responsesFailureError
-		if errors.As(streamErr, &failure) {
+		if hasFailure {
 			kind := failure.outcomeKind()
 			// 流已开写后上游 response.failed：除 ClientError 外都按 StreamAborted 报告
 			if kind != sdk.OutcomeClientError {
@@ -1065,22 +1085,24 @@ done:
 			}
 			errBody := anthropicErrorJSONWithCode(failure.AnthropicErrorType, failure.Code, failure.Message)
 			return sdk.ForwardOutcome{
-				Kind:          kind,
-				FailoverScope: failure.failoverScopeForKind(kind),
-				Upstream:      sdk.UpstreamResponse{StatusCode: failure.StatusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
-				Reason:        failure.Message,
-				RetryAfter:    failure.RetryAfter,
-				Duration:      elapsed,
-				Usage:         abortUsage(),
+				Kind:           kind,
+				FailoverScope:  failure.failoverScopeForKind(kind),
+				Upstream:       sdk.UpstreamResponse{StatusCode: failure.StatusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
+				Reason:         failure.upstreamReason(),
+				RetryAfter:     failure.RetryAfter,
+				Duration:       elapsed,
+				Usage:          abortUsage(),
+				SafetyRejected: failure.isCybersecurityRisk(),
 			}, continuationAnchorReplayErr(failure, outputWritten)
 		}
 		errBody := anthropicErrorJSON("api_error", streamErr.Error())
 		return sdk.ForwardOutcome{
-			Kind:     sdk.OutcomeStreamAborted,
-			Upstream: sdk.UpstreamResponse{StatusCode: http.StatusBadGateway, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
-			Reason:   streamErr.Error(),
-			Duration: elapsed,
-			Usage:    abortUsage(),
+			Kind:           sdk.OutcomeStreamAborted,
+			Upstream:       sdk.UpstreamResponse{StatusCode: http.StatusBadGateway, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
+			Reason:         streamErr.Error(),
+			Duration:       elapsed,
+			Usage:          abortUsage(),
+			SafetyRejected: isCybersecurityRiskRejectionText(streamErr.Error()),
 		}, streamErr
 	}
 

@@ -19,8 +19,8 @@ import (
 var imageSafetyRequestHashBenchmarkSink uint64
 
 func TestImageSafetyRequestCacheTTLAndCapacity(t *testing.T) {
-	if imageSafetyRequestCacheTTL != time.Hour {
-		t.Fatalf("default TTL = %s, want 1h", imageSafetyRequestCacheTTL)
+	if imageSafetyRequestCacheTTL != 24*time.Hour {
+		t.Fatalf("default TTL = %s, want 24h", imageSafetyRequestCacheTTL)
 	}
 	cache := imageSafetyRequestCache{
 		ttl:        10 * time.Minute,
@@ -169,7 +169,8 @@ func TestImageSafetyRequestCacheRejectsDuplicateWithoutAccountFailure(t *testing
 	if outcome != nil {
 		t.Fatal("uncached request should continue to upstream")
 	}
-	gateway.rememberImageSafetyRequest(ctx)
+	const upstreamReason = "upstream safety system rejected the prompt (request_id: req_test)"
+	gateway.rememberImageSafetyRequest(ctx, upstreamReason)
 	_, outcome = gateway.checkImageSafetyRequest(context.Background(), req, http.MethodPost, "/v1/images/generations")
 	if outcome == nil {
 		t.Fatal("cached request should be rejected locally")
@@ -183,8 +184,39 @@ func TestImageSafetyRequestCacheRejectsDuplicateWithoutAccountFailure(t *testing
 	if got := gjson.GetBytes(outcome.Upstream.Body, "error.code").String(); got != imageSafetyInvalidRequestCode {
 		t.Fatalf("error.code = %q, want %q", got, imageSafetyInvalidRequestCode)
 	}
+	if outcome.Reason != upstreamReason {
+		t.Fatalf("Reason = %q, want preserved upstream reason %q", outcome.Reason, upstreamReason)
+	}
+	if outcome.SafetyRejected {
+		t.Fatal("local cache hit must not be reported as a new upstream safety rejection")
+	}
 	if err := forwardErrForOutcome(*outcome, errors.New("upstream error")); err != nil {
 		t.Fatalf("client error must not trigger account degradation: %v", err)
+	}
+}
+
+func TestImageSafetyRequestHashCaptureAllowsForwardLevelCacheWrite(t *testing.T) {
+	gateway := &OpenAIGateway{}
+	req := &sdk.ForwardRequest{
+		Body:    []byte(`{"model":"gpt-image-2","prompt":"blocked prompt"}`),
+		Headers: http.Header{"Content-Type": []string{"application/json"}},
+		Model:   "gpt-image-2",
+	}
+	ctx := withImageSafetyRequestHashCapture(context.Background())
+	if _, outcome := gateway.checkImageSafetyRequest(ctx, req, http.MethodPost, "/v1/images/generations"); outcome != nil {
+		t.Fatal("uncached request should continue to upstream")
+	}
+
+	const upstreamReason = "upstream safety system rejected the prompt"
+	upstreamOutcome := imageSafetyClientOutcome(upstreamReason)
+	if !upstreamOutcome.SafetyRejected {
+		t.Fatal("new image safety rejection must be returned through SafetyRejected")
+	}
+	gateway.rememberImageSafetyRequest(ctx, upstreamOutcome.Reason)
+
+	_, cachedOutcome := gateway.checkImageSafetyRequest(context.Background(), req, http.MethodPost, "/v1/images/generations")
+	if cachedOutcome == nil || cachedOutcome.Reason != upstreamReason {
+		t.Fatalf("captured hash cache outcome = %#v, want reason %q", cachedOutcome, upstreamReason)
 	}
 }
 

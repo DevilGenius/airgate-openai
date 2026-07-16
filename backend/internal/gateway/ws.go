@@ -421,8 +421,8 @@ func ReceiveWSResponse(ctx context.Context, conn *websocket.Conn, handler WSEven
 				extractUsageFromResponseMap(&result, resp)
 				mergeResponseMetadata(&result, resp)
 			}
-			if failure := classifyResponsesFailure(msg); failure != nil {
-				result.Err = failure
+			if failureErr := parseResponsesFailureEvent(eventType, msg); failureErr != nil {
+				result.Err = failureErr
 			} else {
 				result.Err = fmt.Errorf("上游错误: %s", string(msg))
 			}
@@ -452,8 +452,8 @@ func ReceiveWSResponse(ctx context.Context, conn *websocket.Conn, handler WSEven
 
 		case "error":
 			result.FailedEventRaw = append([]byte(nil), msg...)
-			if failure := classifyWSErrorEvent(msg); failure != nil {
-				result.Err = failure
+			if failureErr := parseResponsesFailureEvent(eventType, msg); failureErr != nil {
+				result.Err = failureErr
 			} else {
 				errMsg := string(msg)
 				if errObj, ok := ev["error"].(map[string]any); ok {

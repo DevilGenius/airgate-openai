@@ -130,9 +130,8 @@ func sanitizeEncryptedReasoningItems(reqData map[string]any) bool {
 	return sanitizeEncryptedReplayItems(reqData, false)
 }
 
-func sanitizeAnchoredEncryptedReplayBody(body []byte) []byte {
-	if !bytes.Contains(body, []byte(`"previous_response_id"`)) ||
-		!bytes.Contains(body, []byte(`"encrypted_content"`)) {
+func sanitizeAnchoredEncryptedReplayBodyKnownPresent(body []byte) []byte {
+	if !bytes.Contains(body, []byte(`"previous_response_id"`)) {
 		return body
 	}
 	var reqData map[string]any

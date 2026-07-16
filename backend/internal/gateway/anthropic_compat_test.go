@@ -618,6 +618,40 @@ func TestHandleAnthropicNonStreamRecordsDefaultPriority(t *testing.T) {
 	}
 }
 
+func TestHandleAnthropicNonStreamMarksStructuredCybersecurityFailure(t *testing.T) {
+	sse := strings.Join([]string{
+		`data: {"type":"response.failed","response":{"id":"resp_safety","model":"gpt-5.4","error":{"type":"invalid_request_error","message":"` + cybersecurityRiskMessage + `"}}}`,
+		"",
+	}, "\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(sse)),
+	}
+
+	outcome, err := (&OpenAIGateway{}).handleAnthropicNonStreamFromResponses(
+		resp,
+		nil,
+		"claude-sonnet-4-6",
+		"gpt-5.4",
+		[]byte(`{"model":"claude-sonnet-4-6","max_tokens":128,"messages":[{"role":"user","content":"ping"}]}`),
+		"",
+		"",
+		time.Now(),
+		openAISessionResolution{},
+		0,
+	)
+	if err != nil {
+		t.Fatalf("非流式回译失败: %v", err)
+	}
+	if outcome.Kind != sdk.OutcomeClientError {
+		t.Fatalf("判决类型 = %v，期望客户端错误；原因=%s", outcome.Kind, outcome.Reason)
+	}
+	if !outcome.SafetyRejected {
+		t.Fatal("Anthropic 非流式结构化安全拒绝未设置 SafetyRejected")
+	}
+}
+
 func TestTranslateResponsesSSERecordsDefaultPriority(t *testing.T) {
 	sse := strings.Join([]string{
 		`data: {"type":"response.output_text.delta","delta":"pong"}`,

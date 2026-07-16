@@ -432,12 +432,21 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 				return g.handleImagesResponse(mockResp, req.Writer, nil, start, req.Model, imagesRespOpts)
 			}
 			if _, ok := normalizedImageSafetyFailureFromError(pollErr); ok {
+				upstreamReason := pollErr.Error()
 				logger.Warn("images_async_task_recovery_safety_rejected",
 					"upstream_task_id", recoveryID,
 					sdk.LogFieldError, pollErr,
 				)
-				g.rememberImageSafetyRequest(ctx)
-				outcome := imageSafetyClientOutcome()
+				outcome := imageSafetyClientOutcome(upstreamReason)
+				outcome.Duration = time.Since(start)
+				return outcome, nil
+			}
+			if isInvalidImageInputText(pollErr.Error()) {
+				logger.Warn("images_async_task_recovery_invalid_image_input",
+					"upstream_task_id", recoveryID,
+					sdk.LogFieldError, pollErr,
+				)
+				outcome := invalidImageInputClientOutcome(pollErr.Error())
 				outcome.Duration = time.Since(start)
 				return outcome, nil
 			}
@@ -709,7 +718,7 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 		dur := time.Since(start)
 		if isImagesRequest(reqPath) {
 			if _, ok := normalizedImageSafetyFailureFromError(err); ok {
-				g.rememberImageSafetyRequest(ctx)
+				upstreamReason := err.Error()
 				logger.Warn("images_apikey_safety_error_normalized",
 					sdk.LogFieldPath, reqPath,
 					sdk.LogFieldModel, req.Model,
@@ -720,7 +729,7 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 					sseKA.Stop()
 					writeImageInvalidRequestSSEIfStarted(req.Writer, sseKA)
 				}
-				outcome := imageSafetyClientOutcome()
+				outcome := imageSafetyClientOutcome(upstreamReason)
 				outcome.Duration = dur
 				return outcome, nil
 			}
@@ -759,6 +768,7 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 		clientHeaders := resp.Header.Clone()
 		clientDetail := errDetail
 		imageSafetyRejected := false
+		invalidImageInput := false
 		if isImagesRequest(reqPath) {
 			clientStatus, clientBody, clientHeaders, clientDetail, imageSafetyRejected = normalizeImageUpstreamError(
 				resp.StatusCode,
@@ -766,9 +776,14 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 				clientHeaders,
 				errDetail,
 			)
-			if imageSafetyRejected {
-				g.rememberImageSafetyRequest(ctx)
-			}
+		}
+		if !imageSafetyRejected {
+			clientStatus, clientBody, clientHeaders, clientDetail, invalidImageInput = normalizeInvalidImageInputUpstreamError(
+				resp.StatusCode,
+				respBody,
+				resp.Header.Clone(),
+				errDetail,
+			)
 		}
 		if sseKA != nil && finalAttempt {
 			sseKA.Stop()
@@ -780,6 +795,14 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 			)
 			if imageSafetyRejected {
 				writeImageInvalidRequestSSEIfStarted(req.Writer, sseKA)
+			} else if invalidImageInput {
+				writeImageClientErrorSSEIfStarted(
+					req.Writer,
+					sseKA,
+					http.StatusBadRequest,
+					invalidImageInputCode,
+					invalidImageInputMessage,
+				)
 			} else {
 				writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
 			}
@@ -792,6 +815,10 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 			sdk.LogFieldReason, errDetail,
 		)
 		outcome := failureOutcome(clientStatus, clientBody, clientHeaders, clientDetail, extractRetryAfterHeader(clientHeaders))
+		if imageSafetyRejected || invalidImageInput {
+			outcome.Reason = errDetail
+		}
+		outcome.SafetyRejected = outcome.SafetyRejected || imageSafetyRejected
 		if isImagesRequest(reqPath) {
 			applyImageRateLimitPolicy(&outcome)
 		}
@@ -856,12 +883,27 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 					sdk.LogFieldError, pollErr,
 				)
 				if _, ok := normalizedImageSafetyFailureFromError(pollErr); ok {
-					g.rememberImageSafetyRequest(ctx)
-					outcome := imageSafetyClientOutcome()
+					upstreamReason := pollErr.Error()
+					outcome := imageSafetyClientOutcome(upstreamReason)
 					outcome.Duration = time.Since(start)
 					if sseKA != nil && finalAttempt {
 						sseKA.Stop()
 						writeImageInvalidRequestSSEIfStarted(req.Writer, sseKA)
+					}
+					return outcome, nil
+				}
+				if isInvalidImageInputText(pollErr.Error()) {
+					outcome := invalidImageInputClientOutcome(pollErr.Error())
+					outcome.Duration = time.Since(start)
+					if sseKA != nil && finalAttempt {
+						sseKA.Stop()
+						writeImageClientErrorSSEIfStarted(
+							req.Writer,
+							sseKA,
+							http.StatusBadRequest,
+							invalidImageInputCode,
+							invalidImageInputMessage,
+						)
 					}
 					return outcome, nil
 				}
@@ -1280,10 +1322,13 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 	}
 
 	if result.Err != nil {
+		// 只检查结构化失败帧；成功输出和 completed 事件不参与安全缓存判定。
+		safetyRejected := isCybersecurityRiskRejectionText(string(result.FailedEventRaw))
 		var failure *responsesFailureError
 		kind := sdk.OutcomeUpstreamTransient
 		statusCode := http.StatusBadGateway
 		message := result.Err.Error()
+		reason := message
 		var retryAfter time.Duration
 		code := kind.String()
 		failoverScope := sdk.FailoverScopeNone
@@ -1291,9 +1336,11 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 			kind = failure.outcomeKind()
 			statusCode = failure.StatusCode
 			message = failure.Message
+			reason = failure.upstreamReason()
 			retryAfter = failure.RetryAfter
 			code = failure.codeOrKind()
 			failoverScope = failure.failoverScopeForKind(kind)
+			safetyRejected = safetyRejected || failure.isCybersecurityRisk()
 		}
 		// 流已经提交后不能再由 Core 改写 HTTP 状态或切换 dispatch 候选。
 		// 原生 Responses 流如果还没有转发过上游错误事件，则在流内补一个终止错误事件。
@@ -1313,7 +1360,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 			sdk.LogFieldModel, req.Model,
 			sdk.LogFieldStatus, statusCode,
 			sdk.LogFieldDurationMs, elapsed.Milliseconds(),
-			sdk.LogFieldReason, message,
+			sdk.LogFieldReason, reason,
 			"phase", "ws_response",
 			"ws_event_count", result.EventCount,
 			"ws_token_event_count", result.TokenEventCount,
@@ -1322,12 +1369,13 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 			"stream_output_started", streamOutputStarted(),
 		)
 		outcome := sdk.ForwardOutcome{
-			Kind:          kind,
-			FailoverScope: failoverScope,
-			Upstream:      sdk.UpstreamResponse{StatusCode: statusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
-			Reason:        message,
-			RetryAfter:    retryAfter,
-			Duration:      elapsed,
+			Kind:           kind,
+			FailoverScope:  failoverScope,
+			Upstream:       sdk.UpstreamResponse{StatusCode: statusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
+			Reason:         reason,
+			RetryAfter:     retryAfter,
+			Duration:       elapsed,
+			SafetyRejected: safetyRejected,
 		}
 		// 即使请求失败，上游可能已消耗 token（如 response.failed / response.incomplete），
 		// 仍需计费避免漏洞。
@@ -1423,6 +1471,7 @@ func (s *sseEventWriter) OnRawEvent(eventType string, data []byte) {
 	if s.w == nil || eventType == "" {
 		return
 	}
+	data = normalizeInvalidImageInputEvent(eventType, data)
 	terminalErrorEvent := eventType == "response.failed" || eventType == "error"
 	s.timing.observe(eventType, data)
 	// 过滤不需要转发给客户端的内部事件，并捕获用量
@@ -1456,6 +1505,52 @@ func (s *sseEventWriter) OnRawEvent(eventType string, data []byte) {
 		s.flusher.Flush()
 	}
 }
+
+func normalizeInvalidImageInputEvent(eventType string, data []byte) []byte {
+	if invalidImageInputFailureFromEvent(eventType, data) == nil {
+		return data
+	}
+
+	out := append([]byte(nil), data...)
+	paths := map[string]string{}
+	switch eventType {
+	case "response.failed":
+		paths = map[string]string{
+			"response.error.message": invalidImageInputMessage,
+			"response.error.type":    "invalid_request_error",
+			"response.error.code":    invalidImageInputCode,
+		}
+	case "error":
+		paths = map[string]string{
+			"error.message": invalidImageInputMessage,
+			"error.type":    "invalid_request_error",
+			"error.code":    invalidImageInputCode,
+		}
+	}
+	for path, value := range paths {
+		var err error
+		out, err = sjson.SetBytes(out, path, value)
+		if err != nil {
+			return data
+		}
+	}
+	return out
+}
+
+func invalidImageInputFailureFromEvent(eventType string, data []byte) *responsesFailureError {
+	var failure *responsesFailureError
+	switch eventType {
+	case "response.failed":
+		failure = classifyResponsesFailure(data)
+	case "error":
+		failure = classifyWSErrorEvent(data)
+	}
+	if !isInvalidImageInputFailure(failure) {
+		return nil
+	}
+	return failure
+}
+
 func formatSSEEvent(eventType string, data []byte) string {
 	return fmt.Sprintf("event: %s\ndata: %s\n\n", eventType, strings.ReplaceAll(string(data), "\n", ""))
 }

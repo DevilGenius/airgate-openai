@@ -3,6 +3,7 @@ package gateway
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,7 +22,10 @@ const (
 	responsesFailureKindFamilyTransient    responsesFailureKind = "family_transient"
 	responsesFailureKindServer             responsesFailureKind = "server"
 
-	contextTooLargeMessage = "Your input exceeds the context window of this model. Please adjust your input and try again."
+	contextTooLargeMessage   = "Your input exceeds the context window of this model. Please adjust your input and try again."
+	safetyRejectionCode      = "safety_rejected"
+	invalidImageInputCode    = "invalid_image_data"
+	invalidImageInputMessage = "The image data you provided does not represent a valid image. Please check your input and try again with one of the supported image formats: ['image/jpeg', 'image/png', 'image/gif', 'image/webp']."
 )
 
 type responsesFailureError struct {
@@ -30,6 +34,7 @@ type responsesFailureError struct {
 	AnthropicErrorType string
 	Code               string
 	Message            string
+	UpstreamMessage    string
 	RetryAfter         time.Duration
 	FailoverScope      sdk.FailoverScope
 }
@@ -59,21 +64,36 @@ func (e *responsesFailureError) Error() string {
 	if e == nil {
 		return ""
 	}
+	message := e.upstreamReason()
 	switch e.Kind {
 	case responsesFailureKindContinuationAnchor:
-		return "上游续链锚点失效: " + e.Message
+		return "上游续链锚点失效: " + message
 	case responsesFailureKindClient:
-		return "上游请求无效: " + e.Message
+		return "上游请求无效: " + message
 	case responsesFailureKindRateLimited:
 		if e.RetryAfter > 0 {
-			return fmt.Sprintf("上游速率限制(建议 %s 后重试): %s", e.RetryAfter, e.Message)
+			return fmt.Sprintf("上游速率限制(建议 %s 后重试): %s", e.RetryAfter, message)
 		}
-		return "上游速率限制: " + e.Message
+		return "上游速率限制: " + message
 	case responsesFailureKindFamilyTransient:
-		return "上游模型家族暂时过载: " + e.Message
+		return "上游模型家族暂时过载: " + message
 	default:
-		return "上游错误: " + e.Message
+		return "上游错误: " + message
 	}
+}
+
+func (e *responsesFailureError) upstreamReason() string {
+	if e == nil {
+		return ""
+	}
+	if message := strings.TrimSpace(e.UpstreamMessage); message != "" {
+		return message
+	}
+	return e.Message
+}
+
+func isInvalidImageInputFailure(failure *responsesFailureError) bool {
+	return failure != nil && failure.Code == invalidImageInputCode
 }
 
 func (e *responsesFailureError) shouldReturnClientError() bool {
@@ -99,6 +119,10 @@ func (e *responsesFailureError) codeOrKind() string {
 		return e.Code
 	}
 	return string(e.Kind)
+}
+
+func (e *responsesFailureError) isCybersecurityRisk() bool {
+	return e != nil && e.Code == cybersecurityRiskErrorCode
 }
 
 func classifyResponsesFailure(data []byte) *responsesFailureError {
@@ -251,6 +275,15 @@ func classifyResponsesError(errType, errCode, msg string) *responsesFailureError
 			Code:               "context_too_large",
 			Message:            contextTooLargeMessage,
 		}
+	case isInvalidImageInputText(errType, errCode, msg):
+		return &responsesFailureError{
+			Kind:               responsesFailureKindClient,
+			StatusCode:         http.StatusBadRequest,
+			AnthropicErrorType: "invalid_request_error",
+			Code:               invalidImageInputCode,
+			Message:            invalidImageInputMessage,
+			UpstreamMessage:    msg,
+		}
 	case isModelUnsupportedText(errType, errCode, msg):
 		return &responsesFailureError{
 			Kind:               responsesFailureKindClient,
@@ -259,12 +292,20 @@ func classifyResponsesError(errType, errCode, msg string) *responsesFailureError
 			Message:            msg,
 			FailoverScope:      sdk.FailoverScopeDispatchCandidate,
 		}
+	case isCybersecurityRiskRejectionText(errType, errCode, msg):
+		return &responsesFailureError{
+			Kind:               responsesFailureKindClient,
+			StatusCode:         http.StatusBadRequest,
+			AnthropicErrorType: "invalid_request_error",
+			Code:               cybersecurityRiskErrorCode,
+			Message:            cybersecurityRiskMessage,
+		}
 	case isSafetyRejectionText(errType, errCode, msg):
 		return &responsesFailureError{
 			Kind:               responsesFailureKindClient,
 			StatusCode:         http.StatusBadRequest,
 			AnthropicErrorType: "invalid_request_error",
-			Code:               "safety_rejected",
+			Code:               safetyRejectionCode,
 			Message:            msg,
 		}
 	case containsAny(errType, errCode, msg, "invalid_prompt", "invalid_request", "input_too_long", "is not supported", "unsupported", "model_not_found", "model not found", "invalid model", "invalid_model", "does not exist"):
@@ -298,6 +339,52 @@ func classifyResponsesError(errType, errCode, msg string) *responsesFailureError
 			Message:            msg,
 		}
 	}
+}
+
+func isInvalidImageInputText(parts ...string) bool {
+	for _, part := range parts {
+		switch strings.ToLower(strings.TrimSpace(part)) {
+		case invalidImageInputCode, "invalid_image_format", "invalid_image":
+			return true
+		}
+	}
+	combined := strings.ToLower(strings.Join(parts, " "))
+	if strings.TrimSpace(combined) == "" {
+		return false
+	}
+	for _, signal := range []string{
+		"does not represent a valid image",
+		"unsupported image format",
+		"image format is not supported",
+		"could not decode image",
+		"couldn't decode image",
+		"cannot decode image",
+		"failed to decode image",
+		"image data is invalid",
+		"invalid image data",
+	} {
+		if strings.Contains(combined, signal) {
+			return true
+		}
+	}
+	return strings.Contains(combined, "image") &&
+		strings.Contains(combined, "supported image formats")
+}
+
+func normalizeInvalidImageInputUpstreamError(statusCode int, body []byte, headers http.Header, detail string) (int, []byte, http.Header, string, bool) {
+	message, errType, errCode := parseUpstreamTaskErrorBody(statusCode, body)
+	if !isInvalidImageInputText(errType, errCode, message, detail) {
+		return statusCode, body, headers, detail, false
+	}
+	normalizedBody := openAIErrorJSON("invalid_request_error", invalidImageInputCode, invalidImageInputMessage)
+	normalizedHeaders := headers.Clone()
+	if normalizedHeaders == nil {
+		normalizedHeaders = make(http.Header)
+	}
+	normalizedHeaders.Del("Content-Encoding")
+	normalizedHeaders.Set("Content-Type", "application/json")
+	normalizedHeaders.Set("Content-Length", strconv.Itoa(len(normalizedBody)))
+	return http.StatusBadRequest, normalizedBody, normalizedHeaders, invalidImageInputMessage, true
 }
 
 func isFunctionCallOutputWithoutCallError(parts ...string) bool {
@@ -390,6 +477,9 @@ func isEncryptedContentVerificationError(parts ...string) bool {
 // 这类提示性 400 文案。policy 一词单独出现不足以作为拒绝信号，必须与 violation
 // 或明确动词组合（见下面短语清单）。
 func isSafetyRejectionText(values ...string) bool {
+	if isCybersecurityRiskRejectionText(values...) {
+		return true
+	}
 	text := strings.ToLower(strings.Join(values, " "))
 	if text == "" {
 		return false

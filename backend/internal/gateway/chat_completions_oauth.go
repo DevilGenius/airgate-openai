@@ -139,6 +139,10 @@ func (s *chatCompletionsStreamWriter) OnRawEvent(eventType string, data []byte) 
 		return
 	}
 	s.timing.observe(eventType, data)
+	if failure := invalidImageInputFailureFromEvent(eventType, data); failure != nil {
+		s.writeClientError(failure)
+		return
+	}
 
 	// 捕获内部事件：用量快照与会话状态，但不转发给客户端
 	switch eventType {
@@ -164,6 +168,20 @@ func (s *chatCompletionsStreamWriter) OnRawEvent(eventType string, data []byte) 
 	if !s.writeChunks(chunks) {
 		return
 	}
+	if s.flusher != nil {
+		s.flusher.Flush()
+	}
+}
+
+func (s *chatCompletionsStreamWriter) writeClientError(failure *responsesFailureError) {
+	if s == nil || s.w == nil || failure == nil || !s.wrote {
+		return
+	}
+	body := openAIErrorJSON("invalid_request_error", failure.Code, failure.Message)
+	if _, err := fmt.Fprintf(s.w, "data: %s\n\n", body); err != nil {
+		return
+	}
+	s.wrote = true
 	if s.flusher != nil {
 		s.flusher.Flush()
 	}

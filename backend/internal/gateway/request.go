@@ -200,6 +200,7 @@ func buildAPIKeyURL(account *sdk.Account, reqPath string) string {
 //  4. 已有 previous_response_id 时移除重复的加密 replay item
 //  5. input 规范化（/v1/responses 的 string input → list，messages → input 转换）
 //  6. Responses API 强制禁用上游存储（store=false）
+//  7. 删除外层结构明显无效的 reasoning encrypted_content
 func preprocessRequestBody(body []byte, model, reqPath string, headers ...http.Header) []byte {
 	if len(body) == 0 {
 		return body
@@ -215,6 +216,7 @@ func preprocessRequestBody(body []byte, model, reqPath string, headers ...http.H
 
 	result := body
 	isCompactRequest := isResponsesCompactRequestPath(reqPath)
+	isResponsesRequest := isResponsesRequestPath(reqPath)
 	targetModel := model
 	if targetModel != "" {
 		bodyModel := gjson.GetBytes(result, "model").String()
@@ -238,12 +240,16 @@ func preprocessRequestBody(body []byte, model, reqPath string, headers ...http.H
 		}
 		return result
 	}
+	hasEncryptedContent := isResponsesRequest && bytes.Contains(result, []byte(`"encrypted_content"`))
 
-	if isResponsesRequestPath(reqPath) {
-		result = sanitizeAnchoredEncryptedReplayBody(result)
+	if hasEncryptedContent {
+		result = sanitizeAnchoredEncryptedReplayBodyKnownPresent(result)
 	}
 	result = normalizeResponsesInput(result, reqPath)
 	result = forceResponsesStoreFalse(result, reqPath)
+	if hasEncryptedContent {
+		result = sanitizeResponsesReasoningEncryptedContentKnownPresent(result)
+	}
 	return result
 }
 
@@ -305,10 +311,10 @@ func preserveOpenAIConversationImages(body []byte) []byte {
 // 对完整 input 列表中的 system item，沿用 Chat Completions 转换策略：提取为
 // top-level instructions，避免上游 Codex/Responses 兼容层拒绝 system message。
 //
-// 对没有 previous_response_id 的无状态 reasoning replay，保留
-// encrypted_content/content/summary 等上下文字段，仅移除 store=false 下会触发
-// 服务端存储查找的 rs_* id，并补齐上游要求的 summary。已有续链锚点的请求会在
-// 外层移除重复的加密 replay item。
+// 对没有 previous_response_id 的无状态 reasoning replay，保留结构有效的
+// encrypted_content 以及 content/summary 等上下文字段，仅移除 store=false 下会
+// 触发服务端存储查找的 rs_* id，并补齐上游要求的 summary。已有续链锚点的请求会
+// 在外层移除重复的加密 replay item；外层结构无效的密文由请求预处理 sanitizer 删除。
 func normalizeResponsesInput(body []byte, reqPath string) []byte {
 	if !isResponsesRequestPath(reqPath) {
 		return body

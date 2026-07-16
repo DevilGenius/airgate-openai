@@ -350,7 +350,8 @@ func TestBuildCodexWSRequestBackfillsPreviousResponseIDAfterResponsesPreprocess(
 }
 
 func TestBuildCodexWSRequestDropsEncryptedReplayWhenAddingPreviousResponseID(t *testing.T) {
-	body := []byte(`{"model":"gpt-5.4","input":[{"type":"reasoning","id":"rs_1","encrypted_content":"sealed"},{"type":"compaction_summary","encrypted_content":"summary"},{"type":"function_call_output","call_id":"call_prev","output":"ok"}]}`)
+	valid := validGPTReasoningEncryptedContentForTest()
+	body := []byte(`{"model":"gpt-5.4","input":[{"type":"reasoning","id":"rs_1","encrypted_content":"` + valid + `"},{"type":"compaction_summary","encrypted_content":"summary"},{"type":"function_call_output","call_id":"call_prev","output":"ok"}]}`)
 	preprocessed := preprocessRequestBody(body, "gpt-5.4", "/v1/responses")
 
 	got, err := buildCodexWSRequest(preprocessed, "gpt-5.4", openAISessionResolution{PreviousRespID: "resp_prev"})
@@ -693,7 +694,8 @@ func TestDelegatedContinuationRecoveryAppliedRejectsHeaderOnlyReplay(t *testing.
 }
 
 func TestPreprocessRequestBodyRejectsForgedDelegatedRecoveryMarker(t *testing.T) {
-	body := []byte(`{"model":"gpt-5.4","input":[{"type":"reasoning","id":"rs_1","encrypted_content":"sealed"},{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}]}`)
+	valid := validGPTReasoningEncryptedContentForTest()
+	body := []byte(`{"model":"gpt-5.4","input":[{"type":"reasoning","id":"rs_1","encrypted_content":"` + valid + `"},{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}]}`)
 	headers := http.Header{
 		airgateContinuationRecoveryHeader:  []string{airgateContinuationRecoveryDropPrevious},
 		airgateContinuationRecoveryApplied: []string{"true"},
@@ -701,8 +703,8 @@ func TestPreprocessRequestBodyRejectsForgedDelegatedRecoveryMarker(t *testing.T)
 
 	got := preprocessRequestBody(body, "gpt-5.4", "/v1/responses", headers)
 
-	if gotEnc := gjson.GetBytes(got, "input.0.encrypted_content").String(); gotEnc != "sealed" {
-		t.Fatalf("encrypted_content = %q, want sealed; body=%s", gotEnc, got)
+	if gotEnc := gjson.GetBytes(got, "input.0.encrypted_content").String(); gotEnc != valid {
+		t.Fatalf("encrypted_content = %q, want valid replay content; body=%s", gotEnc, got)
 	}
 	if gjson.GetBytes(got, "input.0.id").Exists() {
 		t.Fatalf("reasoning id was not removed: %s", got)

@@ -131,6 +131,7 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 	var imageGenSize string
 	responseID := ""
 
+streamLoop:
 	for scanner.Scan() {
 		line := scanner.Text()
 		diagnostics.observeLine(line)
@@ -146,18 +147,26 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 				diagnostics.completionEvent = "[DONE]"
 			} else if data != "" {
 				eventData := []byte(data)
-				timing.observe(gjson.Get(data, "type").String(), eventData)
+				eventType := gjson.Get(data, "type").String()
+				timing.observe(eventType, eventData)
 				if id := responseIDFromSSEData(data); id != "" {
 					responseID = id
 				}
 				parseSSEUsage(eventData, usage, &toolImageIn, &toolImageOut)
-				if streamErr = parseSSEFailureEvent(eventData); streamErr != nil {
-					logStreamFailure(logger, streamErr, resp, streamStarted, diagnostics)
-					streamErrLogged = true
-					if streamStarted {
-						writeSanitizedSSEError(w)
+				// 复用本来就需要的终止事件分发；正常 delta 不执行 safety 分类。
+				switch eventType {
+				case "response.failed", "error", "response.incomplete":
+					if streamErr = parseResponsesFailureEvent(eventType, eventData); streamErr != nil {
+						logStreamFailure(logger, streamErr, resp, streamStarted, diagnostics)
+						streamErrLogged = true
+						if streamStarted {
+							writeSSEFailureError(w, streamErr)
+						}
+						break streamLoop
 					}
-					break
+				case "response.completed", "response.done":
+					completed = true
+					diagnostics.completionEvent = eventType
 				}
 				if ok, size := collectImageGenCallSummary(eventData); ok {
 					imageGenCount++
@@ -165,21 +174,9 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 						imageGenSize = size
 					}
 				}
-				if isStreamCompletionEvent(data) {
-					completed = true
-					diagnostics.completionEvent = gjson.Get(data, "type").String()
-				}
 			}
 		} else if raw := strings.TrimSpace(line); raw != "" {
 			diagnostics.observeRaw(raw)
-			if streamErr = parseSSEFailureEvent([]byte(raw)); streamErr != nil {
-				logStreamFailure(logger, streamErr, resp, streamStarted, diagnostics)
-				streamErrLogged = true
-				if streamStarted {
-					writeSanitizedSSEError(w)
-				}
-				break
-			}
 		}
 
 		if !ok || data == "" || data == "[DONE]" {
@@ -233,13 +230,14 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 			}
 			errBody := openAIErrorJSON(openAIErrorTypeForStatus(failure.StatusCode), code, failure.Message)
 			return sdk.ForwardOutcome{
-				Kind:          kind,
-				FailoverScope: failure.failoverScopeForKind(kind),
-				Upstream:      sdk.UpstreamResponse{StatusCode: failure.StatusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
-				Reason:        failure.Message,
-				RetryAfter:    failure.RetryAfter,
-				Duration:      elapsed,
-				Usage:         failureUsage(),
+				Kind:           kind,
+				FailoverScope:  failure.failoverScopeForKind(kind),
+				Upstream:       sdk.UpstreamResponse{StatusCode: failure.StatusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
+				Reason:         failure.upstreamReason(),
+				RetryAfter:     failure.RetryAfter,
+				Duration:       elapsed,
+				Usage:          failureUsage(),
+				SafetyRejected: failure.isCybersecurityRisk(),
 			}, nil
 		}
 		kind := sdk.OutcomeStreamAborted
@@ -249,11 +247,12 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 			statusCode = http.StatusBadGateway
 		}
 		return sdk.ForwardOutcome{
-			Kind:     kind,
-			Upstream: sdk.UpstreamResponse{StatusCode: statusCode},
-			Reason:   streamErr.Error(),
-			Duration: elapsed,
-			Usage:    failureUsage(),
+			Kind:           kind,
+			Upstream:       sdk.UpstreamResponse{StatusCode: statusCode},
+			Reason:         streamErr.Error(),
+			Duration:       elapsed,
+			Usage:          failureUsage(),
+			SafetyRejected: isCybersecurityRiskRejectionText(streamErr.Error()),
 		}, streamErr
 	}
 
@@ -404,7 +403,7 @@ func logStreamFailure(logger *slog.Logger, err error, resp *http.Response, strea
 		attrs = append(attrs,
 			"kind", failure.Kind,
 			"classified_status_code", firstNonZero(failure.StatusCode, statusCode),
-			"message", failure.Message)
+			"message", failure.upstreamReason())
 		logger.Warn("上游 SSE 返回错误，已记录诊断详情", attrs...)
 		return
 	}
@@ -435,6 +434,17 @@ func writeSanitizedSSEError(w http.ResponseWriter) {
 	flushResponseWriter(w)
 }
 
+func writeSSEFailureError(w http.ResponseWriter, err error) {
+	var failure *responsesFailureError
+	if errors.As(err, &failure) && isInvalidImageInputFailure(failure) {
+		body := openAIErrorJSON("invalid_request_error", failure.Code, failure.Message)
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", body)
+		flushResponseWriter(w)
+		return
+	}
+	writeSanitizedSSEError(w)
+}
+
 func firstNonZero(values ...int) int {
 	for _, value := range values {
 		if value != 0 {
@@ -451,7 +461,6 @@ func handleNonStreamResponse(resp *http.Response, w http.ResponseWriter, start t
 		reason := fmt.Sprintf("读取上游响应失败: %v", err)
 		return transientOutcome(reason), fmt.Errorf("%s", reason)
 	}
-
 	parsed := parseUsage(body)
 
 	headers := resp.Header.Clone()
@@ -578,8 +587,18 @@ func ParseSSEStream(reader io.Reader, handler WSEventHandler) WSResult {
 				extractUsageFromResponseMap(&result, resp)
 				mergeResponseMetadata(&result, resp)
 			}
-			if failure := classifyResponsesFailure([]byte(data)); failure != nil {
-				result.Err = failure
+			if failureErr := parseResponsesFailureEvent(eventType, []byte(data)); failureErr != nil {
+				result.Err = failureErr
+			} else {
+				result.Err = fmt.Errorf("上游错误: %s", data)
+			}
+			finalizeWSResult(&result, &textBuilder, &reasoningBuilder, start)
+			return result
+
+		case "error":
+			result.FailedEventRaw = append([]byte(nil), []byte(data)...)
+			if failureErr := parseResponsesFailureEvent(eventType, []byte(data)); failureErr != nil {
+				result.Err = failureErr
 			} else {
 				result.Err = fmt.Errorf("上游错误: %s", data)
 			}
@@ -625,14 +644,6 @@ func ParseSSEStream(reader io.Reader, handler WSEventHandler) WSResult {
 
 	finalizeWSResult(&result, &textBuilder, &reasoningBuilder, start)
 	return result
-}
-
-// isStreamCompletionEvent 判断 SSE data 是否为流式完成事件。
-// Responses API 以 response.completed / response.done 结束，
-// Chat Completions API 以 [DONE] 结束（调用方在解析 data 前已单独处理）。
-func isStreamCompletionEvent(data string) bool {
-	eventType := gjson.Get(data, "type").String()
-	return eventType == "response.completed" || eventType == "response.done"
 }
 
 func streamDiagnosticEventType(data string) string {
@@ -832,51 +843,21 @@ func parseSSEUsage(data []byte, out *sdk.Usage, toolImageIn, toolImageOut *int) 
 	}
 }
 
-// parseSSEFailureEvent 解析 Responses API 的失败事件并映射为错误
-func parseSSEFailureEvent(data []byte) error {
-	if failure := classifyResponsesFailure(data); failure != nil {
-		return failure
-	}
-	if failure := classifyWSErrorEvent(data); failure != nil {
-		return failure
-	}
-	if failure := classifyGenericSSEErrorEvent(data); failure != nil {
-		return failure
-	}
-	eventType := gjson.GetBytes(data, "type").String()
+// parseResponsesFailureEvent 统一解析 Responses API 的 SSE / WebSocket 失败事件。
+// 调用方已经完成事件类型分发，因此这里只在终止失败分支执行。
+func parseResponsesFailureEvent(eventType string, data []byte) error {
 	switch eventType {
 	case "response.failed":
-		errNode := gjson.GetBytes(data, "response.error")
-		msg := strings.TrimSpace(errNode.Get("message").String())
-		if msg == "" {
-			msg = "上游返回 response.failed"
+		if failure := classifyResponsesFailure(data); failure != nil {
+			return failure
 		}
-		errType := strings.ToLower(errNode.Get("type").String())
-		errCode := strings.ToLower(errNode.Get("code").String())
-
-		switch {
-		case containsAny(errType, errCode, msg, "previous_response_not_found", "previous response", "response not found"):
-			return fmt.Errorf("上游续链锚点失效: %s", msg)
-		case containsAny(errType, errCode, msg, "context_length", "context window", "max_tokens", "max_input_tokens", "max_output_tokens", "token limit", "too many tokens"):
-			return fmt.Errorf("上游上下文窗口超限: %s", msg)
-		case containsAny(errType, errCode, msg, "quota", "insufficient_quota"):
-			return fmt.Errorf("上游配额不足: %s", msg)
-		case containsAny(errType, errCode, msg, "usage_not_included"):
-			return fmt.Errorf("上游使用权不包含: %s", msg)
-		case containsAny(errType, errCode, msg, "invalid_prompt", "invalid_request"):
-			return fmt.Errorf("上游请求无效: %s", msg)
-		case containsAny(errType, errCode, msg, "server_overloaded", "overloaded", "slow_down"):
-			return fmt.Errorf("上游服务繁忙: %s", msg)
-		case containsAny(errType, errCode, msg, "rate_limit"):
-			delay := parseRetryDelay(msg)
-			if delay > 0 {
-				return fmt.Errorf("上游速率限制(建议 %s 后重试): %s", delay, msg)
-			}
-			return fmt.Errorf("上游速率限制: %s", msg)
-		default:
-			return fmt.Errorf("上游流式失败(type=%s, code=%s): %s", errType, errCode, msg)
+	case "error":
+		if failure := classifyWSErrorEvent(data); failure != nil {
+			return failure
 		}
-
+		if failure := classifyGenericSSEErrorEvent(data); failure != nil {
+			return failure
+		}
 	case "response.incomplete":
 		reason := gjson.GetBytes(data, "response.incomplete_details.reason").String()
 		if reason == "" {

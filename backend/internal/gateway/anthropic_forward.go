@@ -470,16 +470,19 @@ func (g *OpenAIGateway) handleAnthropicNonStreamFromResponses(
 			kind := failure.outcomeKind()
 			body := anthropicErrorJSONWithCode(failure.AnthropicErrorType, failure.Code, failure.Message)
 			return sdk.ForwardOutcome{
-				Kind:          kind,
-				FailoverScope: failure.failoverScopeForKind(kind),
-				Upstream:      sdk.UpstreamResponse{StatusCode: failure.StatusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: body},
-				Reason:        failure.Message,
-				RetryAfter:    failure.RetryAfter,
-				Duration:      time.Since(start),
+				Kind:           kind,
+				FailoverScope:  failure.failoverScopeForKind(kind),
+				Upstream:       sdk.UpstreamResponse{StatusCode: failure.StatusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: body},
+				Reason:         failure.upstreamReason(),
+				RetryAfter:     failure.RetryAfter,
+				Duration:       time.Since(start),
+				SafetyRejected: failure.isCybersecurityRisk(),
 			}, nil
 		}
 		// 非 *responsesFailureError 的 err（典型：SSE EOF 提前断流）→ UpstreamTransient，可 failover。
-		return transientOutcome(wsResult.Err.Error()), wsResult.Err
+		outcome := transientOutcome(wsResult.Err.Error())
+		outcome.SafetyRejected = isCybersecurityRiskRejectionText(string(wsResult.FailedEventRaw), wsResult.Err.Error())
+		return outcome, wsResult.Err
 	}
 	if len(wsResult.CompletedEventRaw) == 0 {
 		reason := "未收到 response.completed 事件"
@@ -571,11 +574,12 @@ func (g *OpenAIGateway) writeAnthropicUpstreamError(
 	errBody := anthropicErrorJSON(anthropicErrorType(statusCode), errMsg)
 
 	outcome := sdk.ForwardOutcome{
-		Kind:       kind,
-		Upstream:   sdk.UpstreamResponse{StatusCode: statusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
-		Reason:     errMsg,
-		RetryAfter: retryAfter,
-		Duration:   time.Since(start),
+		Kind:           kind,
+		Upstream:       sdk.UpstreamResponse{StatusCode: statusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
+		Reason:         errMsg,
+		RetryAfter:     retryAfter,
+		Duration:       time.Since(start),
+		SafetyRejected: isCybersecurityRiskRejectionText(errMsg, string(body)),
 	}
 
 	if kind == sdk.OutcomeAccountRateLimited || kind == sdk.OutcomeAccountDead || kind == sdk.OutcomeUpstreamTransient {

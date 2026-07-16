@@ -181,6 +181,8 @@ func bridgeWebSocket(ctx context.Context, clientConn sdk.WebSocketConn, upstream
 			wsType := websocket.TextMessage
 			if msgType == sdk.WSMessageBinary {
 				wsType = websocket.BinaryMessage
+			} else {
+				data = sanitizeResponsesWebSocketClientMessage(data)
 			}
 			if err := writeWebSocketMessage(upstreamConn, wsType, data); err != nil {
 				reportWebSocketBridgeError(errCh, &webSocketBridgeError{op: "写入上游消息", err: err})

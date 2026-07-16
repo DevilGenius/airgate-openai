@@ -29,6 +29,7 @@ type OpenAIGateway struct {
 	transportPool *TransportPool
 	tasks         *TaskRegistry
 	imageSafety   imageSafetyRequestCache
+	textSafety    safetyRequestCache
 }
 
 const oauthUsageProbeModel = "gpt-5.4-mini"
@@ -115,12 +116,23 @@ func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (s
 	}
 
 	method, path := resolveAPIKeyRoute(req)
+	imageRequest := isImagesRequest(path)
 	logger.Debug("plugin_request_received",
 		sdk.LogFieldMethod, method,
 		sdk.LogFieldPath, path,
 		sdk.LogFieldModel, req.Model,
 		"stream", req.Stream,
 	)
+	var cachedOutcome *sdk.ForwardOutcome
+	ctx, cachedOutcome = g.checkTextSafetyRequest(ctx, req, method, path)
+	if cachedOutcome != nil {
+		logger.Info("text_safety_request_cache_hit",
+			sdk.LogFieldModel, req.Model,
+			sdk.LogFieldPath, path,
+			"retry_after_ms", cachedOutcome.RetryAfter.Milliseconds(),
+		)
+		return *cachedOutcome, nil
+	}
 
 	// 诊断：Info 级别打印代理状态，让运维 / 开发者直观确认绑定代理是否到了插件这一层。
 	// proxy_target 已 redact 掉 user:pass，仅保留 protocol://host:port。
@@ -138,8 +150,25 @@ func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (s
 		"via_proxy", proxyURL != "",
 		"proxy_target", redactProxyURL(proxyURL),
 	)
+	if imageRequest {
+		ctx = withImageSafetyRequestHashCapture(ctx)
+	}
 
 	outcome, err := g.forwardHTTP(ctx, req)
+	// 各同步响应处理器只负责识别上游安全拒绝；缓存与日志统一在入口收敛一次。
+	if outcome.SafetyRejected {
+		logEvent := "text_safety_request_cached"
+		if imageRequest {
+			g.rememberImageSafetyRequest(ctx, outcome.Reason)
+			logEvent = "image_safety_request_cached"
+		} else {
+			g.rememberTextSafetyRequest(ctx)
+		}
+		logger.Info(logEvent,
+			sdk.LogFieldModel, req.Model,
+			sdk.LogFieldPath, path,
+		)
+	}
 	if traceCapture != nil && shouldAttachFinalErrorDiagnostic(outcome, err) {
 		outcome.FinalErrorDiagnostic = traceCapture.snapshot()
 	}
@@ -630,6 +659,21 @@ func buildCodexUsageWindows(snapshot *CodexUsageSnapshot, limitName string, now 
 // HandleRequest 处理 Core 透传的自定义请求（实现 sdk.RequestHandler 接口）
 func (g *OpenAIGateway) HandleRequest(ctx context.Context, _, path, _ string, _ http.Header, body []byte) (int, http.Header, []byte, error) {
 	switch path {
+	case "runtime/safety-cache":
+		now := time.Now()
+		textSize, textCapacity := g.textSafety.stats(now)
+		imageSize, imageCapacity := g.imageSafety.stats(now)
+		return http.StatusOK, nil, jsonMarshal(map[string]map[string]int{
+			"text": {
+				"size":     textSize,
+				"capacity": textCapacity,
+			},
+			"image": {
+				"size":     imageSize,
+				"capacity": imageCapacity,
+			},
+		}), nil
+
 	case "accounts/quota":
 		var req struct {
 			ID          int64             `json:"id"`

@@ -73,3 +73,25 @@ func TestSSEEventWriterSynthesizesFailureAfterCreated(t *testing.T) {
 		}
 	}
 }
+
+func TestSSEEventWriterNormalizesInvalidImageFailure(t *testing.T) {
+	t.Parallel()
+
+	recorder := httptest.NewRecorder()
+	writer := &sseEventWriter{
+		w:       recorder,
+		flusher: recorder,
+		timing:  newResponseEventTiming(time.Now()),
+	}
+	upstreamMessage := "The image data you provided does not represent a valid image. Please check your input and try again with one of the supported image formats: ['image/jpeg', 'image/png', 'image/gif', 'image/webp']."
+
+	writer.OnRawEvent("response.created", []byte(`{"type":"response.created","response":{"id":"resp_image"}}`))
+	writer.OnRawEvent("response.failed", []byte(`{"type":"response.failed","response":{"id":"resp_image","status":"failed","error":{"type":"invalid_request_error","message":"`+upstreamMessage+`"}}}`))
+
+	got := recorder.Body.String()
+	for _, want := range []string{invalidImageInputCode, invalidImageInputMessage} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("stream = %q, want contain %q", got, want)
+		}
+	}
+}

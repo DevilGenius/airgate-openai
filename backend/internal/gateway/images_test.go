@@ -324,6 +324,33 @@ func TestWriteImageOutcomeErrorSSEUsesNormalizedSafetyError(t *testing.T) {
 	}
 }
 
+func TestWriteImageOutcomeErrorSSEUsesInvalidImageInputError(t *testing.T) {
+	w := httptest.NewRecorder()
+	sseKA := &ssePingKeepAlive{w: w}
+	sseKA.wrote.Store(true)
+	body := buildImagesErrorBodyWithCode(http.StatusBadRequest, invalidImageInputCode, invalidImageInputMessage)
+	outcome := sdk.ForwardOutcome{
+		Kind: sdk.OutcomeClientError,
+		Upstream: sdk.UpstreamResponse{
+			StatusCode: http.StatusBadRequest,
+			Body:       body,
+		},
+	}
+	if shouldRetryImageFallback(outcome, nil) {
+		t.Fatal("invalid image input should not use image size fallback")
+	}
+
+	writeImageOutcomeErrorSSEIfStarted(w, sseKA, outcome)
+
+	got := w.Body.String()
+	if !strings.Contains(got, `"code":"`+invalidImageInputCode+`"`) || !strings.Contains(got, invalidImageInputMessage) {
+		t.Fatalf("body = %q, want invalid image input error", got)
+	}
+	if !strings.Contains(got, "data: [DONE]") {
+		t.Fatalf("body = %q, want done marker", got)
+	}
+}
+
 func TestHandleImagesResponse_StreamReturnsOfficialCompletedEvent(t *testing.T) {
 	body := `{"created":1713833628,"data":[{"b64_json":"iVBORw0"}],"usage":{"input_tokens":1,"output_tokens":2}}`
 	resp := &http.Response{

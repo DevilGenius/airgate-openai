@@ -281,6 +281,13 @@ func classifyUpstreamTaskError(statusCode int, body []byte) *TaskError {
 			Message: imageSafetyInvalidRequestMessage,
 		}
 	}
+	if isInvalidImageInputText(errType, errCode, msg) {
+		return &TaskError{
+			Type:    "invalid_request",
+			Code:    invalidImageInputCode,
+			Message: invalidImageInputMessage,
+		}
+	}
 
 	switch {
 	case isOverloadedText(errType, errCode, msg):

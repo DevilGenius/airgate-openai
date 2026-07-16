@@ -54,7 +54,8 @@ func successOutcome(statusCode int, body []byte, headers http.Header, usage *sdk
 }
 
 // failureOutcome 从 HTTP 状态码 + 错误消息分类并构造非 Success 的 Outcome。
-// 会原样保留 Upstream（Body / Headers / StatusCode）供 Core 在 ClientError 路径下透传。
+// 会原样保留 Upstream（Body / Headers / StatusCode）供 Core 在 ClientError 路径下透传，
+// 并把已识别的 cybersecurity risk 拒绝记录到 SafetyRejected。
 func failureOutcome(statusCode int, body []byte, headers http.Header, message string, retryAfter time.Duration) sdk.ForwardOutcome {
 	kind := classifyHTTPFailure(statusCode, message)
 	reason := message
@@ -62,8 +63,9 @@ func failureOutcome(statusCode int, body []byte, headers http.Header, message st
 		reason = fmt.Sprintf("HTTP %d: %s", statusCode, message)
 	}
 	return sdk.ForwardOutcome{
-		Kind:          kind,
-		FailoverScope: failoverScopeForHTTPFailure(kind, message),
+		Kind:           kind,
+		FailoverScope:  failoverScopeForHTTPFailure(kind, message),
+		SafetyRejected: isCybersecurityRiskRejectionText(message, string(body)),
 		Upstream: sdk.UpstreamResponse{
 			StatusCode: statusCode,
 			Headers:    headers,
