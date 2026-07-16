@@ -22,14 +22,15 @@ import (
 // OpenAIGateway OpenAI 网关插件（SimpleGatewayPlugin 实现）
 // 核心处理鉴权、账号选择、计费、限流和并发控制，插件只负责协议适配与上游转发。
 type OpenAIGateway struct {
-	logger        *slog.Logger
-	ctx           sdk.PluginContext
-	host          sdk.Host
-	snapshotStore *codexUsagePersistenceStore
-	transportPool *TransportPool
-	tasks         *TaskRegistry
-	imageSafety   imageSafetyRequestCache
-	textSafety    safetyRequestCache
+	logger                *slog.Logger
+	ctx                   sdk.PluginContext
+	host                  sdk.Host
+	snapshotStore         *codexUsagePersistenceStore
+	transportPool         *TransportPool
+	tasks                 *TaskRegistry
+	imageSafety           imageSafetyRequestCache
+	textSafety            safetyRequestCache
+	encryptedContentRetry safetyRequestCache
 }
 
 const oauthUsageProbeModel = "gpt-5.4-mini"
@@ -133,6 +134,12 @@ func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (s
 		)
 		return *cachedOutcome, nil
 	}
+	if g.applyInvalidEncryptedContentRetry(req, path) {
+		logger.Info("invalid_encrypted_content_retry_sanitized",
+			sdk.LogFieldModel, req.Model,
+			sdk.LogFieldPath, path,
+		)
+	}
 
 	// 诊断：Info 级别打印代理状态，让运维 / 开发者直观确认绑定代理是否到了插件这一层。
 	// proxy_target 已 redact 掉 user:pass，仅保留 protocol://host:port。
@@ -155,6 +162,12 @@ func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (s
 	}
 
 	outcome, err := g.forwardHTTP(ctx, req)
+	if isInvalidEncryptedContentOutcome(outcome, err) && g.cacheInvalidEncryptedContentRetry(req, path) {
+		logger.Info("invalid_encrypted_content_retry_cached",
+			sdk.LogFieldModel, req.Model,
+			sdk.LogFieldPath, path,
+		)
+	}
 	// 各同步响应处理器只负责识别上游安全拒绝；缓存与日志统一在入口收敛一次。
 	if outcome.SafetyRejected {
 		logEvent := "text_safety_request_cached"
@@ -663,6 +676,10 @@ func (g *OpenAIGateway) HandleRequest(ctx context.Context, _, path, _ string, _ 
 		now := time.Now()
 		textSize, textCapacity := g.textSafety.stats(now)
 		imageSize, imageCapacity := g.imageSafety.stats(now)
+		encryptedRetrySize, encryptedRetryCapacity := g.encryptedContentRetry.statsWithCapacity(
+			now,
+			invalidEncryptedContentRetryCacheMaxEntries,
+		)
 		return http.StatusOK, nil, jsonMarshal(map[string]map[string]int{
 			"text": {
 				"size":     textSize,
@@ -671,6 +688,10 @@ func (g *OpenAIGateway) HandleRequest(ctx context.Context, _, path, _ string, _ 
 			"image": {
 				"size":     imageSize,
 				"capacity": imageCapacity,
+			},
+			"encrypted_content_retry": {
+				"size":     encryptedRetrySize,
+				"capacity": encryptedRetryCapacity,
 			},
 		}), nil
 

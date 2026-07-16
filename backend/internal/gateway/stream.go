@@ -147,7 +147,7 @@ streamLoop:
 				diagnostics.completionEvent = "[DONE]"
 			} else if data != "" {
 				eventData := []byte(data)
-				eventType := gjson.Get(data, "type").String()
+				eventType := streamDiagnosticEventType(data)
 				timing.observe(eventType, eventData)
 				if id := responseIDFromSSEData(data); id != "" {
 					responseID = id

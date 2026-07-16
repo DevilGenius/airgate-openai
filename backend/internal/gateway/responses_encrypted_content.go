@@ -25,31 +25,60 @@ func sanitizeResponsesReasoningEncryptedContent(body []byte) []byte {
 }
 
 func sanitizeResponsesReasoningEncryptedContentKnownPresent(body []byte) []byte {
-	input := gjson.GetBytes(body, "input")
-	if !input.Exists() {
-		return body
-	}
 	stripOrphanReasoningIDs := !gjson.GetBytes(body, "store").Bool()
-
-	if input.IsArray() {
-		return sanitizeResponsesReasoningEncryptedContentArray(body, input, stripOrphanReasoningIDs)
-	}
-	if !input.IsObject() {
-		return body
-	}
-
-	nextItem, changed := sanitizeResponsesReasoningEncryptedContentItem(input, stripOrphanReasoningIDs)
-	if !changed {
-		return body
-	}
-	updated, err := sjson.SetRawBytes(body, "input", []byte(nextItem))
-	if err != nil {
-		return body
-	}
+	updated, _ := rewriteResponsesReasoningEncryptedContentKnownPresent(body, reasoningEncryptedContentRewritePolicy{
+		removeInvalid:          true,
+		stripExistingOrphanIDs: stripOrphanReasoningIDs,
+		stripRemovedContentID:  stripOrphanReasoningIDs,
+	})
 	return updated
 }
 
-func sanitizeResponsesReasoningEncryptedContentArray(body []byte, input gjson.Result, stripOrphanReasoningIDs bool) []byte {
+// removeResponsesReasoningEncryptedContentForRetry drops only structurally
+// valid reasoning encrypted_content values selected by shouldRemove. The
+// caller uses this after the same ciphertext was rejected by the upstream.
+func removeResponsesReasoningEncryptedContentForRetry(body []byte, shouldRemove func(string) bool) ([]byte, bool) {
+	if len(body) == 0 || shouldRemove == nil || !bytes.Contains(body, []byte(`"encrypted_content"`)) {
+		return body, false
+	}
+	return rewriteResponsesReasoningEncryptedContentKnownPresent(body, reasoningEncryptedContentRewritePolicy{
+		removeValid:           shouldRemove,
+		stripRemovedContentID: true,
+	})
+}
+
+type reasoningEncryptedContentRewritePolicy struct {
+	removeInvalid          bool
+	stripExistingOrphanIDs bool
+	stripRemovedContentID  bool
+	removeValid            func(string) bool
+}
+
+func rewriteResponsesReasoningEncryptedContentKnownPresent(body []byte, policy reasoningEncryptedContentRewritePolicy) ([]byte, bool) {
+	input := gjson.GetBytes(body, "input")
+	if !input.Exists() {
+		return body, false
+	}
+
+	if input.IsArray() {
+		return rewriteResponsesReasoningEncryptedContentArray(body, input, policy)
+	}
+	if !input.IsObject() {
+		return body, false
+	}
+
+	nextItem, changed := rewriteResponsesReasoningEncryptedContentItem(input, policy)
+	if !changed {
+		return body, false
+	}
+	updated, err := sjson.SetRawBytes(body, "input", []byte(nextItem))
+	if err != nil {
+		return body, false
+	}
+	return updated, true
+}
+
+func rewriteResponsesReasoningEncryptedContentArray(body []byte, input gjson.Result, policy reasoningEncryptedContentRewritePolicy) ([]byte, bool) {
 	items := input.Array()
 	var rebuilt []byte
 	itemsWritten := 0
@@ -76,7 +105,7 @@ func sanitizeResponsesReasoningEncryptedContentArray(body []byte, input gjson.Re
 	}
 
 	for index, item := range items {
-		nextItem, changed := sanitizeResponsesReasoningEncryptedContentItem(item, stripOrphanReasoningIDs)
+		nextItem, changed := rewriteResponsesReasoningEncryptedContentItem(item, policy)
 		if changed {
 			startRebuild(index)
 			keep(nextItem)
@@ -85,25 +114,25 @@ func sanitizeResponsesReasoningEncryptedContentArray(body []byte, input gjson.Re
 		keep(item.Raw)
 	}
 	if rebuilt == nil {
-		return body
+		return body, false
 	}
 	rebuilt = append(rebuilt, ']')
 
 	updated, err := sjson.SetRawBytes(body, "input", rebuilt)
 	if err != nil {
-		return body
+		return body, false
 	}
-	return updated
+	return updated, true
 }
 
-func sanitizeResponsesReasoningEncryptedContentItem(item gjson.Result, stripOrphanReasoningIDs bool) (string, bool) {
+func rewriteResponsesReasoningEncryptedContentItem(item gjson.Result, policy reasoningEncryptedContentRewritePolicy) (string, bool) {
 	if strings.TrimSpace(item.Get("type").String()) != "reasoning" {
 		return item.Raw, false
 	}
 
 	encryptedContent := item.Get("encrypted_content")
 	if !encryptedContent.Exists() {
-		if !stripOrphanReasoningIDs || !item.Get("id").Exists() {
+		if !policy.stripExistingOrphanIDs || !item.Get("id").Exists() {
 			return item.Raw, false
 		}
 		nextItem, err := sjson.Delete(item.Raw, "id")
@@ -115,7 +144,11 @@ func sanitizeResponsesReasoningEncryptedContentItem(item gjson.Result, stripOrph
 
 	valid := encryptedContent.Type == gjson.String &&
 		isStructurallyValidGPTReasoningEncryptedContent(encryptedContent.String())
-	if valid {
+	remove := !valid && policy.removeInvalid
+	if valid && policy.removeValid != nil {
+		remove = policy.removeValid(encryptedContent.String())
+	}
+	if !remove {
 		return item.Raw, false
 	}
 
@@ -123,7 +156,7 @@ func sanitizeResponsesReasoningEncryptedContentItem(item gjson.Result, stripOrph
 	if err != nil {
 		return item.Raw, false
 	}
-	if stripOrphanReasoningIDs && item.Get("id").Exists() {
+	if policy.stripRemovedContentID && item.Get("id").Exists() {
 		if withoutID, deleteErr := sjson.Delete(nextItem, "id"); deleteErr == nil {
 			nextItem = withoutID
 		}

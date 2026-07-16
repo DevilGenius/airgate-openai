@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -19,14 +18,11 @@ import (
 )
 
 const (
-	safetyRequestCacheTTL             = 24 * time.Hour
-	safetyRequestCacheMaxEntries      = 8192
-	imageSafetyRequestCacheTTL        = safetyRequestCacheTTL
-	imageSafetyRequestCacheMaxEntries = safetyRequestCacheMaxEntries
+	imageSafetyRequestCacheTTL        = defaultSafetyRequestCacheTTL
+	imageSafetyRequestCacheMaxEntries = defaultSafetyRequestCacheMaxEntries
 	imageSafetyRequestHashInputKey    = "_image_safety_request_hash"
 	imageSafetyRequestHashDomain      = "airgate:image-safety-request:xxh3-64:v1"
 	imageSafetyMultipartHashDomain    = "airgate:image-safety-multipart:xxh3-64:v1"
-	maxSafetyCachedReasonRunes        = 2048
 )
 
 type imageSafetyRequestContextKey struct{}
@@ -37,116 +33,7 @@ type imageSafetyRequestHashCapture struct {
 	ready atomic.Bool
 }
 
-type safetyRequestCacheEntry struct {
-	expiresAt time.Time
-	reason    string
-}
-
-type safetyRequestCache struct {
-	mu         sync.Mutex
-	entries    map[uint64]safetyRequestCacheEntry
-	ttl        time.Duration
-	maxEntries int
-}
-
 type imageSafetyRequestCache = safetyRequestCache
-
-func (c *safetyRequestCache) contains(hash uint64, now time.Time) bool {
-	_, ok := c.lookup(hash, now)
-	return ok
-}
-
-func (c *safetyRequestCache) lookup(hash uint64, now time.Time) (string, bool) {
-	if c == nil {
-		return "", false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	entry, ok := c.entries[hash]
-	if !ok {
-		return "", false
-	}
-	if !now.Before(entry.expiresAt) {
-		delete(c.entries, hash)
-		return "", false
-	}
-	return entry.reason, true
-}
-
-func (c *safetyRequestCache) stats(now time.Time) (size, capacity int) {
-	capacity = safetyRequestCacheMaxEntries
-	if c == nil {
-		return 0, capacity
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.maxEntries > 0 {
-		capacity = c.maxEntries
-	}
-	for key, entry := range c.entries {
-		if !now.Before(entry.expiresAt) {
-			delete(c.entries, key)
-		}
-	}
-	return len(c.entries), capacity
-}
-
-func (c *safetyRequestCache) add(hash uint64, now time.Time) {
-	c.addWithReason(hash, now, "")
-}
-
-func (c *safetyRequestCache) addWithReason(hash uint64, now time.Time, reason string) {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.entries == nil {
-		c.entries = make(map[uint64]safetyRequestCacheEntry)
-	}
-	ttl := c.ttl
-	if ttl <= 0 {
-		ttl = safetyRequestCacheTTL
-	}
-	maxEntries := c.maxEntries
-	if maxEntries <= 0 {
-		maxEntries = safetyRequestCacheMaxEntries
-	}
-	for key, entry := range c.entries {
-		if !now.Before(entry.expiresAt) {
-			delete(c.entries, key)
-		}
-	}
-	if _, exists := c.entries[hash]; !exists && len(c.entries) >= maxEntries {
-		var oldestHash uint64
-		var oldestExpiry time.Time
-		for key, entry := range c.entries {
-			if oldestExpiry.IsZero() || entry.expiresAt.Before(oldestExpiry) {
-				oldestHash = key
-				oldestExpiry = entry.expiresAt
-			}
-		}
-		delete(c.entries, oldestHash)
-	}
-	entry := c.entries[hash]
-	entry.expiresAt = now.Add(ttl)
-	if reason = normalizeSafetyCachedReason(reason); reason != "" {
-		entry.reason = reason
-	}
-	c.entries[hash] = entry
-}
-
-func normalizeSafetyCachedReason(reason string) string {
-	reason = strings.TrimSpace(reason)
-	if reason == "" {
-		return ""
-	}
-	runes := []rune(reason)
-	if len(runes) > maxSafetyCachedReasonRunes {
-		return string(runes[:maxSafetyCachedReasonRunes]) + "..."
-	}
-	return reason
-}
 
 func imageSafetyRequestHash(req *sdk.ForwardRequest, method, path string) (uint64, bool) {
 	if req == nil || !isImagesRequest(path) {

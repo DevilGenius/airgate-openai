@@ -10,11 +10,16 @@ import (
 )
 
 func validGPTReasoningEncryptedContentForTest() string {
+	return validGPTReasoningEncryptedContentForTestMarker(0x42)
+}
+
+func validGPTReasoningEncryptedContentForTestMarker(marker byte) string {
 	payload := make([]byte, 1+8+16+16+32)
 	payload[0] = 0x80
 	for i := 9; i < len(payload); i++ {
 		payload[i] = byte(i)
 	}
+	payload[len(payload)-1] = marker
 	return base64.RawURLEncoding.EncodeToString(payload)
 }
 
@@ -102,6 +107,71 @@ func TestSanitizeResponsesReasoningEncryptedContentNoopKeepsOriginalBody(t *test
 	}
 	if len(got) > 0 && &got[0] != &body[0] {
 		t.Fatal("valid body should return the original slice")
+	}
+}
+
+func TestRemoveResponsesReasoningEncryptedContentForRetryDropsValidCiphertext(t *testing.T) {
+	valid := validGPTReasoningEncryptedContentForTest()
+	body := []byte(`{"store":true,"input":[` +
+		`{"id":"rs_retry","type":"reasoning","encrypted_content":"` + valid + `","summary":[{"type":"summary_text","text":"keep"}]},` +
+		`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]},` +
+		`{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}` +
+		`]}`)
+
+	got, changed := removeResponsesReasoningEncryptedContentForRetry(body, func(raw string) bool {
+		return raw == valid
+	})
+	if !changed {
+		t.Fatal("retry cleanup should report a change")
+	}
+	if gjson.GetBytes(got, "input.0.encrypted_content").Exists() {
+		t.Fatalf("retry cleanup retained encrypted_content: %s", got)
+	}
+	if gjson.GetBytes(got, "input.0.id").Exists() {
+		t.Fatalf("retry cleanup retained orphan reasoning id: %s", got)
+	}
+	if summary := gjson.GetBytes(got, "input.0.summary.0.text").String(); summary != "keep" {
+		t.Fatalf("retry cleanup summary = %q, want keep; body=%s", summary, got)
+	}
+	if text := gjson.GetBytes(got, "input.1.content.0.text").String(); text != "answer" {
+		t.Fatalf("retry cleanup changed assistant message: %s", got)
+	}
+}
+
+func TestRemoveResponsesReasoningEncryptedContentForRetryNoopWithoutReasoningCiphertext(t *testing.T) {
+	body := []byte(`{"input":[{"type":"compaction","encrypted_content":"opaque"},{"type":"message","role":"user","content":"hi"}]}`)
+	got, changed := removeResponsesReasoningEncryptedContentForRetry(body, func(string) bool { return true })
+	if changed || string(got) != string(body) {
+		t.Fatalf("retry cleanup changed non-reasoning encrypted content: %s", got)
+	}
+}
+
+func TestRemoveResponsesReasoningEncryptedContentForRetryOnlyDropsMatchedCiphertext(t *testing.T) {
+	rejected := validGPTReasoningEncryptedContentForTestMarker(0x11)
+	fresh := validGPTReasoningEncryptedContentForTestMarker(0x22)
+	body := []byte(`{"store":true,"input":[` +
+		`{"id":"rs_rejected","type":"reasoning","encrypted_content":"` + rejected + `","summary":[]},` +
+		`{"id":"rs_fresh","type":"reasoning","encrypted_content":"` + fresh + `","summary":[]},` +
+		`{"id":"rs_existing_orphan","type":"reasoning","summary":[]}` +
+		`]}`)
+
+	got, changed := removeResponsesReasoningEncryptedContentForRetry(body, func(raw string) bool {
+		return raw == rejected
+	})
+	if !changed {
+		t.Fatal("retry cleanup should remove the matched ciphertext")
+	}
+	if gjson.GetBytes(got, "input.0.encrypted_content").Exists() || gjson.GetBytes(got, "input.0.id").Exists() {
+		t.Fatalf("matched ciphertext or its id was retained: %s", got)
+	}
+	if gotFresh := gjson.GetBytes(got, "input.1.encrypted_content").String(); gotFresh != fresh {
+		t.Fatalf("unmatched ciphertext = %q, want preserved", gotFresh)
+	}
+	if gotID := gjson.GetBytes(got, "input.1.id").String(); gotID != "rs_fresh" {
+		t.Fatalf("unmatched reasoning id = %q, want rs_fresh", gotID)
+	}
+	if gotID := gjson.GetBytes(got, "input.2.id").String(); gotID != "rs_existing_orphan" {
+		t.Fatalf("unrelated orphan id = %q, want preserved by retry cleanup", gotID)
 	}
 }
 

@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	textSafetyRequestCacheTTL        = safetyRequestCacheTTL
-	textSafetyRequestCacheMaxEntries = safetyRequestCacheMaxEntries
+	textSafetyRequestCacheTTL        = defaultSafetyRequestCacheTTL
+	textSafetyRequestCacheMaxEntries = defaultSafetyRequestCacheMaxEntries
 	textSafetyRequestHashDomain      = "airgate:text-safety-request:xxh3-64:v1"
 	cybersecurityRiskErrorCode       = "cybersecurity_risk"
 	textSafetyCacheRetryAfter        = 10 * time.Minute
