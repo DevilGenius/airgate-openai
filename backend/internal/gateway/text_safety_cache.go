@@ -92,7 +92,7 @@ func (g *OpenAIGateway) checkTextSafetyRequest(ctx context.Context, req *sdk.For
 	return withTextSafetyRequestHash(ctx, hash), nil
 }
 
-func (g *OpenAIGateway) rememberTextSafetyRequest(ctx context.Context) {
+func (g *OpenAIGateway) cacheTextSafetyRejection(ctx context.Context) {
 	if g == nil {
 		return
 	}

@@ -193,7 +193,7 @@ func executeImageTask(ctx context.Context, g *OpenAIGateway, task sdk.HostTask, 
 	if err != nil {
 		if failure, ok := normalizedImageSafetyFailureFromError(err); ok {
 			if requestHash, _ := task.Input[imageSafetyRequestHashInputKey].(string); requestHash != "" {
-				g.rememberImageSafetyRequestHex(requestHash)
+				g.cacheImageSafetyRejectionHash(requestHash)
 			}
 			return rt.Fail(ctx, &TaskError{
 				Type:    "invalid_request",
@@ -213,7 +213,7 @@ func executeImageTask(ctx context.Context, g *OpenAIGateway, task sdk.HostTask, 
 		taskErr := classifyUpstreamTaskError(resp.StatusCode, resp.Body)
 		if taskErr.Type == "invalid_request" && taskErr.Code == imageSafetyInvalidRequestCode {
 			if requestHash, _ := task.Input[imageSafetyRequestHashInputKey].(string); requestHash != "" {
-				g.rememberImageSafetyRequestHex(requestHash)
+				g.cacheImageSafetyRejectionHash(requestHash)
 			}
 		}
 		return rt.Fail(ctx, taskErr)

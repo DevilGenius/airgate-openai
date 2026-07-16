@@ -159,10 +159,10 @@ func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (s
 	if outcome.SafetyRejected {
 		logEvent := "text_safety_request_cached"
 		if imageRequest {
-			g.rememberImageSafetyRequest(ctx, outcome.Reason)
+			g.cacheImageSafetyRejection(ctx, outcome.Reason)
 			logEvent = "image_safety_request_cached"
 		} else {
-			g.rememberTextSafetyRequest(ctx)
+			g.cacheTextSafetyRejection(ctx)
 		}
 		logger.Info(logEvent,
 			sdk.LogFieldModel, req.Model,

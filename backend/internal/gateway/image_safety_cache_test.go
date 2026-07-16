@@ -170,7 +170,7 @@ func TestImageSafetyRequestCacheRejectsDuplicateWithoutAccountFailure(t *testing
 		t.Fatal("uncached request should continue to upstream")
 	}
 	const upstreamReason = "upstream safety system rejected the prompt (request_id: req_test)"
-	gateway.rememberImageSafetyRequest(ctx, upstreamReason)
+	gateway.cacheImageSafetyRejection(ctx, upstreamReason)
 	_, outcome = gateway.checkImageSafetyRequest(context.Background(), req, http.MethodPost, "/v1/images/generations")
 	if outcome == nil {
 		t.Fatal("cached request should be rejected locally")
@@ -212,7 +212,7 @@ func TestImageSafetyRequestHashCaptureAllowsForwardLevelCacheWrite(t *testing.T)
 	if !upstreamOutcome.SafetyRejected {
 		t.Fatal("new image safety rejection must be returned through SafetyRejected")
 	}
-	gateway.rememberImageSafetyRequest(ctx, upstreamOutcome.Reason)
+	gateway.cacheImageSafetyRejection(ctx, upstreamOutcome.Reason)
 
 	_, cachedOutcome := gateway.checkImageSafetyRequest(context.Background(), req, http.MethodPost, "/v1/images/generations")
 	if cachedOutcome == nil || cachedOutcome.Reason != upstreamReason {

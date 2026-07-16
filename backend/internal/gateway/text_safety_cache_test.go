@@ -67,7 +67,7 @@ func TestTextSafetyRequestCacheReturns429Immediately(t *testing.T) {
 	if outcome != nil {
 		t.Fatal("uncached request should continue to upstream")
 	}
-	gateway.rememberTextSafetyRequest(ctx)
+	gateway.cacheTextSafetyRejection(ctx)
 	for attempt := 1; attempt <= 2; attempt++ {
 		start := time.Now()
 		_, outcome = gateway.checkTextSafetyRequest(context.Background(), req, http.MethodPost, "/v1/responses")

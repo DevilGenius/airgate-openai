@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/zeebo/xxh3"
@@ -32,8 +33,8 @@ type imageSafetyRequestContextKey struct{}
 type imageSafetyRequestHashCaptureContextKey struct{}
 
 type imageSafetyRequestHashCapture struct {
-	hash uint64
-	ok   bool
+	hash  atomic.Uint64
+	ready atomic.Bool
 }
 
 type safetyRequestCacheEntry struct {
@@ -260,8 +261,9 @@ func captureImageSafetyRequestHash(ctx context.Context, hash uint64) {
 	if capture == nil {
 		return
 	}
-	capture.hash = hash
-	capture.ok = true
+	// 先发布 hash，再发布 ready；读取方先观察 ready，再读取完整 hash。
+	capture.hash.Store(hash)
+	capture.ready.Store(true)
 }
 
 func imageSafetyRequestHashFromContext(ctx context.Context) (uint64, bool) {
@@ -272,10 +274,10 @@ func imageSafetyRequestHashFromContext(ctx context.Context) (uint64, bool) {
 		return hash, true
 	}
 	capture, _ := ctx.Value(imageSafetyRequestHashCaptureContextKey{}).(*imageSafetyRequestHashCapture)
-	if capture == nil || !capture.ok {
+	if capture == nil || !capture.ready.Load() {
 		return 0, false
 	}
-	return capture.hash, true
+	return capture.hash.Load(), true
 }
 
 func (g *OpenAIGateway) checkImageSafetyRequest(ctx context.Context, req *sdk.ForwardRequest, method, path string) (context.Context, *sdk.ForwardOutcome) {
@@ -295,7 +297,7 @@ func (g *OpenAIGateway) checkImageSafetyRequest(ctx context.Context, req *sdk.Fo
 	return withImageSafetyRequestHash(ctx, hash), nil
 }
 
-func (g *OpenAIGateway) rememberImageSafetyRequest(ctx context.Context, reasons ...string) {
+func (g *OpenAIGateway) cacheImageSafetyRejection(ctx context.Context, reasons ...string) {
 	reason := ""
 	if len(reasons) > 0 {
 		reason = reasons[0]
@@ -308,7 +310,7 @@ func (g *OpenAIGateway) rememberImageSafetyRequest(ctx context.Context, reasons 
 	}
 }
 
-func (g *OpenAIGateway) rememberImageSafetyRequestHex(value string) {
+func (g *OpenAIGateway) cacheImageSafetyRejectionHash(value string) {
 	if g == nil || value == "" {
 		return
 	}
