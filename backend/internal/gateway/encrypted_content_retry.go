@@ -7,11 +7,6 @@ import (
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
-const (
-	invalidEncryptedContentRetryCacheTTL        = 24 * time.Hour
-	invalidEncryptedContentRetryCacheMaxEntries = 100_000
-)
-
 type encryptedContentRetryRequestStateContextKey struct{}
 
 type encryptedContentRetryRequestState struct {
@@ -41,7 +36,7 @@ func (g *OpenAIGateway) newEncryptedContentRetryRequestState() *encryptedContent
 		return nil
 	}
 	return &encryptedContentRetryRequestState{
-		cache:     &g.encryptedContentRetry,
+		cache:     &g.requestRetry,
 		checkedAt: time.Now(),
 	}
 }
@@ -50,11 +45,11 @@ func (g *OpenAIGateway) cacheInvalidEncryptedContentRetry(state *encryptedConten
 	if g == nil || state == nil || !isResponsesRequestPath(path) || len(state.validHashes) == 0 {
 		return false
 	}
-	g.encryptedContentRetry.addHashesWithLimits(
+	g.requestRetry.addHashesWithLimits(
 		state.validHashes,
 		time.Now(),
-		invalidEncryptedContentRetryCacheTTL,
-		invalidEncryptedContentRetryCacheMaxEntries,
+		requestRetryCacheTTL,
+		requestRetryCacheMaxEntries,
 	)
 	return true
 }

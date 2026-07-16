@@ -15,7 +15,7 @@ import (
 const (
 	textSafetyRequestCacheTTL        = defaultSafetyRequestCacheTTL
 	textSafetyRequestCacheMaxEntries = defaultSafetyRequestCacheMaxEntries
-	textSafetyRequestHashDomain      = "airgate:text-safety-request:xxh3-64:v1"
+	textRequestHashDomain            = "airgate:text-request:xxh3-64:v1"
 	cybersecurityRiskErrorCode       = "cybersecurity_risk"
 	textSafetyCacheRetryAfter        = 10 * time.Minute
 	textSafetyRateLimitCode          = "rate_limit_exceeded"
@@ -23,9 +23,9 @@ const (
 	cybersecurityRiskMessage         = "This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber"
 )
 
-type textSafetyRequestContextKey struct{}
+type textRequestHashContextKey struct{}
 
-func textSafetyRequestHash(req *sdk.ForwardRequest, method, path string) (uint64, bool) {
+func textRequestHash(req *sdk.ForwardRequest, method, path string) (uint64, bool) {
 	if req == nil || len(req.Body) == 0 || !isTextGenerationRequestPath(path) {
 		return 0, false
 	}
@@ -34,7 +34,7 @@ func textSafetyRequestHash(req *sdk.ForwardRequest, method, path string) (uint64
 		contentType = strings.TrimSpace(contentType[:separator])
 	}
 	var hasher xxh3.Hasher
-	writeXXH3HashStringPart(&hasher, textSafetyRequestHashDomain)
+	writeXXH3HashStringPart(&hasher, textRequestHashDomain)
 	writeXXH3HashStringPart(&hasher, strings.ToUpper(strings.TrimSpace(method)))
 	writeXXH3HashStringPart(&hasher, normalizeGatewayRequestPath(path))
 	writeXXH3HashStringPart(&hasher, req.Model)
@@ -68,20 +68,20 @@ func isAnthropicTextRequest(req *sdk.ForwardRequest, path string) bool {
 	}
 }
 
-func withTextSafetyRequestHash(ctx context.Context, hash uint64) context.Context {
-	return context.WithValue(ctx, textSafetyRequestContextKey{}, hash)
+func withTextRequestHash(ctx context.Context, hash uint64) context.Context {
+	return context.WithValue(ctx, textRequestHashContextKey{}, hash)
 }
 
-func textSafetyRequestHashFromContext(ctx context.Context) (uint64, bool) {
+func textRequestHashFromContext(ctx context.Context) (uint64, bool) {
 	if ctx == nil {
 		return 0, false
 	}
-	hash, ok := ctx.Value(textSafetyRequestContextKey{}).(uint64)
+	hash, ok := ctx.Value(textRequestHashContextKey{}).(uint64)
 	return hash, ok
 }
 
 func (g *OpenAIGateway) checkTextSafetyRequest(ctx context.Context, req *sdk.ForwardRequest, method, path string) (context.Context, *sdk.ForwardOutcome) {
-	hash, ok := textSafetyRequestHash(req, method, path)
+	hash, ok := textRequestHash(req, method, path)
 	if !ok {
 		return ctx, nil
 	}
@@ -89,14 +89,14 @@ func (g *OpenAIGateway) checkTextSafetyRequest(ctx context.Context, req *sdk.For
 		outcome := textSafetyCacheHitOutcome(isAnthropicTextRequest(req, path))
 		return ctx, &outcome
 	}
-	return withTextSafetyRequestHash(ctx, hash), nil
+	return withTextRequestHash(ctx, hash), nil
 }
 
 func (g *OpenAIGateway) cacheTextSafetyRejection(ctx context.Context) {
 	if g == nil {
 		return
 	}
-	if hash, ok := textSafetyRequestHashFromContext(ctx); ok {
+	if hash, ok := textRequestHashFromContext(ctx); ok {
 		g.textSafety.add(hash, time.Now())
 	}
 }

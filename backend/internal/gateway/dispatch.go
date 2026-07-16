@@ -144,10 +144,6 @@ func identityDispatchCandidates() []sdk.DispatchCandidate {
 	return []sdk.DispatchCandidate{{Scheduling: "${model}", Wire: "${model}"}}
 }
 
-func responsesCompressionFallbackModel() string {
-	return resolveRoleTargetModel("gpt-5.4", "AIRGATE_MODEL_RESPONSES_COMPRESSION_FALLBACK")
-}
-
 func dispatchCandidates(models ...string) []sdk.DispatchCandidate {
 	out := make([]sdk.DispatchCandidate, 0, len(models))
 	seen := map[string]struct{}{}

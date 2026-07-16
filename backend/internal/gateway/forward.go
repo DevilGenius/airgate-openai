@@ -534,12 +534,6 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 						"account_type", "apikey",
 					)
 					outcome, err = g.forwardAPIKeyAttempt(ctx, req, reqMethod, reqPath, targetURL, retryBody, attemptHeaders, attemptOpts, sseKA, start, reqServiceTier, true, client)
-					if err == nil {
-						outcome, err = g.retryAPIKeyWithContextTooLargeFallback(
-							ctx, req, outcome, reqMethod, reqPath, targetURL, retryBody, attemptHeaders, attemptOpts, sseKA, start, reqServiceTier, client,
-							"previous_response_full_replay_context_too_large_compression_retry",
-						)
-					}
 				}
 			} else if !recoveredFunctionCallOutput && outcomeIsFunctionCallOutputWithoutCall(outcome) {
 				if retryBody, ok := functionCallOutputRecoveryBody(attemptBody); ok {
@@ -551,18 +545,7 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 						"account_type", "apikey",
 					)
 					outcome, err = g.forwardAPIKeyAttempt(ctx, req, reqMethod, reqPath, targetURL, retryBody, attemptHeaders, attemptOpts, sseKA, start, reqServiceTier, true, client)
-					if err == nil {
-						outcome, err = g.retryAPIKeyWithContextTooLargeFallback(
-							ctx, req, outcome, reqMethod, reqPath, targetURL, retryBody, attemptHeaders, attemptOpts, sseKA, start, reqServiceTier, client,
-							"function_call_output_recovery_context_too_large_compression_retry",
-						)
-					}
 				}
-			} else if delegatedRecoveryApplied && outcomeIsContextTooLarge(outcome) {
-				outcome, err = g.retryAPIKeyWithContextTooLargeFallback(
-					ctx, req, outcome, reqMethod, reqPath, targetURL, attemptBody, attemptHeaders, attemptOpts, sseKA, start, reqServiceTier, client,
-					"delegated_full_replay_context_too_large_compression_retry",
-				)
 			} else if airgateContinuationRecoveryRequested(baseHeaders) && !delegatedRecoveryApplied && outcomeIsContextTooLarge(outcome) {
 				logger.Warn("delegated_full_replay_context_too_large_not_recoverable",
 					sdk.LogFieldAccountID, account.ID,
@@ -594,77 +577,6 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 		)
 	}
 	return transientOutcome("image request attempts exhausted"), fmt.Errorf("image request attempts exhausted")
-}
-
-func (g *OpenAIGateway) retryAPIKeyWithContextTooLargeFallback(
-	ctx context.Context,
-	req *sdk.ForwardRequest,
-	outcome sdk.ForwardOutcome,
-	reqMethod, reqPath, targetURL string,
-	body []byte,
-	headers http.Header,
-	imagesRespOpts imagesResponseOptions,
-	sseKA *ssePingKeepAlive,
-	start time.Time,
-	reqServiceTier string,
-	client *http.Client,
-	logMessage string,
-) (sdk.ForwardOutcome, error) {
-	// 流式响应立即透传，不为压缩模型降级保留响应缓存；最终失败交由 Trace 记录。
-	if req.Stream || !outcomeIsContextTooLarge(outcome) || responseWriterWritten(req.Writer) {
-		return outcome, nil
-	}
-	fallbackBody, fallbackModel, ok := responsesCompressionFallbackBody(body, req.Model)
-	if !ok {
-		return outcome, nil
-	}
-	fallbackReq := *req
-	fallbackReq.Model = fallbackModel
-	logger := sdk.LoggerFromContext(ctx)
-	logger.Warn(logMessage,
-		sdk.LogFieldAccountID, req.Account.ID,
-		sdk.LogFieldModel, req.Model,
-		sdk.LogFieldPath, reqPath,
-		"fallback_model", fallbackModel,
-		"account_type", "apikey",
-	)
-	return g.forwardAPIKeyAttempt(ctx, &fallbackReq, reqMethod, reqPath, targetURL, fallbackBody, headers, imagesRespOpts, sseKA, start, reqServiceTier, true, client)
-}
-
-func retryWSWithContextTooLargeFallback(
-	ctx context.Context,
-	accountID int64,
-	sessionKey string,
-	result WSResult,
-	currentModel string,
-	body []byte,
-	w http.ResponseWriter,
-	stream bool,
-	streamOutputStarted func() bool,
-	runAttempt func([]byte, http.ResponseWriter, string) (WSResult, error),
-	logMessage string,
-) (WSResult, string, error) {
-	// WebSocket 流同样不延迟 response.created；仅非流式请求允许透明压缩降级。
-	if stream || !isContextTooLargeErrorResult(result.Err) || streamOutputStarted() {
-		return result, currentModel, nil
-	}
-	fallbackMsg, fallbackModel, ok := responsesCompressionFallbackBody(body, currentModel)
-	if !ok {
-		return result, currentModel, nil
-	}
-	logger := sdk.LoggerFromContext(ctx)
-	logger.Warn(logMessage,
-		sdk.LogFieldAccountID, accountID,
-		sdk.LogFieldModel, currentModel,
-		"fallback_model", fallbackModel,
-		"account_type", "oauth",
-		"session", sessionKey,
-	)
-	fallbackResult, err := runAttempt(fallbackMsg, w, fallbackModel)
-	if err != nil {
-		return result, fallbackModel, err
-	}
-	return fallbackResult, fallbackModel, nil
 }
 
 func (g *OpenAIGateway) forwardAPIKeyAttempt(
@@ -1187,22 +1099,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		return (lastChatWriter != nil && lastChatWriter.wrote) ||
 			(lastSSEHandler != nil && lastSSEHandler.wrote)
 	}
-	if delegatedRecoveryApplied {
-		result, currentModel, err = retryWSWithContextTooLargeFallback(
-			ctx, account.ID, session.SessionKey, result, currentModel, createMsg, w, req.Stream, streamOutputStarted, runAttempt,
-			"delegated_full_replay_context_too_large_compression_retry",
-		)
-		if err != nil {
-			logger.Warn("upstream_request_failed",
-				sdk.LogFieldAccountID, account.ID,
-				sdk.LogFieldModel, currentModel,
-				sdk.LogFieldDurationMs, time.Since(start).Milliseconds(),
-				sdk.LogFieldError, err,
-				"phase", "ws_compression_retry_send",
-			)
-			return transientOutcome(err.Error()), err
-		}
-	} else if airgateContinuationRecoveryRequested(req.Headers) && !delegatedRecoveryApplied && isContextTooLargeErrorResult(result.Err) && !streamOutputStarted() {
+	if airgateContinuationRecoveryRequested(req.Headers) && !delegatedRecoveryApplied && isContextTooLargeErrorResult(result.Err) && !streamOutputStarted() {
 		logger.Warn("delegated_full_replay_context_too_large_not_recoverable",
 			sdk.LogFieldAccountID, account.ID,
 			sdk.LogFieldModel, req.Model,
@@ -1230,20 +1127,6 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 				)
 				return transientOutcome(err.Error()), err
 			}
-			result, currentModel, err = retryWSWithContextTooLargeFallback(
-				ctx, account.ID, session.SessionKey, result, currentModel, retryMsg, w, req.Stream, streamOutputStarted, runAttempt,
-				"previous_response_full_replay_context_too_large_compression_retry",
-			)
-			if err != nil {
-				logger.Warn("upstream_request_failed",
-					sdk.LogFieldAccountID, account.ID,
-					sdk.LogFieldModel, currentModel,
-					sdk.LogFieldDurationMs, time.Since(start).Milliseconds(),
-					sdk.LogFieldError, err,
-					"phase", "ws_compression_retry_send",
-				)
-				return transientOutcome(err.Error()), err
-			}
 		}
 	}
 	if isFunctionCallOutputWithoutCallErrorResult(result.Err) && !streamOutputStarted() {
@@ -1263,20 +1146,6 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 					sdk.LogFieldDurationMs, time.Since(start).Milliseconds(),
 					sdk.LogFieldError, err,
 					"phase", "ws_function_call_output_recovery_send",
-				)
-				return transientOutcome(err.Error()), err
-			}
-			result, currentModel, err = retryWSWithContextTooLargeFallback(
-				ctx, account.ID, session.SessionKey, result, currentModel, retryMsg, w, req.Stream, streamOutputStarted, runAttempt,
-				"function_call_output_recovery_context_too_large_compression_retry",
-			)
-			if err != nil {
-				logger.Warn("upstream_request_failed",
-					sdk.LogFieldAccountID, account.ID,
-					sdk.LogFieldModel, currentModel,
-					sdk.LogFieldDurationMs, time.Since(start).Milliseconds(),
-					sdk.LogFieldError, err,
-					"phase", "ws_compression_retry_send",
 				)
 				return transientOutcome(err.Error()), err
 			}
@@ -1600,20 +1469,6 @@ func methodAllowsBody(method string) bool {
 	default:
 		return false
 	}
-}
-
-type responseWriterWrittenChecker interface {
-	Written() bool
-}
-
-func responseWriterWritten(w http.ResponseWriter) bool {
-	if w == nil {
-		return false
-	}
-	if checker, ok := w.(responseWriterWrittenChecker); ok {
-		return checker.Written()
-	}
-	return false
 }
 
 // requestTimeout 获取插件默认请求超时配置

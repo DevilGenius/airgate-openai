@@ -55,6 +55,26 @@ func TestClassifyWSErrorEventRequestTooLarge(t *testing.T) {
 	}
 }
 
+func TestContextTooLargeClassifierRejectsMaxTokensParameterErrors(t *testing.T) {
+	if isContextTooLargeError("max_tokens must be greater than zero") {
+		t.Fatal("max_tokens parameter validation must not trigger long-context rerouting")
+	}
+	if isContextTooLargeError("max_output_tokens is not supported for this model") {
+		t.Fatal("max_output_tokens parameter validation must not trigger long-context rerouting")
+	}
+	for _, signal := range []string{
+		"context_length_exceeded",
+		"Your input exceeds the context window",
+		"maximum context length is 128000 tokens",
+		"input_too_long",
+		"max_input_tokens exceeded",
+	} {
+		if !isContextTooLargeError(signal) {
+			t.Fatalf("expected context-too-large signal for %q", signal)
+		}
+	}
+}
+
 func TestClassifyResponsesFailureInvalidImageInput(t *testing.T) {
 	upstreamMessage := "The image data you provided does not represent a valid image. Please check your input and try again with one of the supported image formats: ['image/jpeg', 'image/png', 'image/gif', 'image/webp']."
 	raw := []byte(`{"type":"response.failed","response":{"error":{"type":"invalid_request_error","message":"` + upstreamMessage + `"}}}`)

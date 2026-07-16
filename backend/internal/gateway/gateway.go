@@ -22,15 +22,16 @@ import (
 // OpenAIGateway OpenAI 网关插件（SimpleGatewayPlugin 实现）
 // 核心处理鉴权、账号选择、计费、限流和并发控制，插件只负责协议适配与上游转发。
 type OpenAIGateway struct {
-	logger                *slog.Logger
-	ctx                   sdk.PluginContext
-	host                  sdk.Host
-	snapshotStore         *codexUsagePersistenceStore
-	transportPool         *TransportPool
-	tasks                 *TaskRegistry
-	imageSafety           imageSafetyRequestCache
-	textSafety            safetyRequestCache
-	encryptedContentRetry safetyRequestCache
+	logger             *slog.Logger
+	ctx                sdk.PluginContext
+	host               sdk.Host
+	snapshotStore      *codexUsagePersistenceStore
+	transportPool      *TransportPool
+	tasks              *TaskRegistry
+	imageSafety        imageSafetyRequestCache
+	textSafety         safetyRequestCache
+	requestRetry       safetyRequestCache
+	longContextModelID string
 }
 
 const oauthUsageProbeModel = "gpt-5.4-mini"
@@ -41,6 +42,7 @@ func (g *OpenAIGateway) Info() sdk.PluginInfo {
 
 func (g *OpenAIGateway) Init(ctx sdk.PluginContext) error {
 	g.ctx = ctx
+	g.longContextModelID = configuredLongContextModel()
 	g.transportPool = NewTransportPool()
 	g.tasks = NewTaskRegistry()
 	g.tasks.Register(imageGenerateHandler{})
@@ -66,7 +68,7 @@ func (g *OpenAIGateway) Init(ctx sdk.PluginContext) error {
 			}
 		}
 	}
-	g.logger.Info("OpenAI 网关插件初始化")
+	g.logger.Info("OpenAI 网关插件初始化", "long_context_model", g.longContextModelID)
 	return nil
 }
 
@@ -134,6 +136,15 @@ func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (s
 		)
 		return *cachedOutcome, nil
 	}
+	contextWindowState, rerouteOutcome := g.checkContextWindowReroute(ctx, req, path)
+	if rerouteOutcome != nil {
+		logger.Info("context_window_reroute_requested",
+			sdk.LogFieldModel, contextWindowState.dispatchClientModel,
+			sdk.LogFieldPath, path,
+			"long_context_model", contextWindowState.longContextModel,
+		)
+		return *rerouteOutcome, nil
+	}
 	var encryptedContentState *encryptedContentRetryRequestState
 	if isResponsesRequestPath(path) && bytes.Contains(req.Body, []byte(`"encrypted_content"`)) {
 		encryptedContentState = g.newEncryptedContentRetryRequestState()
@@ -161,6 +172,21 @@ func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (s
 	}
 
 	outcome, err := g.forwardHTTP(ctx, req)
+	if isContextWindowExceededForwardResult(outcome, err) {
+		if contextWindowState.cached {
+			logger.Warn("context_window_long_model_failed",
+				sdk.LogFieldModel, contextWindowState.dispatchClientModel,
+				sdk.LogFieldPath, path,
+				"long_context_model", contextWindowState.longContextModel,
+			)
+		} else if g.cacheContextWindowExceeded(contextWindowState) {
+			logger.Info("context_window_reroute_cached",
+				sdk.LogFieldModel, contextWindowState.dispatchClientModel,
+				sdk.LogFieldPath, path,
+				"long_context_model", contextWindowState.longContextModel,
+			)
+		}
+	}
 	if encryptedContentState != nil && encryptedContentState.retrySanitized {
 		logger.Info("invalid_encrypted_content_retry_sanitized",
 			sdk.LogFieldModel, req.Model,
@@ -681,9 +707,9 @@ func (g *OpenAIGateway) HandleRequest(ctx context.Context, _, path, _ string, _ 
 		now := time.Now()
 		textSize, textCapacity := g.textSafety.stats(now)
 		imageSize, imageCapacity := g.imageSafety.stats(now)
-		encryptedRetrySize, encryptedRetryCapacity := g.encryptedContentRetry.statsWithCapacity(
+		requestRetrySize, requestRetryCapacity := g.requestRetry.statsWithCapacity(
 			now,
-			invalidEncryptedContentRetryCacheMaxEntries,
+			requestRetryCacheMaxEntries,
 		)
 		return http.StatusOK, nil, jsonMarshal(map[string]map[string]int{
 			"text": {
@@ -694,9 +720,9 @@ func (g *OpenAIGateway) HandleRequest(ctx context.Context, _, path, _ string, _ 
 				"size":     imageSize,
 				"capacity": imageCapacity,
 			},
-			"encrypted_content_retry": {
-				"size":     encryptedRetrySize,
-				"capacity": encryptedRetryCapacity,
+			"request_retry": {
+				"size":     requestRetrySize,
+				"capacity": requestRetryCapacity,
 			},
 		}), nil
 

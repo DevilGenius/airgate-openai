@@ -118,11 +118,25 @@ func TestBuildPluginInfoAndRoutes(t *testing.T) {
 	}
 }
 
-func TestResponsesDispatchCompressionFallbackOverride(t *testing.T) {
-	t.Setenv("AIRGATE_MODEL_RESPONSES_COMPRESSION_FALLBACK", "openai/gpt-long")
+func TestLongContextModelConfiguration(t *testing.T) {
+	t.Setenv(longContextModelEnv, "")
+	if got := configuredLongContextModel(); got != defaultLongContextModel {
+		t.Fatalf("configuredLongContextModel() = %q, want default %q", got, defaultLongContextModel)
+	}
 
-	if got := responsesCompressionFallbackModel(); got != "gpt-long" {
-		t.Fatalf("responsesCompressionFallbackModel() = %q, want gpt-long", got)
+	t.Setenv(longContextModelEnv, "openai/gpt-long")
+	if got := configuredLongContextModel(); got != "gpt-long" {
+		t.Fatalf("configuredLongContextModel() = %q, want gpt-long", got)
+	}
+
+	t.Setenv(longContextModelEnv, "router@openai/gpt-next-long")
+	if got := configuredLongContextModel(); got != "gpt-next-long" {
+		t.Fatalf("configuredLongContextModel() = %q, want gpt-next-long", got)
+	}
+
+	t.Setenv(longContextModelEnv, "router@openai/")
+	if got := configuredLongContextModel(); got != defaultLongContextModel {
+		t.Fatalf("invalid long-context mapping = %q, want default %q", got, defaultLongContextModel)
 	}
 }
 

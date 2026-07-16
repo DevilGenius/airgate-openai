@@ -27,31 +27,31 @@ func TestTextSafetyRequestCacheDefaults(t *testing.T) {
 	}
 }
 
-func TestTextSafetyRequestHashSeparatesRequests(t *testing.T) {
+func TestTextRequestHashSeparatesRequests(t *testing.T) {
 	req := &sdk.ForwardRequest{
 		Body:    []byte(`{"model":"gpt-5.4","input":"same prompt"}`),
 		Headers: http.Header{"Content-Type": []string{"application/json; charset=utf-8"}},
 		Model:   "gpt-5.4",
 	}
-	first, ok := textSafetyRequestHash(req, http.MethodPost, "/v1/responses")
+	first, ok := textRequestHash(req, http.MethodPost, "/v1/responses")
 	if !ok {
 		t.Fatal("responses request should produce a hash")
 	}
 	copyReq := *req
-	second, ok := textSafetyRequestHash(&copyReq, http.MethodPost, "/v1/responses")
+	second, ok := textRequestHash(&copyReq, http.MethodPost, "/v1/responses")
 	if !ok || first != second {
 		t.Fatal("identical text requests should produce the same hash")
 	}
 	changedReq := *req
 	changedReq.Body = []byte(`{"model":"gpt-5.4","input":"different prompt"}`)
-	changed, _ := textSafetyRequestHash(&changedReq, http.MethodPost, "/v1/responses")
+	changed, _ := textRequestHash(&changedReq, http.MethodPost, "/v1/responses")
 	if first == changed {
 		t.Fatal("different text requests must not share a hash")
 	}
-	if _, ok := textSafetyRequestHash(req, http.MethodPost, "/v1/images/generations"); ok {
+	if _, ok := textRequestHash(req, http.MethodPost, "/v1/images/generations"); ok {
 		t.Fatal("image request should not produce a text safety hash")
 	}
-	if _, ok := textSafetyRequestHash(req, http.MethodPost, "/v1/responses/compact"); ok {
+	if _, ok := textRequestHash(req, http.MethodPost, "/v1/responses/compact"); ok {
 		t.Fatal("compact request should not produce a text safety hash")
 	}
 }

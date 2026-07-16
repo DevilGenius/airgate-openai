@@ -717,31 +717,6 @@ func TestPreprocessRequestBodyRejectsForgedDelegatedRecoveryMarker(t *testing.T)
 	}
 }
 
-func TestResponsesCompressionFallbackBodySkipsEquivalentPrefixedCurrentModel(t *testing.T) {
-	t.Setenv("AIRGATE_MODEL_RESPONSES_COMPRESSION_FALLBACK", "gpt-5.4")
-
-	body := []byte(`{"model":"openai/gpt-5.4","input":"hello"}`)
-	if patched, fallbackModel, ok := responsesCompressionFallbackBody(body, "openai/gpt-5.4"); ok {
-		t.Fatalf("equivalent prefixed current model should not retry fallback; model=%q body=%s", fallbackModel, patched)
-	}
-}
-
-func TestResponsesCompressionFallbackBodyNormalizesFallbackOverridePrefix(t *testing.T) {
-	t.Setenv("AIRGATE_MODEL_RESPONSES_COMPRESSION_FALLBACK", "openai/gpt-5.4")
-
-	body := []byte(`{"model":"gpt-5.5","input":"hello"}`)
-	patched, fallbackModel, ok := responsesCompressionFallbackBody(body, "gpt-5.5")
-	if !ok {
-		t.Fatalf("expected fallback retry")
-	}
-	if fallbackModel != "gpt-5.4" {
-		t.Fatalf("fallback model = %q, want gpt-5.4", fallbackModel)
-	}
-	if model := gjson.GetBytes(patched, "model").String(); model != "gpt-5.4" {
-		t.Fatalf("patched model = %q, want gpt-5.4; body=%s", model, patched)
-	}
-}
-
 func TestPreprocessRequestBodyCompactDeletesStreamOnly(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.4","stream":false,"input":"hello"}`)
 

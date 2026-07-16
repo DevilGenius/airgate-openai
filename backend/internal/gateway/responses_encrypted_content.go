@@ -7,7 +7,6 @@ import (
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
-	"github.com/zeebo/xxh3"
 )
 
 const maxGPTReasoningEncryptedContentLen = 32 * 1024 * 1024
@@ -171,7 +170,7 @@ func rewriteResponsesReasoningEncryptedContentItem(item gjson.Result, policy rea
 		hash := uint64(0)
 		hashReady := false
 		if policy.retryCache != nil || policy.validHashes != nil {
-			hash = xxh3.HashString(raw)
+			hash = encryptedContentRetryHash(raw)
 			hashReady = true
 		}
 		if policy.retryCache != nil && policy.retryCache.contains(hash, policy.retryCacheTime) {
@@ -182,7 +181,7 @@ func rewriteResponsesReasoningEncryptedContentItem(item gjson.Result, policy rea
 		} else {
 			if policy.validHashes != nil {
 				if !hashReady {
-					hash = xxh3.HashString(raw)
+					hash = encryptedContentRetryHash(raw)
 				}
 				*policy.validHashes = append(*policy.validHashes, hash)
 			}

@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"os"
 	"strings"
 )
 
@@ -19,7 +18,7 @@ type anthropicModelMapping struct {
 }
 
 var (
-	defaultClaudeTargetModel = normalizeMappedModelID(
+	defaultClaudeTargetModel = normalizeModelID(
 		firstNonEmptyEnv("AIRGATE_DEFAULT_CLAUDE_MODEL"),
 		"gpt-5.5",
 	)
@@ -94,35 +93,6 @@ var anthropicWildcardMappings = []struct {
 
 // defaultModelMapping 兜底映射：不认识的 Claude 模型统一用默认 OpenAI 主模型。
 var defaultModelMapping = anthropicModelMapping{OpenAIModel: defaultClaudeTargetModel, ReasoningEffort: ""}
-
-func resolveRoleTargetModel(fallback string, keys ...string) string {
-	return normalizeMappedModelID(firstNonEmptyEnv(keys...), fallback)
-}
-
-func firstNonEmptyEnv(keys ...string) string {
-	for _, key := range keys {
-		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func normalizeMappedModelID(raw string, fallback string) string {
-	value := strings.TrimSpace(raw)
-	if value == "" {
-		return fallback
-	}
-	if idx := strings.LastIndex(value, "@"); idx >= 0 && idx+1 < len(value) {
-		value = strings.TrimSpace(value[idx+1:])
-	}
-	value = strings.TrimPrefix(value, "openai/")
-	value = strings.TrimPrefix(value, "oai/")
-	if value == "" {
-		return fallback
-	}
-	return value
-}
 
 // resolveAnthropicModelMapping 解析 Claude 模型名的映射
 // 精确匹配 → 通配符前缀匹配 → 兜底默认映射，始终返回非 nil

@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
@@ -418,24 +417,6 @@ func outcomeIsContextTooLarge(outcome sdk.ForwardOutcome) bool {
 		return isContextTooLargeError(reason)
 	}
 	return false
-}
-
-func responsesCompressionFallbackBody(body []byte, currentModel string) ([]byte, string, bool) {
-	fallback := strings.TrimSpace(responsesCompressionFallbackModel())
-	if fallback == "" || mappedModelIDsEqual(currentModel, fallback) {
-		return nil, "", false
-	}
-	patched, err := sjson.SetBytes(body, "model", fallback)
-	if err != nil {
-		return nil, "", false
-	}
-	return patched, fallback, true
-}
-
-func mappedModelIDsEqual(a, b string) bool {
-	left := normalizeMappedModelID(a, "")
-	right := normalizeMappedModelID(b, "")
-	return left != "" && right != "" && strings.EqualFold(left, right)
 }
 
 func classifyOpenAIErrorBody(body []byte) *responsesFailureError {

@@ -506,15 +506,13 @@ func TestForwardAnthropicMessageNonStreamReturnsBodyForGRPC(t *testing.T) {
 	}
 }
 
-func TestForwardAnthropicMessageCompactSummaryUsesCompressionFallbackModel(t *testing.T) {
-	t.Setenv("AIRGATE_MODEL_RESPONSES_COMPRESSION_FALLBACK", "gpt-long")
-
+func TestForwardAnthropicMessageCompactSummaryUsesSelectedModelOnFirstAttempt(t *testing.T) {
 	var upstreamBody []byte
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamBody, _ = io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = fmt.Fprint(w, `data: {"type":"response.output_text.delta","delta":"<analysis></analysis><summary>ok</summary>"}`+"\n")
-		_, _ = fmt.Fprint(w, `data: {"type":"response.completed","response":{"id":"resp_compact","model":"gpt-long","usage":{"input_tokens":3,"output_tokens":1}}}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.completed","response":{"id":"resp_compact","model":"gpt-5.5","usage":{"input_tokens":3,"output_tokens":1}}}`+"\n\n")
 	}))
 	defer ts.Close()
 
@@ -541,8 +539,8 @@ Your task is to create a detailed summary of the conversation so far, paying clo
 	if outcome.Kind != sdk.OutcomeSuccess {
 		t.Fatalf("outcome kind = %v, want success; reason=%s", outcome.Kind, outcome.Reason)
 	}
-	if model := gjson.GetBytes(upstreamBody, "model").String(); model != "gpt-long" {
-		t.Fatalf("upstream compact model = %q, want gpt-long; body=%s", model, upstreamBody)
+	if model := gjson.GetBytes(upstreamBody, "model").String(); model != "gpt-5.5" {
+		t.Fatalf("upstream compact model = %q, want selected model gpt-5.5; body=%s", model, upstreamBody)
 	}
 	if effort := gjson.GetBytes(upstreamBody, "reasoning.effort").String(); effort != "none" {
 		t.Fatalf("compact reasoning effort = %q, want none; body=%s", effort, upstreamBody)

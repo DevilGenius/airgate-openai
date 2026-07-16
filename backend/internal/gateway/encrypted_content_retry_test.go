@@ -230,7 +230,7 @@ func TestForwardStreamingInvalidEncryptedContentOnlySanitizesClientRetry(t *test
 
 func TestInvalidEncryptedContentRetryCacheExpires(t *testing.T) {
 	valid := validGPTReasoningEncryptedContentForTest()
-	gateway := &OpenAIGateway{encryptedContentRetry: safetyRequestCache{ttl: time.Nanosecond}}
+	gateway := &OpenAIGateway{requestRetry: safetyRequestCache{ttl: time.Nanosecond}}
 	req := encryptedContentRetryTestRequest(valid, "")
 	state := preprocessEncryptedContentRetryTestRequest(gateway, req)
 	if !gateway.cacheInvalidEncryptedContentRetry(state, "/v1/responses") {
@@ -262,36 +262,5 @@ func TestIsInvalidEncryptedContentOutcome(t *testing.T) {
 	}
 	if isInvalidEncryptedContentOutcome(success, nil) {
 		t.Fatal("successful assistant output must not be classified as invalid encrypted content")
-	}
-}
-
-func TestInvalidEncryptedContentRetryCacheDefaults(t *testing.T) {
-	if invalidEncryptedContentRetryCacheTTL != 24*time.Hour {
-		t.Fatalf("retry cache TTL = %s, want 24h", invalidEncryptedContentRetryCacheTTL)
-	}
-	if invalidEncryptedContentRetryCacheMaxEntries != 100_000 {
-		t.Fatalf("retry cache capacity = %d, want 100000", invalidEncryptedContentRetryCacheMaxEntries)
-	}
-}
-
-func TestInvalidEncryptedContentRetryCacheCapacity(t *testing.T) {
-	hashes := make([]uint64, invalidEncryptedContentRetryCacheMaxEntries+1)
-	for index := range hashes {
-		hashes[index] = uint64(index + 1)
-	}
-	var cache safetyRequestCache
-	now := time.Now()
-	cache.addHashesWithLimits(
-		hashes,
-		now,
-		invalidEncryptedContentRetryCacheTTL,
-		invalidEncryptedContentRetryCacheMaxEntries,
-	)
-	size, capacity := cache.statsWithCapacity(now, invalidEncryptedContentRetryCacheMaxEntries)
-	if capacity != invalidEncryptedContentRetryCacheMaxEntries {
-		t.Fatalf("retry cache capacity = %d, want %d", capacity, invalidEncryptedContentRetryCacheMaxEntries)
-	}
-	if size != invalidEncryptedContentRetryCacheMaxEntries {
-		t.Fatalf("retry cache size = %d, want capped at %d", size, invalidEncryptedContentRetryCacheMaxEntries)
 	}
 }

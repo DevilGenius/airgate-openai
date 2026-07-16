@@ -97,15 +97,6 @@ func (g *OpenAIGateway) forwardAnthropicMessage(ctx context.Context, req *sdk.Fo
 	// 注: Anthropic 的 cache_control 在转换为 Responses API 后不再适用，
 	// Responses API 使用 session_id + include 机制实现缓存，无需预处理断点
 	compactSummaryRequest := isAnthropicCompactSummaryRequest(gjson.ParseBytes(body))
-	if compactSummaryRequest {
-		if fallbackModel := strings.TrimSpace(responsesCompressionFallbackModel()); fallbackModel != "" && !mappedModelIDsEqual(modelName, fallbackModel) {
-			logger.Warn("anthropic_compact_summary_compression_model",
-				"from_model", modelName,
-				"fallback_model", fallbackModel,
-			)
-			modelName = fallbackModel
-		}
-	}
 	body, _ = sjson.SetBytes(body, "model", modelName)
 	fullResponsesBody := convertAnthropicRequestToResponses(body, modelName, mappingEffort)
 	responsesBody := fullResponsesBody
