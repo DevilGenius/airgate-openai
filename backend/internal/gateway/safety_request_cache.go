@@ -147,26 +147,6 @@ func (c *safetyRequestCache) addHashesWithReasonAndLimits(
 	}
 }
 
-func (c *safetyRequestCache) matching(hashes []uint64, now time.Time) map[uint64]struct{} {
-	if c == nil || len(hashes) == 0 {
-		return nil
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.purgeExpiredLocked(now)
-	var matches map[uint64]struct{}
-	for _, hash := range hashes {
-		if _, ok := c.entries[hash]; !ok {
-			continue
-		}
-		if matches == nil {
-			matches = make(map[uint64]struct{})
-		}
-		matches[hash] = struct{}{}
-	}
-	return matches
-}
-
 func (c *safetyRequestCache) purgeExpiredLocked(now time.Time) {
 	for c.oldest != nil && !now.Before(c.oldest.expiresAt) {
 		c.evictOldestLocked()

@@ -250,9 +250,10 @@ func isStructurallyValidGPTReasoningEncryptedContent(raw string) bool {
 		}
 	}
 	decodedLen := (unpaddedLen / 4) * 3
-	if remainder == 2 {
+	switch remainder {
+	case 2:
 		decodedLen++
-	} else if remainder == 3 {
+	case 3:
 		decodedLen += 2
 	}
 	if decodedLen < 73 {
