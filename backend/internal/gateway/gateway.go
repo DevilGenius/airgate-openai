@@ -134,11 +134,10 @@ func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (s
 		)
 		return *cachedOutcome, nil
 	}
-	if g.applyInvalidEncryptedContentRetry(req, path) {
-		logger.Info("invalid_encrypted_content_retry_sanitized",
-			sdk.LogFieldModel, req.Model,
-			sdk.LogFieldPath, path,
-		)
+	var encryptedContentState *encryptedContentRetryRequestState
+	if isResponsesRequestPath(path) && bytes.Contains(req.Body, []byte(`"encrypted_content"`)) {
+		encryptedContentState = g.newEncryptedContentRetryRequestState()
+		ctx = withEncryptedContentRetryRequestState(ctx, encryptedContentState)
 	}
 
 	// 诊断：Info 级别打印代理状态，让运维 / 开发者直观确认绑定代理是否到了插件这一层。
@@ -162,7 +161,13 @@ func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (s
 	}
 
 	outcome, err := g.forwardHTTP(ctx, req)
-	if isInvalidEncryptedContentOutcome(outcome, err) && g.cacheInvalidEncryptedContentRetry(req, path) {
+	if encryptedContentState != nil && encryptedContentState.retrySanitized {
+		logger.Info("invalid_encrypted_content_retry_sanitized",
+			sdk.LogFieldModel, req.Model,
+			sdk.LogFieldPath, path,
+		)
+	}
+	if isInvalidEncryptedContentOutcome(outcome, err) && g.cacheInvalidEncryptedContentRetry(encryptedContentState, path) {
 		logger.Info("invalid_encrypted_content_retry_cached",
 			sdk.LogFieldModel, req.Model,
 			sdk.LogFieldPath, path,

@@ -177,6 +177,18 @@ streamLoop:
 			}
 		} else if raw := strings.TrimSpace(line); raw != "" {
 			diagnostics.observeRaw(raw)
+			eventType := streamDiagnosticEventType(raw)
+			switch eventType {
+			case "response.failed", "error", "response.incomplete":
+				if streamErr = parseResponsesFailureEvent(eventType, []byte(raw)); streamErr != nil {
+					logStreamFailure(logger, streamErr, resp, streamStarted, diagnostics)
+					streamErrLogged = true
+					if streamStarted {
+						writeSSEFailureError(w, streamErr)
+					}
+					break streamLoop
+				}
+			}
 		}
 
 		if !ok || data == "" || data == "[DONE]" {
@@ -528,7 +540,7 @@ func ParseSSEStream(reader io.Reader, handler WSEventHandler) WSResult {
 			continue
 		}
 
-		eventType, _ := ev["type"].(string)
+		eventType := streamDiagnosticEventType(data)
 
 		// 通知 handler 原始事件
 		if handler != nil {

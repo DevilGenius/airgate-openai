@@ -922,7 +922,7 @@ func translateResponsesSSEToAnthropicSSE(
 			if compactIdleTimer != nil && !compactIdleTimedOut.Load() {
 				compactIdleTimer.Reset(compactEventIdleTimeout)
 			}
-			eventType := gjson.Get(data, "type").String()
+			eventType := streamDiagnosticEventType(data)
 			timing.observe(eventType, []byte(data))
 			if eventType != "response.output_text.delta" &&
 				eventType != "response.reasoning_summary_text.delta" &&
@@ -998,6 +998,18 @@ func translateResponsesSSEToAnthropicSSE(
 					streamErr = fmt.Errorf("响应不完整: %s", reason)
 				}
 			}
+		} else if raw := strings.TrimSpace(string(line)); raw != "" {
+			eventType := streamDiagnosticEventType(raw)
+			switch eventType {
+			case "response.failed", "error", "response.incomplete":
+				timing.observe(eventType, []byte(raw))
+				terminalEventReceived = true
+				streamErr = parseResponsesFailureEvent(eventType, []byte(raw))
+				if streamErr == nil {
+					streamErr = fmt.Errorf("上游错误: %s", raw)
+				}
+				skipCurrentOutput = true
+			}
 		}
 
 		output := ""
@@ -1009,7 +1021,7 @@ func translateResponsesSSEToAnthropicSSE(
 			if len(output) >= largeSSEEventThreshold {
 				srcType := ""
 				if data, ok := extractSSEData(string(line)); ok {
-					srcType = gjson.Get(data, "type").String()
+					srcType = streamDiagnosticEventType(data)
 				}
 				slog.Warn("[Anthropic SSE 大事件]",
 					"src_type", srcType,

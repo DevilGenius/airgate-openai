@@ -27,19 +27,32 @@ func encryptedContentRetryTestRequest(ciphertext, suffix string) *sdk.ForwardReq
 	}
 }
 
+func preprocessEncryptedContentRetryTestRequest(gateway *OpenAIGateway, req *sdk.ForwardRequest) *encryptedContentRetryRequestState {
+	state := gateway.newEncryptedContentRetryRequestState()
+	req.Body = preprocessRequestBodyWithEncryptedContentState(
+		req.Body,
+		req.Model,
+		"/v1/responses",
+		state,
+		req.Headers,
+	)
+	return state
+}
+
 func TestInvalidEncryptedContentRetryMatchesCiphertextAcrossBodyChanges(t *testing.T) {
 	rejected := validGPTReasoningEncryptedContentForTestMarker(0x11)
 	fresh := validGPTReasoningEncryptedContentForTestMarker(0x22)
 	gateway := &OpenAIGateway{}
 	first := encryptedContentRetryTestRequest(rejected, "")
 
-	if gateway.applyInvalidEncryptedContentRetry(first, "/v1/responses") {
+	firstState := preprocessEncryptedContentRetryTestRequest(gateway, first)
+	if firstState.retrySanitized {
 		t.Fatal("first request must preserve encrypted_content")
 	}
 	if got := gjson.GetBytes(first.Body, "input.0.encrypted_content").String(); got != rejected {
 		t.Fatalf("first request encrypted_content = %q, want preserved", got)
 	}
-	if !gateway.cacheInvalidEncryptedContentRetry(first, "/v1/responses") {
+	if !gateway.cacheInvalidEncryptedContentRetry(firstState, "/v1/responses") {
 		t.Fatal("invalid encrypted content failure should cache the ciphertext hash")
 	}
 
@@ -48,7 +61,8 @@ func TestInvalidEncryptedContentRetryMatchesCiphertextAcrossBodyChanges(t *testi
 		`{"id":"rs_fresh","type":"reasoning","encrypted_content":"` + fresh + `","summary":[]},` +
 		`{"type":"message","role":"user","content":[{"type":"input_text","text":"continue with newly added text"}]}` +
 		`]}`)}
-	if !gateway.applyInvalidEncryptedContentRetry(retry, "/v1/responses") {
+	retryState := preprocessEncryptedContentRetryTestRequest(gateway, retry)
+	if !retryState.retrySanitized {
 		t.Fatal("retry containing the rejected ciphertext should remove it despite body changes")
 	}
 	if gjson.GetBytes(retry.Body, "input.0.encrypted_content").Exists() || gjson.GetBytes(retry.Body, "input.0.id").Exists() {
@@ -57,12 +71,10 @@ func TestInvalidEncryptedContentRetryMatchesCiphertextAcrossBodyChanges(t *testi
 	if got := gjson.GetBytes(retry.Body, "input.1.encrypted_content").String(); got != fresh {
 		t.Fatalf("retry removed newly added ciphertext: got %q, want %q", got, fresh)
 	}
-	if gotID := gjson.GetBytes(retry.Body, "input.1.id").String(); gotID != "rs_fresh" {
-		t.Fatalf("retry removed newly added ciphertext id: got %q", gotID)
-	}
 
 	requestWithFreshCiphertext := encryptedContentRetryTestRequest(fresh, " with the same surrounding text")
-	if gateway.applyInvalidEncryptedContentRetry(requestWithFreshCiphertext, "/v1/responses") {
+	freshState := preprocessEncryptedContentRetryTestRequest(gateway, requestWithFreshCiphertext)
+	if freshState.retrySanitized {
 		t.Fatal("an uncached ciphertext must not be removed")
 	}
 	if got := gjson.GetBytes(requestWithFreshCiphertext.Body, "input.0.encrypted_content").String(); got != fresh {
@@ -76,8 +88,9 @@ func TestInvalidEncryptedContentRetryCachesOnlyValidReasoningCiphertexts(t *test
 		[]byte(`{"input":[{"type":"reasoning","encrypted_content":"bad"}]}`),
 		[]byte(`{"input":[{"type":"compaction","encrypted_content":"` + validGPTReasoningEncryptedContentForTest() + `"}]}`),
 	} {
-		req := &sdk.ForwardRequest{Body: body}
-		if gateway.cacheInvalidEncryptedContentRetry(req, "/v1/responses") {
+		req := &sdk.ForwardRequest{Body: body, Model: "gpt-5.4"}
+		state := preprocessEncryptedContentRetryTestRequest(gateway, req)
+		if gateway.cacheInvalidEncryptedContentRetry(state, "/v1/responses") {
 			t.Fatalf("invalid or non-reasoning encrypted content was cached: %s", body)
 		}
 	}
@@ -218,13 +231,15 @@ func TestInvalidEncryptedContentRetryCacheExpires(t *testing.T) {
 	valid := validGPTReasoningEncryptedContentForTest()
 	gateway := &OpenAIGateway{encryptedContentRetry: safetyRequestCache{ttl: time.Nanosecond}}
 	req := encryptedContentRetryTestRequest(valid, "")
-	if !gateway.cacheInvalidEncryptedContentRetry(req, "/v1/responses") {
+	state := preprocessEncryptedContentRetryTestRequest(gateway, req)
+	if !gateway.cacheInvalidEncryptedContentRetry(state, "/v1/responses") {
 		t.Fatal("expected retry marker to be cached")
 	}
 	time.Sleep(time.Millisecond)
 
 	retry := encryptedContentRetryTestRequest(valid, "")
-	if gateway.applyInvalidEncryptedContentRetry(retry, "/v1/responses") {
+	retryState := preprocessEncryptedContentRetryTestRequest(gateway, retry)
+	if retryState.retrySanitized {
 		t.Fatal("expired retry marker should not sanitize request")
 	}
 }

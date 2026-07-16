@@ -23,6 +23,9 @@ func validGPTReasoningEncryptedContentForTestMarker(marker byte) string {
 	return base64.RawURLEncoding.EncodeToString(payload)
 }
 
+var structurallyValidEncryptedContentSink bool
+var encryptedContentPreprocessBenchmarkSink []byte
+
 func TestIsStructurallyValidGPTReasoningEncryptedContent(t *testing.T) {
 	valid := validGPTReasoningEncryptedContentForTest()
 	cases := []struct {
@@ -38,6 +41,10 @@ func TestIsStructurallyValidGPTReasoningEncryptedContent(t *testing.T) {
 		{name: "leading whitespace", value: " " + valid, want: false},
 		{name: "bad base64", value: "gAAAA!!!!", want: false},
 		{name: "short decoded payload", value: "gAAAAA", want: false},
+		{name: "internal padding", value: valid[:20] + "=" + valid[20:], want: false},
+		{name: "excessive padding", value: valid + "===", want: false},
+		{name: "wrong padding count", value: valid + "=", want: false},
+		{name: "invalid base64 remainder", value: valid[:len(valid)-1], want: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -45,6 +52,16 @@ func TestIsStructurallyValidGPTReasoningEncryptedContent(t *testing.T) {
 				t.Fatalf("valid(%q) = %v, want %v", tc.value, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestIsStructurallyValidGPTReasoningEncryptedContentDoesNotAllocate(t *testing.T) {
+	valid := validGPTReasoningEncryptedContentForTest() + "=="
+	allocations := testing.AllocsPerRun(100, func() {
+		structurallyValidEncryptedContentSink = isStructurallyValidGPTReasoningEncryptedContent(valid)
+	})
+	if allocations != 0 {
+		t.Fatalf("structural validation allocations = %.2f, want 0", allocations)
 	}
 }
 
@@ -215,4 +232,29 @@ func TestPreprocessRequestBodySanitizesMalformedReasoningEncryptedContent(t *tes
 	if !strings.Contains(string(got), `"store":false`) {
 		t.Fatalf("preprocess did not force store=false: %s", got)
 	}
+}
+
+func BenchmarkResponsesEncryptedContentPreprocess1MiB(b *testing.B) {
+	body := encryptedContentBenchmarkBody()
+	state := (&OpenAIGateway{}).newEncryptedContentRetryRequestState()
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(body)))
+	b.ResetTimer()
+	for range b.N {
+		encryptedContentPreprocessBenchmarkSink = preprocessRequestBodyWithEncryptedContentState(
+			body,
+			"gpt-5.4",
+			"/v1/responses",
+			state,
+		)
+	}
+}
+
+func encryptedContentBenchmarkBody() []byte {
+	ciphertext := make([]byte, 768*1024+16)
+	payload := make([]byte, 1+8+16+len(ciphertext)+32)
+	payload[0] = 0x80
+	encoded := base64.URLEncoding.EncodeToString(payload)
+	return []byte(`{"model":"gpt-5.4","store":false,"input":[{"type":"reasoning","encrypted_content":"` + encoded + `","summary":[]}]}`)
 }

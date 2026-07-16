@@ -77,7 +77,13 @@ func (g *OpenAIGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest
 	}
 	var reqServiceTier string
 	if !strings.HasPrefix(req.Headers.Get("Content-Type"), "multipart/") {
-		req.Body = preprocessRequestBody(req.Body, req.Model, reqPath, req.Headers)
+		req.Body = preprocessRequestBodyWithEncryptedContentState(
+			req.Body,
+			req.Model,
+			reqPath,
+			encryptedContentRetryRequestStateFromContext(ctx),
+			req.Headers,
+		)
 		req.Body = applyForceInstructions(req.Body, req.Headers)
 		if req.Account.Credentials["api_key"] != "" && isResponsesRequestPath(reqPath) {
 			req.Body = normalizeResponsesToolCompatibility(req.Body)

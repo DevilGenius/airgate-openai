@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -412,6 +413,43 @@ func TestHandleStreamResponseSanitizesFirstSSEError(t *testing.T) {
 	body := w.Body.String()
 	if strings.Contains(body, "upstream secret") || strings.Contains(body, "349f8894") {
 		t.Fatalf("response leaked upstream error: %q", body)
+	}
+}
+
+func TestHandleStreamResponseClassifiesRawJSONErrorBeforeForwarding(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{},
+		Body: io.NopCloser(strings.NewReader(
+			`{"error":{"message":"upstream secret request ID raw-json","type":"server_error","code":"upstream_error"}}` + "\n",
+		)),
+	}
+	w := httptest.NewRecorder()
+
+	outcome, err := handleStreamResponse(resp, w, time.Now(), "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if outcome.Kind != sdk.OutcomeUpstreamTransient {
+		t.Fatalf("expected OutcomeUpstreamTransient, got %v", outcome.Kind)
+	}
+	if body := w.Body.String(); body != "" {
+		t.Fatalf("raw upstream error was forwarded: %q", body)
+	}
+}
+
+func TestParseSSEStreamClassifiesErrorWithoutType(t *testing.T) {
+	sse := `data: {"error":{"message":"upstream failed","type":"server_error","code":"upstream_error"}}` + "\n\n"
+	result := ParseSSEStream(strings.NewReader(sse), nil)
+	if result.Err == nil {
+		t.Fatal("expected no-type SSE error to be classified")
+	}
+	var failure *responsesFailureError
+	if !errors.As(result.Err, &failure) {
+		t.Fatalf("error = %v, want responsesFailureError", result.Err)
+	}
+	if failure.Kind != responsesFailureKindServer {
+		t.Fatalf("failure kind = %s, want server", failure.Kind)
 	}
 }
 

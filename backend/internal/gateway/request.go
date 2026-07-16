@@ -202,6 +202,15 @@ func buildAPIKeyURL(account *sdk.Account, reqPath string) string {
 //  6. Responses API 强制禁用上游存储（store=false）
 //  7. 删除外层结构明显无效的 reasoning encrypted_content
 func preprocessRequestBody(body []byte, model, reqPath string, headers ...http.Header) []byte {
+	return preprocessRequestBodyWithEncryptedContentState(body, model, reqPath, nil, headers...)
+}
+
+func preprocessRequestBodyWithEncryptedContentState(
+	body []byte,
+	model, reqPath string,
+	encryptedContentState *encryptedContentRetryRequestState,
+	headers ...http.Header,
+) []byte {
 	if len(body) == 0 {
 		return body
 	}
@@ -248,7 +257,7 @@ func preprocessRequestBody(body []byte, model, reqPath string, headers ...http.H
 	result = normalizeResponsesInput(result, reqPath)
 	result = forceResponsesStoreFalse(result, reqPath)
 	if hasEncryptedContent {
-		result = sanitizeResponsesReasoningEncryptedContentKnownPresent(result)
+		result = sanitizeResponsesReasoningEncryptedContentKnownPresentWithState(result, encryptedContentState)
 	}
 	return result
 }
@@ -320,7 +329,7 @@ func normalizeResponsesInput(body []byte, reqPath string) []byte {
 		return body
 	}
 
-	inputNode := gjson.GetBytes(body, "input")
+	inputNode := gjson.Get(readOnlyBytesString(body), "input")
 
 	// 情况 1：input 是 string → 包装成单条 user message item 列表
 	if inputNode.Exists() && inputNode.Type == gjson.String {
@@ -384,11 +393,31 @@ func normalizeResponsesInput(body []byte, reqPath string) []byte {
 }
 
 func normalizeResponsesInputItems(body []byte, inputNode gjson.Result) []byte {
-	kept := make([]any, 0, len(inputNode.Array()))
+	items := inputNode.Array()
+	needsChange := false
+	for _, item := range items {
+		role := strings.ToLower(strings.TrimSpace(item.Get("role").String()))
+		if role == "system" {
+			needsChange = true
+			break
+		}
+		if strings.TrimSpace(item.Get("type").String()) == "reasoning" {
+			id := strings.TrimSpace(item.Get("id").String())
+			if strings.HasPrefix(id, "rs_") || !item.Get("summary").Exists() {
+				needsChange = true
+				break
+			}
+		}
+	}
+	if !needsChange {
+		return body
+	}
+
+	kept := make([]any, 0, len(items))
 	var instructionsParts []string
 	changed := false
 
-	for _, item := range inputNode.Array() {
+	for _, item := range items {
 		var itemMap map[string]any
 		if err := json.Unmarshal([]byte(item.Raw), &itemMap); err != nil || itemMap == nil {
 			kept = append(kept, json.RawMessage(item.Raw))
@@ -532,6 +561,9 @@ func normalizeGatewayRequestPath(reqPath string) string {
 
 func forceResponsesStoreFalse(body []byte, reqPath string) []byte {
 	if len(body) == 0 || !isResponsesRequestPath(reqPath) {
+		return body
+	}
+	if store := gjson.GetBytes(body, "store"); store.Exists() && store.Type == gjson.False {
 		return body
 	}
 	if modified, err := sjson.SetBytes(body, "store", false); err == nil {
