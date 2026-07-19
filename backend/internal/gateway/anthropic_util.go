@@ -13,12 +13,12 @@ import (
 // ──────────────────────────────────────────────────────
 
 const (
-	anthropicMinimalEffortTokenBudget int64 = 1024
-	anthropicLowEffortTokenBudget           = 2048
-	anthropicMediumEffortTokenBudget        = 8192
-	anthropicHighEffortTokenBudget          = 16384
-	anthropicXHighEffortTokenBudget         = 32768
-	anthropicMaxEffortTokenBudget           = 65536
+	anthropicMinimalEffortTokenBudget = 1024
+	anthropicLowEffortTokenBudget     = 2048
+	anthropicMediumEffortTokenBudget  = 8192
+	anthropicHighEffortTokenBudget    = 16384
+	anthropicXHighEffortTokenBudget   = 32768
+	anthropicMaxEffortTokenBudget     = 65536
 )
 
 // anthropicTokenBudgetToReasoningEffort 将 Anthropic token 预算映射为 reasoning_effort。
