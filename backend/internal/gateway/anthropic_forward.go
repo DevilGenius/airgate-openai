@@ -161,9 +161,6 @@ func (g *OpenAIGateway) forwardAnthropicMessage(ctx context.Context, req *sdk.Fo
 	}
 
 	outcome, err := g.doAnthropicForward(ctx, req, responsesBody, replayBody, originalModel, modelName, start, session)
-	if mappingEffort != "" {
-		setUsageReasoningEffort(outcome.Usage, mappingEffort)
-	}
 	return outcome, err
 }
 
@@ -396,6 +393,10 @@ func (g *OpenAIGateway) buildAnthropicUpstreamRequest(
 	session openAISessionResolution,
 ) (*http.Request, error) {
 	isOAuth := account.Credentials["access_token"] != ""
+	responsesBody = applyOpenAIWireReasoningEffort(
+		responsesBody,
+		gjson.GetBytes(responsesBody, "model").String(),
+	)
 
 	// 确定目标 URL
 	var targetURL string

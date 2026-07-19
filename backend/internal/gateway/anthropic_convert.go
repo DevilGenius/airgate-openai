@@ -15,7 +15,7 @@ import (
 
 // convertAnthropicRequestToResponses 将 Anthropic Messages API JSON 请求一步转换为 Responses API JSON
 // modelName: 映射后的上游模型名
-// mappingEffort: 模型映射注入的 reasoning_effort（优先级最高）
+// mappingEffort: 客户端未指定时使用的默认 reasoning_effort
 func convertAnthropicRequestToResponses(rawJSON []byte, modelName, mappingEffort string) []byte {
 	root := gjson.ParseBytes(rawJSON)
 	compactSummaryRequest := isAnthropicCompactSummaryRequest(root)
@@ -309,8 +309,8 @@ func convertAnthropicRequestToResponses(rawJSON []byte, modelName, mappingEffort
 	//   2. output_config.effort         （Claude Code Effort 滑块，thinking 未关闭时识别）
 	//   3. thinking.budget_tokens       （Anthropic 原生 extended thinking 预算）
 	//   4. mappingEffort                （模型映射默认）
-	//   5. "medium"                     （全局兜底）
-	reasoningEffort := "medium"
+	//   5. "none"                       （全局兜底）
+	reasoningEffort := defaultAnthropicReasoningEffort
 	clientEffortSet := false
 
 	thinkingConfig := root.Get("thinking")

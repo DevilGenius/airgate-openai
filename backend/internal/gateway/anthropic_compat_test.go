@@ -29,7 +29,7 @@ func TestEstimateAnthropicInputTokensCountsSystemMessagesAndTools(t *testing.T) 
 func TestConvertAnthropicRequestToResponsesMapsMessageSystemRoleToDeveloper(t *testing.T) {
 	body := []byte(`{"model":"claude-opus-4-8","max_tokens":8,"messages":[{"role":"system","content":"Reply with exactly OK."},{"role":"user","content":"test"}]}`)
 
-	got := convertAnthropicRequestToResponses(body, "gpt-5.5", "xhigh")
+	got := convertAnthropicRequestToResponses(body, "gpt-5.5", defaultAnthropicReasoningEffort)
 	if strings.Contains(string(got), `"role":"system"`) {
 		t.Fatalf("converted Responses body still contains system role: %s", got)
 	}
@@ -42,8 +42,17 @@ func TestConvertAnthropicRequestToResponsesMapsMessageSystemRoleToDeveloper(t *t
 	if role := gjson.GetBytes(got, "input.1.role").String(); role != "user" {
 		t.Fatalf("second input role = %q, want user; body=%s", role, got)
 	}
-	if effort := gjson.GetBytes(got, "reasoning.effort").String(); effort != "xhigh" {
-		t.Fatalf("reasoning effort = %q, want xhigh; body=%s", effort, got)
+	if effort := gjson.GetBytes(got, "reasoning.effort").String(); effort != "none" {
+		t.Fatalf("reasoning effort = %q, want none; body=%s", effort, got)
+	}
+}
+
+func TestConvertAnthropicRequestToResponsesDefaultsReasoningEffortToNone(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":8,"messages":[{"role":"user","content":"Review this."}]}`)
+
+	got := convertAnthropicRequestToResponses(body, "gpt-5.5", "")
+	if effort := gjson.GetBytes(got, "reasoning.effort").String(); effort != "none" {
+		t.Fatalf("reasoning effort = %q, want none; body=%s", effort, got)
 	}
 }
 
@@ -65,11 +74,13 @@ func TestConvertAnthropicRequestToResponsesUsesOutputEffortWhenThinkingAdaptive(
 	}
 }
 
-func TestConvertAnthropicRequestToResponsesPreservesOutputMaxEffort(t *testing.T) {
+func TestConvertAnthropicRequestToResponsesPreservesOutputEffort(t *testing.T) {
 	tests := []struct {
 		inputEffort string
 		wantEffort  string
 	}{
+		{inputEffort: "high", wantEffort: "high"},
+		{inputEffort: "xhigh", wantEffort: "xhigh"},
 		{inputEffort: "max", wantEffort: "max"},
 		{inputEffort: "maximum", wantEffort: "max"},
 		{inputEffort: "ultra", wantEffort: "ultra"},
@@ -78,9 +89,52 @@ func TestConvertAnthropicRequestToResponsesPreservesOutputMaxEffort(t *testing.T
 		t.Run(tc.inputEffort, func(t *testing.T) {
 			body := []byte(fmt.Sprintf(`{"model":"claude-opus-4-8","max_tokens":8,"thinking":{"type":"adaptive"},"output_config":{"effort":%q},"messages":[{"role":"user","content":"Review this."}]}`, tc.inputEffort))
 
-			got := convertAnthropicRequestToResponses(body, "gpt-5.5", "medium")
+			got := convertAnthropicRequestToResponses(body, "gpt-5.5", defaultAnthropicReasoningEffort)
 			if effort := gjson.GetBytes(got, "reasoning.effort").String(); effort != tc.wantEffort {
 				t.Fatalf("reasoning effort = %q, want %q; body=%s", effort, tc.wantEffort, got)
+			}
+		})
+	}
+}
+
+func TestBuildAnthropicUpstreamRequestAppliesWireEffortFallback(t *testing.T) {
+	tests := []struct {
+		name       string
+		model      string
+		effort     string
+		wantEffort string
+	}{
+		{name: "sol keeps max", model: "gpt-5.6-sol", effort: "max", wantEffort: "max"},
+		{name: "terra keeps xhigh", model: "gpt-5.6-terra", effort: "xhigh", wantEffort: "xhigh"},
+		{name: "luna clamps ultra", model: "gpt-5.6-luna", effort: "ultra", wantEffort: "max"},
+		{name: "gpt 5.5 clamps max", model: "gpt-5.5", effort: "max", wantEffort: "xhigh"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			account := &sdk.Account{Credentials: map[string]string{
+				"api_key":  "test-key",
+				"base_url": "https://api.openai.com",
+			}}
+			forwardReq := &sdk.ForwardRequest{Account: account, Headers: http.Header{}}
+			body := []byte(fmt.Sprintf(`{"model":%q,"reasoning":{"effort":%q}}`, tt.model, tt.effort))
+
+			upstreamReq, err := (&OpenAIGateway{}).buildAnthropicUpstreamRequest(
+				context.Background(),
+				forwardReq,
+				account,
+				body,
+				openAISessionResolution{},
+			)
+			if err != nil {
+				t.Fatalf("buildAnthropicUpstreamRequest() error = %v", err)
+			}
+			upstreamBody, err := io.ReadAll(upstreamReq.Body)
+			if err != nil {
+				t.Fatalf("read upstream body: %v", err)
+			}
+			if effort := gjson.GetBytes(upstreamBody, "reasoning.effort").String(); effort != tt.wantEffort {
+				t.Fatalf("reasoning effort = %q, want %q; body=%s", effort, tt.wantEffort, upstreamBody)
 			}
 		})
 	}
