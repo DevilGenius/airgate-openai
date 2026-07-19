@@ -308,8 +308,9 @@ func convertAnthropicRequestToResponses(rawJSON []byte, modelName, mappingEffort
 	//   1. thinking.type=disabled       （显式关闭 → none）
 	//   2. output_config.effort         （Claude Code Effort 滑块，thinking 未关闭时识别）
 	//   3. thinking.budget_tokens       （Anthropic 原生 extended thinking 预算）
-	//   4. mappingEffort                （模型映射默认）
-	//   5. "none"                       （全局兜底）
+	//   4. max_tokens                   （未显式传 effort 时的兼容推断）
+	//   5. mappingEffort                （模型映射默认）
+	//   6. "none"                       （全局兜底）
 	reasoningEffort := defaultAnthropicReasoningEffort
 	clientEffortSet := false
 
@@ -339,17 +340,26 @@ func convertAnthropicRequestToResponses(rawJSON []byte, modelName, mappingEffort
 		switch strings.TrimSpace(thinkingConfig.Get("type").String()) {
 		case "enabled":
 			if budgetTokens := thinkingConfig.Get("budget_tokens"); budgetTokens.Exists() {
-				if effort := thinkingBudgetToReasoningEffort(budgetTokens.Int()); effort != "" {
+				if effort := anthropicTokenBudgetToReasoningEffort(budgetTokens.Int()); effort != "" {
 					reasoningEffort = effort
 					clientEffortSet = true
 				}
 			}
 		case "adaptive", "auto":
-			// adaptive 已在 output_config.effort 阶段消费；未传 effort 时让映射默认生效。
+			// adaptive 已在 output_config.effort 阶段消费；未传 effort 时继续尝试 max_tokens。
 		}
 	}
 
-	// 4. 客户端未指定 → 使用模型映射的默认 effort
+	if !clientEffortSet {
+		if maxTokens := root.Get("max_tokens"); maxTokens.Exists() && maxTokens.Type == gjson.Number {
+			if effort := anthropicTokenBudgetToReasoningEffort(maxTokens.Int()); effort != "" {
+				reasoningEffort = effort
+				clientEffortSet = true
+			}
+		}
+	}
+
+	// 5. 客户端没有可用 token 提示 → 使用模型映射的默认 effort
 	if !clientEffortSet && mappingEffort != "" {
 		if e := normalizeReasoningEffort(mappingEffort); e != "" {
 			reasoningEffort = e
@@ -378,7 +388,8 @@ func convertAnthropicRequestToResponses(rawJSON []byte, modelName, mappingEffort
 	}
 
 	// 注意：上游 Codex 风格 Responses 代理不接受 max_output_tokens 字段（会 400 Unsupported parameter），
-	// Anthropic 的 max_tokens 在此被静默丢弃。如果以后切到原生 OpenAI Responses API，再恢复此映射。
+	// Anthropic 的 max_tokens 仅用于上面的 effort 推断，不作为 max_output_tokens 发送。
+	// 如果以后切到原生 OpenAI Responses API，再恢复输出上限映射。
 
 	return []byte(template)
 }

@@ -42,17 +42,81 @@ func TestConvertAnthropicRequestToResponsesMapsMessageSystemRoleToDeveloper(t *t
 	if role := gjson.GetBytes(got, "input.1.role").String(); role != "user" {
 		t.Fatalf("second input role = %q, want user; body=%s", role, got)
 	}
+	if effort := gjson.GetBytes(got, "reasoning.effort").String(); effort != "minimal" {
+		t.Fatalf("reasoning effort = %q, want minimal; body=%s", effort, got)
+	}
+}
+
+func TestConvertAnthropicRequestToResponsesDefaultsReasoningEffortToNoneWithoutTokenHint(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"Review this."}]}`)
+
+	got := convertAnthropicRequestToResponses(body, "gpt-5.5", "")
 	if effort := gjson.GetBytes(got, "reasoning.effort").String(); effort != "none" {
 		t.Fatalf("reasoning effort = %q, want none; body=%s", effort, got)
 	}
 }
 
-func TestConvertAnthropicRequestToResponsesDefaultsReasoningEffortToNone(t *testing.T) {
-	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":8,"messages":[{"role":"user","content":"Review this."}]}`)
+func TestAnthropicTokenBudgetToReasoningEffort(t *testing.T) {
+	tests := []struct {
+		tokens int64
+		want   string
+	}{
+		{tokens: -1, want: ""},
+		{tokens: 0, want: "none"},
+		{tokens: 1, want: "minimal"},
+		{tokens: 1024, want: "minimal"},
+		{tokens: 1025, want: "low"},
+		{tokens: 2048, want: "low"},
+		{tokens: 2049, want: "medium"},
+		{tokens: 8192, want: "medium"},
+		{tokens: 8193, want: "high"},
+		{tokens: 16384, want: "high"},
+		{tokens: 16385, want: "xhigh"},
+		{tokens: 32768, want: "xhigh"},
+		{tokens: 32769, want: "max"},
+		{tokens: 65536, want: "max"},
+		{tokens: 131072, want: "max"},
+	}
 
-	got := convertAnthropicRequestToResponses(body, "gpt-5.5", "")
-	if effort := gjson.GetBytes(got, "reasoning.effort").String(); effort != "none" {
-		t.Fatalf("reasoning effort = %q, want none; body=%s", effort, got)
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%d", tt.tokens), func(t *testing.T) {
+			if got := anthropicTokenBudgetToReasoningEffort(tt.tokens); got != tt.want {
+				t.Fatalf("anthropicTokenBudgetToReasoningEffort(%d) = %q, want %q", tt.tokens, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConvertAnthropicRequestToResponsesInfersEffortFromMaxTokens(t *testing.T) {
+	tests := []struct {
+		maxTokens int64
+		want      string
+	}{
+		{maxTokens: 1024, want: "minimal"},
+		{maxTokens: 2048, want: "low"},
+		{maxTokens: 8192, want: "medium"},
+		{maxTokens: 16384, want: "high"},
+		{maxTokens: 32768, want: "xhigh"},
+		{maxTokens: 65536, want: "max"},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%d", tt.maxTokens), func(t *testing.T) {
+			body := []byte(fmt.Sprintf(`{"model":"claude-opus-4-8","max_tokens":%d,"messages":[{"role":"user","content":"Review this."}]}`, tt.maxTokens))
+			got := convertAnthropicRequestToResponses(body, "gpt-5.6-sol", defaultAnthropicReasoningEffort)
+			if effort := gjson.GetBytes(got, "reasoning.effort").String(); effort != tt.want {
+				t.Fatalf("reasoning effort = %q, want %q; body=%s", effort, tt.want, got)
+			}
+		})
+	}
+}
+
+func TestConvertAnthropicRequestToResponsesPrefersThinkingBudgetOverMaxTokens(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-4-5","max_tokens":65536,"thinking":{"type":"enabled","budget_tokens":2048},"messages":[{"role":"user","content":"Review this."}]}`)
+
+	got := convertAnthropicRequestToResponses(body, "gpt-5.6-terra", defaultAnthropicReasoningEffort)
+	if effort := gjson.GetBytes(got, "reasoning.effort").String(); effort != "low" {
+		t.Fatalf("reasoning effort = %q, want low from thinking.budget_tokens; body=%s", effort, got)
 	}
 }
 
@@ -79,6 +143,10 @@ func TestConvertAnthropicRequestToResponsesPreservesOutputEffort(t *testing.T) {
 		inputEffort string
 		wantEffort  string
 	}{
+		{inputEffort: "none", wantEffort: "none"},
+		{inputEffort: "minimal", wantEffort: "minimal"},
+		{inputEffort: "low", wantEffort: "low"},
+		{inputEffort: "medium", wantEffort: "medium"},
 		{inputEffort: "high", wantEffort: "high"},
 		{inputEffort: "xhigh", wantEffort: "xhigh"},
 		{inputEffort: "max", wantEffort: "max"},
