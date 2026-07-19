@@ -370,6 +370,50 @@ func TestBuildNonStreamResponses_PatchesEmptyOutputFromImageCalls(t *testing.T) 
 	}
 }
 
+func TestBuildNonStreamResponses_PatchesEmptyOutputFromFunctionCalls(t *testing.T) {
+	completedEvent := []byte(`{"type":"response.completed","response":{"id":"resp_tool","object":"response","status":"completed","output":[],"usage":{"input_tokens":78,"output_tokens":27,"total_tokens":105}}}`)
+	name := "get_weather"
+	result := WSResult{
+		CompletedEventRaw: completedEvent,
+		ToolUses: []ToolUseBlock{{
+			Type:  "tool_use",
+			ID:    "call_weather",
+			Name:  &name,
+			Input: json.RawMessage(`{"date":"2026-07-20","location":"北京"}`),
+		}},
+	}
+
+	body := buildNonStreamResponses(result)
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("body not valid JSON: %v", err)
+	}
+
+	output, ok := got["output"].([]any)
+	if !ok {
+		t.Fatalf("output missing or wrong type: %#v", got["output"])
+	}
+	if len(output) != 1 {
+		t.Fatalf("output len = %d, want 1", len(output))
+	}
+	item := output[0].(map[string]any)
+	if item["type"] != "function_call" {
+		t.Fatalf("output[0].type = %v, want function_call", item["type"])
+	}
+	if item["id"] != "call_weather" || item["call_id"] != "call_weather" {
+		t.Fatalf("unexpected function call ids: id=%v call_id=%v", item["id"], item["call_id"])
+	}
+	if item["name"] != "get_weather" {
+		t.Fatalf("output[0].name = %v, want get_weather", item["name"])
+	}
+	if item["arguments"] != `{"date":"2026-07-20","location":"北京"}` {
+		t.Fatalf("output[0].arguments = %v", item["arguments"])
+	}
+	if item["status"] != "completed" {
+		t.Fatalf("output[0].status = %v, want completed", item["status"])
+	}
+}
+
 func TestBuildNonStreamResponses_PatchesEmptyOutputFromTextDelta(t *testing.T) {
 	completedEvent := []byte(`{"type":"response.completed","response":{"id":"resp_text","object":"response","status":"completed","output":[],"usage":{"input_tokens":7,"output_tokens":11,"total_tokens":18}}}`)
 	result := WSResult{

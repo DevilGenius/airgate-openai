@@ -643,13 +643,50 @@ func patchResponsesOutput(raw string, result WSResult) []byte {
 }
 
 func synthesizeResponsesOutput(result WSResult) []map[string]any {
-	if len(result.ImageGenCalls) > 0 {
-		return synthesizeResponsesImageGenOutput(result)
-	}
+	var output []map[string]any
+	output = append(output, synthesizeResponsesFunctionCallOutput(result)...)
+	output = append(output, synthesizeResponsesImageGenOutput(result)...)
 	if result.Text != "" {
-		return synthesizeResponsesTextOutput(result.Text)
+		output = append(output, synthesizeResponsesTextOutput(result.Text)...)
 	}
-	return nil
+	return output
+}
+
+func synthesizeResponsesFunctionCallOutput(result WSResult) []map[string]any {
+	if len(result.ToolUses) == 0 {
+		return nil
+	}
+
+	output := make([]map[string]any, 0, len(result.ToolUses))
+	for _, toolUse := range result.ToolUses {
+		if toolUse.Type != "tool_use" || toolUse.Name == nil {
+			continue
+		}
+		name := strings.TrimSpace(*toolUse.Name)
+		if name == "" || name == "web_search" {
+			continue
+		}
+
+		arguments := strings.TrimSpace(string(toolUse.Input))
+		if arguments == "" {
+			arguments = "{}"
+		}
+		item := map[string]any{
+			"type":      "function_call",
+			"status":    "completed",
+			"name":      name,
+			"arguments": arguments,
+		}
+		if callID := strings.TrimSpace(toolUse.ID); callID != "" {
+			// ToolUseBlock.ID stores the Responses call_id. Reusing it as the
+			// synthesized item id matches the existing compatibility translators
+			// and keeps the output usable for function_call_output continuation.
+			item["id"] = callID
+			item["call_id"] = callID
+		}
+		output = append(output, item)
+	}
+	return output
 }
 
 func synthesizeResponsesTextOutput(text string) []map[string]any {
