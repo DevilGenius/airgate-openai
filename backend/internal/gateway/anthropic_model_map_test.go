@@ -17,6 +17,7 @@ func TestAnthropicDefaultTargetModels(t *testing.T) {
 		{name: "opus", gotPrimary: opusTargetModel, wantPrimary: "gpt-5.6-terra", gotFallback: opusFallbackModel, wantFallback: "gpt-5.5"},
 		{name: "sonnet", gotPrimary: sonnetTargetModel, wantPrimary: "gpt-5.6-luna", gotFallback: sonnetFallbackModel, wantFallback: "gpt-5.4"},
 		{name: "haiku", gotPrimary: haikuTargetModel, wantPrimary: "gpt-5.3-codex-spark", gotFallback: haikuFallbackModel, wantFallback: "gpt-5.4-mini"},
+		{name: "default", gotPrimary: defaultClaudeTargetModel, wantPrimary: "gpt-5.5", gotFallback: defaultClaudeFallbackModel, wantFallback: "gpt-5.5"},
 	}
 
 	for _, tt := range tests {

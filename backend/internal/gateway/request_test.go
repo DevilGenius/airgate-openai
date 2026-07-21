@@ -1764,8 +1764,8 @@ func TestResolveEffectiveModelFallsBackToDefaultModel(t *testing.T) {
 	t.Parallel()
 
 	for _, existing := range []any{"", "None", "gpt-unknown", nil} {
-		if got := resolveEffectiveModel("", existing); got != "gpt-5.4" {
-			t.Fatalf("resolveEffectiveModel(%#v) = %q, want gpt-5.4", existing, got)
+		if got := resolveEffectiveModel("", existing); got != "gpt-5.5" {
+			t.Fatalf("resolveEffectiveModel(%#v) = %q, want gpt-5.5", existing, got)
 		}
 	}
 }

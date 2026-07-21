@@ -21,8 +21,8 @@ func TestForwardOAuthUnknownModelRequestsReroute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Forward() error = %v", err)
 	}
-	if target, ok := outcome.ModelRerouteClientTarget(); !ok || target != "gpt-5.4" {
-		t.Fatalf("Forward() outcome = %+v, want gpt-5.4 model reroute", outcome)
+	if target, ok := outcome.ModelRerouteClientTarget(); !ok || target != "gpt-5.5" {
+		t.Fatalf("Forward() outcome = %+v, want gpt-5.5 model reroute", outcome)
 	}
 	if outcome.Upstream.StatusCode != http.StatusBadRequest {
 		t.Fatalf("Forward() status = %d, want %d", outcome.Upstream.StatusCode, http.StatusBadRequest)
@@ -55,7 +55,7 @@ func TestOAuthModelRerouteOutcome(t *testing.T) {
 		},
 		{
 			name: "rerouted dispatch plan does not loop on original client model",
-			req:  oauthModelRerouteTestRequest("codex-auto-review", "gpt-5.4", "gpt-5.4"),
+			req:  oauthModelRerouteTestRequest("codex-auto-review", "gpt-5.5", "gpt-5.5"),
 			path: "/v1/responses",
 		},
 		{
@@ -67,7 +67,7 @@ func TestOAuthModelRerouteOutcome(t *testing.T) {
 			name:       "chat completions uses the same Codex upstream resolution",
 			req:        oauthModelRerouteTestRequest("codex-auto-review", "codex-auto-review", "codex-auto-review"),
 			path:       "/v1/chat/completions",
-			wantTarget: "gpt-5.4",
+			wantTarget: "gpt-5.5",
 		},
 		{
 			name: "responses compact keeps its dedicated mapping",

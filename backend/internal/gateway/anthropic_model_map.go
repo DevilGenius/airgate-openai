@@ -71,7 +71,7 @@ var (
 		"AIRGATE_MODEL_HAIKU_FALLBACK",
 	)
 	defaultClaudeFallbackModel = resolveRoleTargetModel(
-		"gpt-5.4",
+		"gpt-5.5",
 		"AIRGATE_MODEL_DEFAULT_FALLBACK",
 	)
 	// sparkTargetModel 简单操作加速模型（Read/Grep/Glob 结果处理时自动路由）
@@ -82,9 +82,9 @@ var (
 	)
 	// codexDefaultModel Codex CLI 透传路径的兜底模型。
 	// 当客户端请求体里 model 字段为空、null 或字面量 "None" 时使用这个值，
-	// 避免把无效 model 发到上游触发 "The 'None' model is not supported" 错误。
+	// 默认使用 gpt-5.5，也可通过 AIRGATE_CODEX_DEFAULT_MODEL 覆盖。
 	codexDefaultModel = resolveRoleTargetModel(
-		"gpt-5.4",
+		"gpt-5.5",
 		"AIRGATE_CODEX_DEFAULT_MODEL",
 	)
 	enableAnthropicContinuation = strings.EqualFold(firstNonEmptyEnv("AIRGATE_ENABLE_ANTHROPIC_CONTINUATION"), "true")
