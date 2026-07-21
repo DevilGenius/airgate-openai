@@ -124,6 +124,15 @@ func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (s
 		sdk.LogFieldModel, req.Model,
 		"stream", req.Stream,
 	)
+	if outcome, ok := oauthModelRerouteOutcome(req, path); ok {
+		logger.Info("oauth_model_reroute_requested",
+			sdk.LogFieldModel, req.Model,
+			sdk.LogFieldPath, path,
+			"planned_model", req.DispatchPlan.UpstreamModel(),
+			"reroute_client_model", outcome.RerouteClientModel,
+		)
+		return outcome, nil
+	}
 	hashRequest, hashBegin := g.runtimeHash.BeginRequest(
 		ctx,
 		req,
