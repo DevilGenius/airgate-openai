@@ -1644,6 +1644,39 @@ func TestNormalizeResponsesInputMovesSystemInputToInstructions(t *testing.T) {
 	}
 }
 
+func TestNormalizeResponsesInputRepairsInvalidItemIDs(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.6-sol","input":[{"type":"message","id":"msg_valid-1","role":"user","content":"one"},{"type":"message","id":"msg_019f8361:14f6","role":"user","content":"two"},{"type":"message","id":" msg_trimmed_1 ","role":"user","content":"three"},{"type":"function_call","id":"fc.invalid","call_id":"call_valid-1","name":"read","arguments":"{}"},{"type":"message","id":123,"role":"user","content":"four"}]}`)
+	result := normalizeResponsesInput(body, "/v1/responses")
+
+	if got := gjson.GetBytes(result, "input.0.id").String(); got != "msg_valid-1" {
+		t.Fatalf("valid id = %q, want msg_valid-1; body=%s", got, result)
+	}
+	if gjson.GetBytes(result, "input.1.id").Exists() {
+		t.Fatalf("invalid message id was not removed: %s", result)
+	}
+	if got := gjson.GetBytes(result, "input.2.id").String(); got != "msg_trimmed_1" {
+		t.Fatalf("trimmed id = %q, want msg_trimmed_1; body=%s", got, result)
+	}
+	if gjson.GetBytes(result, "input.3.id").Exists() {
+		t.Fatalf("invalid function item id was not removed: %s", result)
+	}
+	if got := gjson.GetBytes(result, "input.3.call_id").String(); got != "call_valid-1" {
+		t.Fatalf("call_id = %q, want call_valid-1; body=%s", got, result)
+	}
+	if gjson.GetBytes(result, "input.4.id").Exists() {
+		t.Fatalf("non-string item id was not removed: %s", result)
+	}
+}
+
+func TestNormalizeResponsesInputRepairsInvalidBareItemID(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.6-sol","input":{"type":"message","id":"msg.invalid","role":"user","content":"hi"}}`)
+	result := normalizeResponsesInput(body, "/v1/responses")
+
+	if gjson.GetBytes(result, "input.id").Exists() {
+		t.Fatalf("invalid bare input id was not removed: %s", result)
+	}
+}
+
 func TestNormalizeResponsesInputPreservesEncryptedReasoningAndStripsRSID(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.4","input":[{"type":"reasoning","id":"rs_1","encrypted_content":"sealed","content":[{"type":"reasoning_text","text":"keep"}],"extra":"field"},{"type":"reasoning","id":"other_1","encrypted_content":"sealed2","summary":[{"type":"summary_text","text":"visible"}]}]}`)
 	result := normalizeResponsesInput(body, "/v1/responses")
@@ -1704,6 +1737,18 @@ func TestPreprocessRequestBody_ForcesResponsesStoreFalse(t *testing.T) {
 				t.Fatalf("store = %v, want false; body=%s", store.Value(), got)
 			}
 		})
+	}
+}
+
+func TestPreprocessRequestBodyRepairsInvalidResponsesInputItemID(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.6-sol","input":[{"type":"message","id":"msg_019f8361/14f6","role":"user","content":"hi"}]}`)
+	result := preprocessRequestBody(body, "gpt-5.6-sol", "/v1/responses")
+
+	if gjson.GetBytes(result, "input.0.id").Exists() {
+		t.Fatalf("invalid input item id reached the upstream body: %s", result)
+	}
+	if got := gjson.GetBytes(result, "input.0.content").String(); got != "hi" {
+		t.Fatalf("message content = %q, want hi; body=%s", got, result)
 	}
 }
 

@@ -399,6 +399,13 @@ func normalizeResponsesInputItems(body []byte, inputNode gjson.Result) []byte {
 	items := inputNode.Array()
 	needsChange := false
 	for _, item := range items {
+		if id := item.Get("id"); id.Exists() {
+			normalizedID := strings.TrimSpace(id.String())
+			if id.Type != gjson.String || normalizedID != id.String() || !isValidResponsesInputItemID(normalizedID) {
+				needsChange = true
+				break
+			}
+		}
 		role := strings.ToLower(strings.TrimSpace(item.Get("role").String()))
 		if role == "system" {
 			needsChange = true
@@ -434,6 +441,9 @@ func normalizeResponsesInputItems(body []byte, inputNode gjson.Result) []byte {
 			}
 			changed = true
 			continue
+		}
+		if normalizeResponsesInputItemID(itemMap) {
+			changed = true
 		}
 		if normalizeResponsesReasoningInputItem(itemMap) {
 			changed = true
@@ -472,7 +482,11 @@ func normalizeResponsesInputObject(body []byte, inputNode gjson.Result) []byte {
 	if err := json.Unmarshal([]byte(inputNode.Raw), &item); err != nil || item == nil {
 		return body
 	}
-	if !normalizeResponsesReasoningInputItem(item) {
+	changed := normalizeResponsesInputItemID(item)
+	if normalizeResponsesReasoningInputItem(item) {
+		changed = true
+	}
+	if !changed {
 		return body
 	}
 	encoded, err := json.Marshal(item)
@@ -483,6 +497,47 @@ func normalizeResponsesInputObject(body []byte, inputNode gjson.Result) []byte {
 		return modified
 	}
 	return body
+}
+
+func normalizeResponsesInputItemID(item map[string]any) bool {
+	rawID, exists := item["id"]
+	if !exists {
+		return false
+	}
+	id, ok := rawID.(string)
+	if !ok {
+		delete(item, "id")
+		return true
+	}
+
+	normalized := strings.TrimSpace(id)
+	if !isValidResponsesInputItemID(normalized) {
+		delete(item, "id")
+		return true
+	}
+	if normalized != id {
+		item["id"] = normalized
+		return true
+	}
+	return false
+}
+
+func isValidResponsesInputItemID(id string) bool {
+	if id == "" {
+		return false
+	}
+	for index := 0; index < len(id); index++ {
+		char := id[index]
+		switch {
+		case char >= 'a' && char <= 'z':
+		case char >= 'A' && char <= 'Z':
+		case char >= '0' && char <= '9':
+		case char == '_' || char == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeResponsesReasoningInputItem(item map[string]any) bool {
