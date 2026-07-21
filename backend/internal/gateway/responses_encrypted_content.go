@@ -3,7 +3,6 @@ package gateway
 import (
 	"bytes"
 	"strings"
-	"time"
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -25,26 +24,20 @@ func sanitizeResponsesReasoningEncryptedContent(body []byte) []byte {
 }
 
 func sanitizeResponsesReasoningEncryptedContentKnownPresent(body []byte) []byte {
-	return sanitizeResponsesReasoningEncryptedContentKnownPresentWithState(body, nil)
+	return sanitizeResponsesReasoningEncryptedContentKnownPresentWithState(body, disabledEncryptedContent)
 }
 
-func sanitizeResponsesReasoningEncryptedContentKnownPresentWithState(body []byte, state *encryptedContentRetryRequestState) []byte {
+func sanitizeResponsesReasoningEncryptedContentKnownPresentWithState(body []byte, session encryptedContentHashSession) []byte {
 	stripOrphanReasoningIDs := !gjson.GetBytes(body, "store").Bool()
+	if session == nil {
+		session = disabledEncryptedContent
+	}
+	session.BeginRewrite()
 	policy := reasoningEncryptedContentRewritePolicy{
 		removeInvalid:          true,
 		stripExistingOrphanIDs: stripOrphanReasoningIDs,
 		stripRemovedContentID:  stripOrphanReasoningIDs,
-	}
-	if state != nil {
-		state.validHashes = state.validHashes[:0]
-		state.retrySanitized = false
-		policy.retryCache = state.cache
-		policy.retryCacheTime = state.checkedAt
-		policy.validHashes = &state.validHashes
-		policy.retryRemoved = &state.retrySanitized
-		// A cached retry match always leaves the reasoning id orphaned, even if
-		// the client requested store=true before the gateway forces store=false.
-		policy.stripRemovedContentID = true
+		hashSession:            session,
 	}
 	updated, _ := rewriteResponsesReasoningEncryptedContentKnownPresent(body, policy)
 	return updated
@@ -68,13 +61,13 @@ type reasoningEncryptedContentRewritePolicy struct {
 	stripExistingOrphanIDs bool
 	stripRemovedContentID  bool
 	removeValid            func(string) bool
-	retryCache             *safetyRequestCache
-	retryCacheTime         time.Time
-	validHashes            *[]uint64
-	retryRemoved           *bool
+	hashSession            encryptedContentHashSession
 }
 
 func rewriteResponsesReasoningEncryptedContentKnownPresent(body []byte, policy reasoningEncryptedContentRewritePolicy) ([]byte, bool) {
+	if policy.hashSession == nil {
+		policy.hashSession = disabledEncryptedContent
+	}
 	input := gjson.Get(readOnlyBytesString(body), "input")
 	if !input.Exists() {
 		return body, false
@@ -167,27 +160,10 @@ func rewriteResponsesReasoningEncryptedContentItem(item gjson.Result, policy rea
 		isStructurallyValidGPTReasoningEncryptedContent(raw)
 	remove := !valid && policy.removeInvalid
 	if valid {
-		hash := uint64(0)
-		hashReady := false
-		if policy.retryCache != nil || policy.validHashes != nil {
-			hash = encryptedContentRetryHash(raw)
-			hashReady = true
-		}
-		if policy.retryCache != nil && policy.retryCache.contains(hash, policy.retryCacheTime) {
+		if policy.hashSession.ShouldRemove(raw) {
 			remove = true
-			if policy.retryRemoved != nil {
-				*policy.retryRemoved = true
-			}
-		} else {
-			if policy.validHashes != nil {
-				if !hashReady {
-					hash = encryptedContentRetryHash(raw)
-				}
-				*policy.validHashes = append(*policy.validHashes, hash)
-			}
-			if policy.removeValid != nil {
-				remove = policy.removeValid(raw)
-			}
+		} else if policy.removeValid != nil {
+			remove = policy.removeValid(raw)
 		}
 	}
 	if !remove {

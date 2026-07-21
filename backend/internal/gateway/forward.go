@@ -81,7 +81,7 @@ func (g *OpenAIGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest
 			req.Body,
 			req.Model,
 			reqPath,
-			encryptedContentRetryRequestStateFromContext(ctx),
+			encryptedContentHashSessionFromContext(ctx),
 			req.Headers,
 		)
 		req.Body = applyForceInstructions(req.Body, req.Headers)
@@ -121,16 +121,12 @@ func (g *OpenAIGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest
 		return g.handleTaskQuery(ctx, req, handler)
 	}
 
-	if isImagesRequest(reqPath) {
-		var cachedOutcome *sdk.ForwardOutcome
-		ctx, cachedOutcome = g.checkImageSafetyRequest(ctx, req, reqMethod, reqPath)
-		if cachedOutcome != nil {
-			sdk.LoggerFromContext(ctx).Info("image_safety_request_cache_hit",
-				sdk.LogFieldModel, req.Model,
-				sdk.LogFieldPath, reqPath,
-			)
-			return *cachedOutcome, nil
-		}
+	if cachedOutcome := runtimeHashRequestFromContext(ctx).CheckImage(req, reqMethod, reqPath); cachedOutcome != nil {
+		sdk.LoggerFromContext(ctx).Info("image_safety_request_cache_hit",
+			sdk.LogFieldModel, req.Model,
+			sdk.LogFieldPath, reqPath,
+		)
+		return *cachedOutcome, nil
 	}
 
 	if !isImagesRequest(reqPath) && model.IsImageOnly(req.Model) {

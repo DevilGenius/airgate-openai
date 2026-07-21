@@ -28,9 +28,7 @@ type OpenAIGateway struct {
 	snapshotStore      *codexUsagePersistenceStore
 	transportPool      *TransportPool
 	tasks              *TaskRegistry
-	imageSafety        imageSafetyRequestCache
-	textSafety         safetyRequestCache
-	requestRetry       safetyRequestCache
+	runtimeHash        runtimeHash
 	longContextModelID string
 }
 
@@ -42,6 +40,7 @@ func (g *OpenAIGateway) Info() sdk.PluginInfo {
 
 func (g *OpenAIGateway) Init(ctx sdk.PluginContext) error {
 	g.ctx = ctx
+	g.runtimeHash.initialize()
 	g.longContextModelID = configuredLongContextModel()
 	g.transportPool = NewTransportPool()
 	g.tasks = NewTaskRegistry()
@@ -119,36 +118,36 @@ func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (s
 	}
 
 	method, path := resolveAPIKeyRoute(req)
-	imageRequest := isImagesRequest(path)
 	logger.Debug("plugin_request_received",
 		sdk.LogFieldMethod, method,
 		sdk.LogFieldPath, path,
 		sdk.LogFieldModel, req.Model,
 		"stream", req.Stream,
 	)
-	var cachedOutcome *sdk.ForwardOutcome
-	ctx, cachedOutcome = g.checkTextSafetyRequest(ctx, req, method, path)
-	if cachedOutcome != nil {
-		logger.Info("text_safety_request_cache_hit",
-			sdk.LogFieldModel, req.Model,
-			sdk.LogFieldPath, path,
-			"retry_after_ms", cachedOutcome.RetryAfter.Milliseconds(),
-		)
-		return *cachedOutcome, nil
-	}
-	contextWindowState, rerouteOutcome := g.checkContextWindowReroute(ctx, req, path)
-	if rerouteOutcome != nil {
-		logger.Info("context_window_reroute_requested",
-			sdk.LogFieldModel, contextWindowState.dispatchClientModel,
-			sdk.LogFieldPath, path,
-			"long_context_model", contextWindowState.longContextModel,
-		)
-		return *rerouteOutcome, nil
-	}
-	var encryptedContentState *encryptedContentRetryRequestState
-	if isResponsesRequestPath(path) && bytes.Contains(req.Body, []byte(`"encrypted_content"`)) {
-		encryptedContentState = g.newEncryptedContentRetryRequestState()
-		ctx = withEncryptedContentRetryRequestState(ctx, encryptedContentState)
+	hashRequest, hashBegin := g.runtimeHash.BeginRequest(
+		ctx,
+		req,
+		method,
+		path,
+		g.effectiveLongContextModel(),
+	)
+	ctx = hashBegin.Context
+	if hashBegin.Outcome != nil {
+		switch hashBegin.Event {
+		case textHashBeginSafetyCacheHit:
+			logger.Info("text_safety_request_cache_hit",
+				sdk.LogFieldModel, req.Model,
+				sdk.LogFieldPath, path,
+				"retry_after_ms", hashBegin.Outcome.RetryAfter.Milliseconds(),
+			)
+		case textHashBeginContextWindowReroute:
+			logger.Info("context_window_reroute_requested",
+				sdk.LogFieldModel, hashBegin.DispatchClientModel,
+				sdk.LogFieldPath, path,
+				"long_context_model", hashBegin.LongContextModel,
+			)
+		}
+		return *hashBegin.Outcome, nil
 	}
 
 	// 诊断：Info 级别打印代理状态，让运维 / 开发者直观确认绑定代理是否到了插件这一层。
@@ -167,48 +166,41 @@ func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (s
 		"via_proxy", proxyURL != "",
 		"proxy_target", redactProxyURL(proxyURL),
 	)
-	if imageRequest {
-		ctx = withImageSafetyRequestHashCapture(ctx)
-	}
-
 	outcome, err := g.forwardHTTP(ctx, req)
-	if isContextWindowExceededForwardResult(outcome, err) {
-		if contextWindowState.cached {
-			logger.Warn("context_window_long_model_failed",
-				sdk.LogFieldModel, contextWindowState.dispatchClientModel,
-				sdk.LogFieldPath, path,
-				"long_context_model", contextWindowState.longContextModel,
-			)
-		} else if g.cacheContextWindowExceeded(contextWindowState) {
-			logger.Info("context_window_reroute_cached",
-				sdk.LogFieldModel, contextWindowState.dispatchClientModel,
-				sdk.LogFieldPath, path,
-				"long_context_model", contextWindowState.longContextModel,
-			)
-		}
+	hashFinish := hashRequest.Finish(outcome, err)
+	if hashFinish.ContextWindowLongModelFailed {
+		logger.Warn("context_window_long_model_failed",
+			sdk.LogFieldModel, hashFinish.DispatchClientModel,
+			sdk.LogFieldPath, path,
+			"long_context_model", hashFinish.LongContextModel,
+		)
+	} else if hashFinish.ContextWindowCached {
+		logger.Info("context_window_reroute_cached",
+			sdk.LogFieldModel, hashFinish.DispatchClientModel,
+			sdk.LogFieldPath, path,
+			"long_context_model", hashFinish.LongContextModel,
+		)
 	}
-	if encryptedContentState != nil && encryptedContentState.retrySanitized {
+	if hashFinish.EncryptedContentSanitized {
 		logger.Info("invalid_encrypted_content_retry_sanitized",
 			sdk.LogFieldModel, req.Model,
 			sdk.LogFieldPath, path,
 		)
 	}
-	if isInvalidEncryptedContentOutcome(outcome, err) && g.cacheInvalidEncryptedContentRetry(encryptedContentState, path) {
+	if hashFinish.EncryptedContentCached {
 		logger.Info("invalid_encrypted_content_retry_cached",
 			sdk.LogFieldModel, req.Model,
 			sdk.LogFieldPath, path,
 		)
 	}
-	// 各同步响应处理器只负责识别上游安全拒绝；缓存与日志统一在入口收敛一次。
-	if outcome.SafetyRejected {
-		logEvent := "text_safety_request_cached"
-		if imageRequest {
-			g.cacheImageSafetyRejection(ctx, outcome.Reason)
-			logEvent = "image_safety_request_cached"
-		} else {
-			g.cacheTextSafetyRejection(ctx)
-		}
-		logger.Info(logEvent,
+	if hashFinish.TextSafetyCached {
+		logger.Info("text_safety_request_cached",
+			sdk.LogFieldModel, req.Model,
+			sdk.LogFieldPath, path,
+		)
+	}
+	if hashFinish.ImageSafetyCached {
+		logger.Info("image_safety_request_cached",
 			sdk.LogFieldModel, req.Model,
 			sdk.LogFieldPath, path,
 		)
@@ -701,30 +693,36 @@ func buildCodexUsageWindows(snapshot *CodexUsageSnapshot, limitName string, now 
 }
 
 // HandleRequest 处理 Core 透传的自定义请求（实现 sdk.RequestHandler 接口）
-func (g *OpenAIGateway) HandleRequest(ctx context.Context, _, path, _ string, _ http.Header, body []byte) (int, http.Header, []byte, error) {
+func (g *OpenAIGateway) HandleRequest(ctx context.Context, method, path, _ string, _ http.Header, body []byte) (int, http.Header, []byte, error) {
 	switch path {
-	case "runtime/safety-cache":
-		now := time.Now()
-		textSize, textCapacity := g.textSafety.stats(now)
-		imageSize, imageCapacity := g.imageSafety.stats(now)
-		requestRetrySize, requestRetryCapacity := g.requestRetry.statsWithCapacity(
-			now,
-			requestRetryCacheMaxEntries,
-		)
-		return http.StatusOK, nil, jsonMarshal(map[string]map[string]int{
-			"text": {
-				"size":     textSize,
-				"capacity": textCapacity,
-			},
-			"image": {
-				"size":     imageSize,
-				"capacity": imageCapacity,
-			},
-			"request_retry": {
-				"size":     requestRetrySize,
-				"capacity": requestRetryCapacity,
-			},
-		}), nil
+	case "runtime/hash":
+		switch strings.ToUpper(strings.TrimSpace(method)) {
+		case http.MethodGet:
+			state := g.runtimeHash.State()
+			stats := g.runtimeHash.Stats(time.Now())
+			return http.StatusOK, nil, jsonMarshal(map[string]any{
+				"text_enabled":  state.TextEnabled,
+				"image_enabled": state.ImageEnabled,
+				"text":          stats.Text,
+				"image":         stats.Image,
+				"request_retry": stats.RequestRetry,
+			}), nil
+		case http.MethodPut:
+			var input struct {
+				TextEnabled  *bool `json:"text_enabled"`
+				ImageEnabled *bool `json:"image_enabled"`
+			}
+			if err := json.Unmarshal(body, &input); err != nil || input.TextEnabled == nil || input.ImageEnabled == nil {
+				return http.StatusBadRequest, nil, jsonError("invalid request body"), nil
+			}
+			state := g.runtimeHash.SetState(runtimeHashState{
+				TextEnabled:  *input.TextEnabled,
+				ImageEnabled: *input.ImageEnabled,
+			})
+			return http.StatusOK, nil, jsonMarshal(state), nil
+		default:
+			return http.StatusMethodNotAllowed, nil, jsonError("method not allowed"), nil
+		}
 
 	case "accounts/quota":
 		var req struct {

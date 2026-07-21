@@ -2,14 +2,12 @@ package gateway
 
 import (
 	"bytes"
-	"context"
 	"encoding/binary"
 	"fmt"
 	"mime"
 	"net/http"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/zeebo/xxh3"
@@ -25,15 +23,74 @@ const (
 	imageSafetyMultipartHashDomain    = "airgate:image-safety-multipart:xxh3-64:v1"
 )
 
-type imageSafetyRequestContextKey struct{}
-type imageSafetyRequestHashCaptureContextKey struct{}
-
-type imageSafetyRequestHashCapture struct {
-	hash  atomic.Uint64
-	ready atomic.Bool
+type enabledImageHash struct {
+	cache safetyRequestCache
 }
 
-type imageSafetyRequestCache = safetyRequestCache
+type enabledImageHashRequest struct {
+	hash  *enabledImageHash
+	value uint64
+	ready bool
+}
+
+func (h *enabledImageHash) Begin() imageHashRequest {
+	return &enabledImageHashRequest{hash: h}
+}
+
+func (h *enabledImageHash) CacheTaskRejection(input map[string]any) {
+	if h == nil || input == nil {
+		return
+	}
+	value, _ := input[imageSafetyRequestHashInputKey].(string)
+	hash, err := strconv.ParseUint(value, 16, 64)
+	if err != nil {
+		return
+	}
+	h.cache.add(hash, time.Now())
+}
+
+func (h *enabledImageHash) stats(now time.Time) (size, capacity int) {
+	if h == nil {
+		return 0, imageSafetyRequestCacheMaxEntries
+	}
+	return h.cache.stats(now)
+}
+
+func (r *enabledImageHashRequest) Check(
+	req *sdk.ForwardRequest,
+	method, path string,
+) *sdk.ForwardOutcome {
+	if r == nil || r.hash == nil {
+		return nil
+	}
+	hash, ok := imageSafetyRequestHash(req, method, path)
+	if !ok {
+		return nil
+	}
+	r.value = hash
+	r.ready = true
+	if reason, cached := r.hash.cache.lookup(hash, time.Now()); cached {
+		outcome := imageSafetyClientOutcome(reason)
+		outcome.SafetyRejected = false
+		return &outcome
+	}
+	return nil
+}
+
+func (r *enabledImageHashRequest) AttachTaskInput(input map[string]any) {
+	if r == nil || !r.ready || input == nil {
+		return
+	}
+	input[imageSafetyRequestHashInputKey] = strconv.FormatUint(r.value, 16)
+}
+
+func (r *enabledImageHashRequest) Finish(outcome sdk.ForwardOutcome) bool {
+	if r == nil || r.hash == nil || !r.ready || !outcome.SafetyRejected {
+		return false
+	}
+	r.hash.cache.addWithReason(r.value, time.Now(), outcome.Reason)
+	return true
+}
 
 func imageSafetyRequestHash(req *sdk.ForwardRequest, method, path string) (uint64, bool) {
 	if req == nil || !isImagesRequest(path) {
@@ -130,82 +187,6 @@ func writeXXH3HashUint64(dst *xxh3.Hasher, value uint64) {
 	var encoded [8]byte
 	binary.BigEndian.PutUint64(encoded[:], value)
 	_, _ = dst.Write(encoded[:])
-}
-
-func withImageSafetyRequestHash(ctx context.Context, hash uint64) context.Context {
-	return context.WithValue(ctx, imageSafetyRequestContextKey{}, hash)
-}
-
-func withImageSafetyRequestHashCapture(ctx context.Context) context.Context {
-	return context.WithValue(ctx, imageSafetyRequestHashCaptureContextKey{}, &imageSafetyRequestHashCapture{})
-}
-
-func captureImageSafetyRequestHash(ctx context.Context, hash uint64) {
-	if ctx == nil {
-		return
-	}
-	capture, _ := ctx.Value(imageSafetyRequestHashCaptureContextKey{}).(*imageSafetyRequestHashCapture)
-	if capture == nil {
-		return
-	}
-	// 先发布 hash，再发布 ready；读取方先观察 ready，再读取完整 hash。
-	capture.hash.Store(hash)
-	capture.ready.Store(true)
-}
-
-func imageSafetyRequestHashFromContext(ctx context.Context) (uint64, bool) {
-	if ctx == nil {
-		return 0, false
-	}
-	if hash, ok := ctx.Value(imageSafetyRequestContextKey{}).(uint64); ok {
-		return hash, true
-	}
-	capture, _ := ctx.Value(imageSafetyRequestHashCaptureContextKey{}).(*imageSafetyRequestHashCapture)
-	if capture == nil || !capture.ready.Load() {
-		return 0, false
-	}
-	return capture.hash.Load(), true
-}
-
-func (g *OpenAIGateway) checkImageSafetyRequest(ctx context.Context, req *sdk.ForwardRequest, method, path string) (context.Context, *sdk.ForwardOutcome) {
-	hash, ok := imageSafetyRequestHash(req, method, path)
-	if !ok {
-		return ctx, nil
-	}
-	captureImageSafetyRequestHash(ctx, hash)
-	if g != nil {
-		if reason, cached := g.imageSafety.lookup(hash, time.Now()); cached {
-			outcome := imageSafetyClientOutcome(reason)
-			// 本地缓存命中不是新的上游拒绝，避免 Forward 再次写入并重复记录 cached 日志。
-			outcome.SafetyRejected = false
-			return ctx, &outcome
-		}
-	}
-	return withImageSafetyRequestHash(ctx, hash), nil
-}
-
-func (g *OpenAIGateway) cacheImageSafetyRejection(ctx context.Context, reasons ...string) {
-	reason := ""
-	if len(reasons) > 0 {
-		reason = reasons[0]
-	}
-	if g == nil {
-		return
-	}
-	if hash, ok := imageSafetyRequestHashFromContext(ctx); ok {
-		g.imageSafety.addWithReason(hash, time.Now(), reason)
-	}
-}
-
-func (g *OpenAIGateway) cacheImageSafetyRejectionHash(value string) {
-	if g == nil || value == "" {
-		return
-	}
-	hash, err := strconv.ParseUint(value, 16, 64)
-	if err != nil {
-		return
-	}
-	g.imageSafety.add(hash, time.Now())
 }
 
 func imageSafetyRequestHashHex(req *sdk.ForwardRequest, method, path string) string {

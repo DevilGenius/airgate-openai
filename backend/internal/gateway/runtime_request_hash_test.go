@@ -75,7 +75,7 @@ func TestContextWindowRerouteReusesTextRequestHash(t *testing.T) {
 		t.Fatal("failed long-context attempt must not add a second request hash")
 	}
 
-	size, capacity := gateway.requestRetry.statsWithCapacity(time.Now(), requestRetryCacheMaxEntries)
+	size, capacity := requestRetryCacheForTest(gateway).statsWithCapacity(time.Now(), requestRetryCacheMaxEntries)
 	if size != 1 || capacity != requestRetryCacheMaxEntries {
 		t.Fatalf("request retry cache = %d/%d, want 1/%d", size, capacity, requestRetryCacheMaxEntries)
 	}
@@ -171,7 +171,7 @@ func TestContextWindowRerouteModelMappingMatrix(t *testing.T) {
 			if !ok {
 				t.Fatal("text request hash was not captured")
 			}
-			gateway.requestRetry.addHashesWithLimits(
+			requestRetryCacheForTest(gateway).addHashesWithLimits(
 				[]uint64{hash},
 				time.Now(),
 				requestRetryCacheTTL,
@@ -272,7 +272,7 @@ func TestContextWindowExceededCachesOnlyNonLongContextModels(t *testing.T) {
 			if cached := gateway.cacheContextWindowExceeded(state); cached != testCase.wantCached {
 				t.Fatalf("cache result = %v, want %v; state=%+v", cached, testCase.wantCached, state)
 			}
-			size, _ := gateway.requestRetry.statsWithCapacity(time.Now(), requestRetryCacheMaxEntries)
+			size, _ := requestRetryCacheForTest(gateway).statsWithCapacity(time.Now(), requestRetryCacheMaxEntries)
 			wantSize := 0
 			if testCase.wantCached {
 				wantSize = 1
@@ -415,7 +415,7 @@ func TestForwardStreamingContextWindowReroutesOnlyOnNextClientRequest(t *testing
 		t.Fatalf("full client retry flow made %d upstream attempts, want exactly 2", got)
 	}
 
-	size, capacity := gateway.requestRetry.statsWithCapacity(time.Now(), requestRetryCacheMaxEntries)
+	size, capacity := requestRetryCacheForTest(gateway).statsWithCapacity(time.Now(), requestRetryCacheMaxEntries)
 	if size != 1 || capacity != requestRetryCacheMaxEntries {
 		t.Fatalf("request retry cache = %d/%d, want 1/%d", size, capacity, requestRetryCacheMaxEntries)
 	}
@@ -469,7 +469,7 @@ func TestForwardDirectLongContextModelNeverEntersRerouteCache(t *testing.T) {
 		if _, ok := outcome.ModelRerouteClientTarget(); ok || outcome.FailoverScope == sdk.FailoverScopeModelReroute {
 			t.Fatalf("direct long-context attempt %d requested reroute: %+v", attempt, outcome)
 		}
-		size, _ := gateway.requestRetry.statsWithCapacity(time.Now(), requestRetryCacheMaxEntries)
+		size, _ := requestRetryCacheForTest(gateway).statsWithCapacity(time.Now(), requestRetryCacheMaxEntries)
 		if size != 0 {
 			t.Fatalf("direct long-context attempt %d populated reroute cache: size=%d", attempt, size)
 		}

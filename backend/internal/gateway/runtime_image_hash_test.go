@@ -227,10 +227,15 @@ func TestImageTaskInputCarriesOriginalSafetyRequestHash(t *testing.T) {
 		Model:   "gpt-image-2",
 	}
 	want := imageSafetyRequestHashHex(req, http.MethodPost, "/v1/images/generations")
+	imageRequest := (&enabledImageHash{}).Begin()
+	if outcome := imageRequest.Check(req, http.MethodPost, "/v1/images/generations"); outcome != nil {
+		t.Fatalf("uncached task request returned outcome: %+v", outcome)
+	}
 	input, _, err := imageGenerateHandler{}.BuildInput(req, "/v1/images/generations")
 	if err != nil {
 		t.Fatalf("BuildInput returned error: %v", err)
 	}
+	imageRequest.AttachTaskInput(input)
 	if got, _ := input[imageSafetyRequestHashInputKey].(string); got == "" || got != want {
 		t.Fatalf("task request hash = %q, want %q", got, want)
 	}

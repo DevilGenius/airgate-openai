@@ -230,7 +230,8 @@ func TestForwardStreamingInvalidEncryptedContentOnlySanitizesClientRetry(t *test
 
 func TestInvalidEncryptedContentRetryCacheExpires(t *testing.T) {
 	valid := validGPTReasoningEncryptedContentForTest()
-	gateway := &OpenAIGateway{requestRetry: safetyRequestCache{ttl: time.Nanosecond}}
+	gateway := &OpenAIGateway{}
+	requestRetryCacheForTest(gateway).ttl = time.Nanosecond
 	req := encryptedContentRetryTestRequest(valid, "")
 	state := preprocessEncryptedContentRetryTestRequest(gateway, req)
 	if !gateway.cacheInvalidEncryptedContentRetry(state, "/v1/responses") {

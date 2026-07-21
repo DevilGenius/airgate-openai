@@ -75,9 +75,6 @@ func buildImageTaskInput(req *sdk.ForwardRequest, reqPath string, isEdit bool) (
 		"model":  model,
 		"n":      parsed.N,
 	}
-	if requestHash := imageSafetyRequestHashHex(req, http.MethodPost, reqPath); requestHash != "" {
-		input[imageSafetyRequestHashInputKey] = requestHash
-	}
 	if parsed.Size != "" {
 		input["size"] = parsed.Size
 	}
@@ -192,14 +189,7 @@ func executeImageTask(ctx context.Context, g *OpenAIGateway, task sdk.HostTask, 
 	resp, err := g.forwardViaHost(ctx, task.UserID, groupID, apiKeyID, model, http.MethodPost, defaultPath, headers, reqBody, false, withHostForwardTask(task.ID, upstreamTaskID))
 	if err != nil {
 		if failure, ok := normalizedImageSafetyFailureFromError(err); ok {
-			if requestHash, _ := task.Input[imageSafetyRequestHashInputKey].(string); requestHash != "" {
-				g.cacheImageSafetyRejectionHash(requestHash)
-			}
-			return rt.Fail(ctx, &TaskError{
-				Type:    "invalid_request",
-				Code:    failure.Code,
-				Message: failure.Message,
-			})
+			return failImageTaskSafety(ctx, g, task, rt, failure.Code, failure.Message)
 		}
 		// 其余 err 来自 gRPC host-invoke 自身失败（断开 / 序列化错误）。
 		return rt.Fail(ctx, &TaskError{
@@ -212,9 +202,7 @@ func executeImageTask(ctx context.Context, g *OpenAIGateway, task sdk.HostTask, 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		taskErr := classifyUpstreamTaskError(resp.StatusCode, resp.Body)
 		if taskErr.Type == "invalid_request" && taskErr.Code == imageSafetyInvalidRequestCode {
-			if requestHash, _ := task.Input[imageSafetyRequestHashInputKey].(string); requestHash != "" {
-				g.cacheImageSafetyRejectionHash(requestHash)
-			}
+			return failImageTaskSafety(ctx, g, task, rt, taskErr.Code, taskErr.Message)
 		}
 		return rt.Fail(ctx, taskErr)
 	}
@@ -262,6 +250,21 @@ func executeImageTask(ctx context.Context, g *OpenAIGateway, task sdk.HostTask, 
 	}
 
 	return rt.Complete(ctx, output)
+}
+
+func failImageTaskSafety(
+	ctx context.Context,
+	g *OpenAIGateway,
+	task sdk.HostTask,
+	rt *TaskRuntime,
+	code, message string,
+) error {
+	g.runtimeHash.CacheImageTaskRejection(task.Input)
+	return rt.Fail(ctx, &TaskError{
+		Type:    "invalid_request",
+		Code:    code,
+		Message: message,
+	})
 }
 
 // classifyUpstreamTaskError 把上游 HTTP 错误映射为结构化 TaskError。

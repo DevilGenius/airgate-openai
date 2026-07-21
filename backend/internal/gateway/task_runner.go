@@ -163,6 +163,7 @@ func (g *OpenAIGateway) forwardTask(ctx context.Context, req *sdk.ForwardRequest
 			Reason:   err.Error(),
 		}, nil
 	}
+	runtimeHashRequestFromContext(ctx).AttachTaskInput(input)
 
 	userID, _ := strconv.ParseInt(req.Headers.Get("X-Airgate-User-ID"), 10, 64)
 	task, err := g.createHostTask(ctx, handler.Type(), userID, input, attributes, 0, 3)

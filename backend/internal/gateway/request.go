@@ -202,13 +202,13 @@ func buildAPIKeyURL(account *sdk.Account, reqPath string) string {
 //  6. Responses API 强制禁用上游存储（store=false）
 //  7. 删除外层结构明显无效的 reasoning encrypted_content
 func preprocessRequestBody(body []byte, model, reqPath string, headers ...http.Header) []byte {
-	return preprocessRequestBodyWithEncryptedContentState(body, model, reqPath, nil, headers...)
+	return preprocessRequestBodyWithEncryptedContentState(body, model, reqPath, disabledEncryptedContent, headers...)
 }
 
 func preprocessRequestBodyWithEncryptedContentState(
 	body []byte,
 	model, reqPath string,
-	encryptedContentState *encryptedContentRetryRequestState,
+	encryptedContentState encryptedContentHashSession,
 	headers ...http.Header,
 ) []byte {
 	if len(body) == 0 {
@@ -257,6 +257,9 @@ func preprocessRequestBodyWithEncryptedContentState(
 	result = normalizeResponsesInput(result, reqPath)
 	result = forceResponsesStoreFalse(result, reqPath)
 	if hasEncryptedContent {
+		if encryptedContentState == nil {
+			encryptedContentState = disabledEncryptedContent
+		}
 		result = sanitizeResponsesReasoningEncryptedContentKnownPresentWithState(result, encryptedContentState)
 	}
 	return result
