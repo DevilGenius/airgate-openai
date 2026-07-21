@@ -175,9 +175,10 @@ func applyOpenAIWireReasoningEffort(body []byte, modelID string) []byte {
 func openAIWireReasoningSupportForModel(modelID string) openAIWireReasoningSupport {
 	id := openAIWireReasoningModelID(modelID)
 	switch id {
-	case "gpt-5.6-sol", "gpt-5.6-terra":
-		return openAIWireReasoningSupport{Max: true, Ultra: true}
-	case "gpt-5.6-luna":
+	case "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
+		// ultra 是 Codex 模型目录中的客户端级强度，但当前 Responses
+		// wire 的 ReasoningEffortParam 最高只接受 max。请求归一化阶段继续
+		// 保留 ultra，仅在最终发送上游前映射为该模型支持的最高 wire 档位。
 		return openAIWireReasoningSupport{Max: true}
 	default:
 		return openAIWireReasoningSupport{}

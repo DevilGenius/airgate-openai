@@ -1012,7 +1012,7 @@ func TestOpenAIWireReasoningEffortClampsUnsupportedLevels(t *testing.T) {
 	}
 }
 
-func TestOpenAIWireReasoningEffortAllowsGPT56ExtendedLevels(t *testing.T) {
+func TestOpenAIWireReasoningEffortAllowsDeclaredExtendedLevels(t *testing.T) {
 	cases := []struct {
 		input string
 		want  string
@@ -1025,7 +1025,7 @@ func TestOpenAIWireReasoningEffortAllowsGPT56ExtendedLevels(t *testing.T) {
 	}
 	for _, tc := range cases {
 		if got := openAIWireReasoningEffort(tc.input, openAIWireReasoningSupport{Max: true, Ultra: true}); got != tc.want {
-			t.Errorf("openAIWireReasoningEffort(%q, allowExtended=true) = %q, want %q", tc.input, got, tc.want)
+			t.Errorf("openAIWireReasoningEffort(%q, support=max+ultra) = %q, want %q", tc.input, got, tc.want)
 		}
 	}
 }
@@ -1057,15 +1057,15 @@ func TestApplyOpenAIWireReasoningEffortClampsLunaUltra(t *testing.T) {
 	}
 }
 
-func TestApplyOpenAIWireReasoningEffortPreservesGPT56ExtendedLevels(t *testing.T) {
+func TestApplyOpenAIWireReasoningEffortMapsGPT56UltraAtWireBoundary(t *testing.T) {
 	body := []byte(`{"reasoning":{"effort":"max"},"reasoning_effort":"ultra","output_config":{"effort":"maximum"}}`)
 	result := applyOpenAIWireReasoningEffort(body, "gpt-5.6-sol")
 
 	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "max" {
 		t.Fatalf("reasoning.effort = %q, want max; body=%s", got, result)
 	}
-	if got := gjson.GetBytes(result, "reasoning_effort").String(); got != "ultra" {
-		t.Fatalf("reasoning_effort = %q, want ultra; body=%s", got, result)
+	if got := gjson.GetBytes(result, "reasoning_effort").String(); got != "max" {
+		t.Fatalf("reasoning_effort = %q, want max; body=%s", got, result)
 	}
 	if got := gjson.GetBytes(result, "output_config.effort").String(); got != "max" {
 		t.Fatalf("output_config.effort = %q, want max; body=%s", got, result)
@@ -1077,8 +1077,8 @@ func TestOpenAIWireReasoningSupportForModelRecognizesAliases(t *testing.T) {
 		model string
 		want  openAIWireReasoningSupport
 	}{
-		{"gpt-5.6-sol", openAIWireReasoningSupport{Max: true, Ultra: true}},
-		{"openai/gpt-5.6-terra", openAIWireReasoningSupport{Max: true, Ultra: true}},
+		{"gpt-5.6-sol", openAIWireReasoningSupport{Max: true}},
+		{"openai/gpt-5.6-terra", openAIWireReasoningSupport{Max: true}},
 		{"oai/gpt-5.6-luna-openai-compact", openAIWireReasoningSupport{Max: true}},
 		{"gpt-5.5", openAIWireReasoningSupport{}},
 	}
@@ -1398,6 +1398,15 @@ func TestEnsureResponsesDefaultsNormalizesExistingReasoningEffortLowcaseAlias(t 
 				t.Fatalf("reasoning.effort = %q, want %q; body=%s", got, tc.wantEffort, result)
 			}
 		})
+	}
+}
+
+func TestEnsureResponsesDefaultsPreservesUltraUntilWireBoundary(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.6-sol","input":"hi","reasoning":{"effort":"ultra"}}`)
+	result := ensureResponsesDefaultsWithTier(body, "")
+
+	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "ultra" {
+		t.Fatalf("reasoning.effort = %q, want ultra; body=%s", got, result)
 	}
 }
 
