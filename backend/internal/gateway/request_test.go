@@ -1677,6 +1677,42 @@ func TestNormalizeResponsesInputRepairsInvalidBareItemID(t *testing.T) {
 	}
 }
 
+func TestNormalizeResponsesInputMessageIDPrefixes(t *testing.T) {
+	tests := []struct {
+		name   string
+		id     string
+		wantID string
+	}{
+		{name: "valid msg prefix", id: "msg_019f84000000000000000001", wantID: "msg_019f84000000000000000001"},
+		{name: "item prefix", id: "item_019f84000000000000000001"},
+		{name: "other prefix", id: "foo_019f84000000000000000001"},
+		{name: "uppercase prefix", id: "MSG_019f84000000000000000001"},
+		{name: "missing underscore", id: "msg019f84000000000000000001"},
+		{name: "dash separator", id: "msg-019f84000000000000000001"},
+		{name: "empty suffix", id: "msg_"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body := []byte(fmt.Sprintf(
+				`{"model":"gpt-5.5","input":[{"type":"message","id":%q,"role":"user","content":"hi"}]}`,
+				test.id,
+			))
+			result := normalizeResponsesInput(body, "/v1/responses")
+			id := gjson.GetBytes(result, "input.0.id")
+			if test.wantID == "" {
+				if id.Exists() {
+					t.Fatalf("invalid message id was not removed: %s", result)
+				}
+				return
+			}
+			if got := id.String(); got != test.wantID {
+				t.Fatalf("message id = %q, want %q; body=%s", got, test.wantID, result)
+			}
+		})
+	}
+}
+
 func TestNormalizeResponsesInputPreservesEncryptedReasoningAndStripsRSID(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.4","input":[{"type":"reasoning","id":"rs_1","encrypted_content":"sealed","content":[{"type":"reasoning_text","text":"keep"}],"extra":"field"},{"type":"reasoning","id":"other_1","encrypted_content":"sealed2","summary":[{"type":"summary_text","text":"visible"}]}]}`)
 	result := normalizeResponsesInput(body, "/v1/responses")

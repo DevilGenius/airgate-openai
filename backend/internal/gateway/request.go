@@ -327,6 +327,7 @@ func preserveOpenAIConversationImages(body []byte) []byte {
 // encrypted_content 以及 content/summary 等上下文字段，仅移除 store=false 下会
 // 触发服务端存储查找的 rs_* id，并补齐上游要求的 summary。已有续链锚点的请求会
 // 在外层移除重复的加密 replay item；外层结构无效的密文由请求预处理 sanitizer 删除。
+// message item 仅保留合法的 msg_* id；其他前缀直接移除，避免 Codex 返回 invalid_id_prefix。
 func normalizeResponsesInput(body []byte, reqPath string) []byte {
 	if !isResponsesRequestPath(reqPath) {
 		return body
@@ -401,7 +402,8 @@ func normalizeResponsesInputItems(body []byte, inputNode gjson.Result) []byte {
 	for _, item := range items {
 		if id := item.Get("id"); id.Exists() {
 			normalizedID := strings.TrimSpace(id.String())
-			if id.Type != gjson.String || normalizedID != id.String() || !isValidResponsesInputItemID(normalizedID) {
+			if id.Type != gjson.String || normalizedID != id.String() ||
+				!isValidResponsesInputItemIDForType(item.Get("type").String(), normalizedID) {
 				needsChange = true
 				break
 			}
@@ -511,7 +513,7 @@ func normalizeResponsesInputItemID(item map[string]any) bool {
 	}
 
 	normalized := strings.TrimSpace(id)
-	if !isValidResponsesInputItemID(normalized) {
+	if !isValidResponsesInputItemIDForType(jsonString(item["type"]), normalized) {
 		delete(item, "id")
 		return true
 	}
@@ -520,6 +522,16 @@ func normalizeResponsesInputItemID(item map[string]any) bool {
 		return true
 	}
 	return false
+}
+
+func isValidResponsesInputItemIDForType(itemType, id string) bool {
+	if !isValidResponsesInputItemID(id) {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(itemType), "message") {
+		return true
+	}
+	return strings.HasPrefix(id, "msg_") && len(id) > len("msg_")
 }
 
 func isValidResponsesInputItemID(id string) bool {
