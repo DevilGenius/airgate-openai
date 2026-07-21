@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -198,13 +197,5 @@ func (g *OpenAIGateway) cacheImageSafetyRejection(ctx context.Context, reasons .
 	}
 	if hash, ok := imageSafetyRequestHashFromContext(ctx); ok {
 		g.runtimeHash.image.cache.addWithReason(hash, time.Now(), reason)
-	}
-}
-
-func (g *OpenAIGateway) cacheImageSafetyRejectionHash(value string) {
-	g.runtimeHash.initialize()
-	hash, err := strconv.ParseUint(value, 16, 64)
-	if err == nil {
-		g.runtimeHash.image.cache.add(hash, time.Now())
 	}
 }
