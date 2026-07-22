@@ -22,7 +22,7 @@ type OAuthDevHandler struct {
 func (h *OAuthDevHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/oauth/start", h.handleStart)
 	mux.HandleFunc("/api/oauth/callback", h.handleCallback)
-	mux.HandleFunc("/api/accounts/quota/", h.handleQuota)
+	mux.HandleFunc("/api/accounts/token-refresh/", h.handleTokenRefresh)
 	mux.HandleFunc("/api/accounts/usage/", h.handleUsage)
 }
 
@@ -101,15 +101,15 @@ func (h *OAuthDevHandler) handleCallback(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-// handleQuota 处理 GET /api/accounts/quota/{id}，查询账号订阅信息
-func (h *OAuthDevHandler) handleQuota(w http.ResponseWriter, r *http.Request) {
+// handleTokenRefresh 处理 GET /api/accounts/token-refresh/{id}，刷新账号令牌及订阅信息。
+func (h *OAuthDevHandler) handleTokenRefresh(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 		return
 	}
 
 	// 从路径提取账号 ID
-	idStr := strings.TrimPrefix(r.URL.Path, "/api/accounts/quota/")
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/accounts/token-refresh/")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		http.Error(w, `{"error":"invalid account id"}`, http.StatusBadRequest)
@@ -123,56 +123,56 @@ func (h *OAuthDevHandler) handleQuota(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 优先尝试实时查询（通过刷新 token）
-	quota, queryErr := h.Gateway.QueryQuota(context.Background(), account.Credentials)
-	if queryErr == nil && quota != nil {
+	result, queryErr := h.Gateway.RefreshToken(context.Background(), account.Credentials)
+	if queryErr == nil && result != nil {
 		// 查询成功，更新存储中的凭证（token 可能已刷新）
 		updated := false
-		if newAT := quota.Extra["access_token"]; newAT != "" && newAT != account.Credentials["access_token"] {
+		if newAT := result.Extra["access_token"]; newAT != "" && newAT != account.Credentials["access_token"] {
 			account.Credentials["access_token"] = newAT
 			updated = true
 		}
-		if newRT := quota.Extra["refresh_token"]; newRT != "" && newRT != account.Credentials["refresh_token"] {
+		if newRT := result.Extra["refresh_token"]; newRT != "" && newRT != account.Credentials["refresh_token"] {
 			account.Credentials["refresh_token"] = newRT
 			updated = true
 		}
-		if pt := quota.Extra["plan_type"]; pt != "" {
+		if pt := result.Extra["plan_type"]; pt != "" {
 			account.Credentials["plan_type"] = pt
 			updated = true
 		}
-		if email := quota.Extra["email"]; email != "" && account.Credentials["email"] == "" {
+		if email := result.Extra["email"]; email != "" && account.Credentials["email"] == "" {
 			account.Credentials["email"] = email
 			updated = true
 		}
-		if quota.ExpiresAt != "" {
-			account.Credentials["subscription_active_until"] = quota.ExpiresAt
+		if result.ExpiresAt != "" {
+			account.Credentials["subscription_active_until"] = result.ExpiresAt
 			updated = true
 		}
 		if updated {
 			h.Store.Update(id, *account)
 		}
 
-		sdk.LoggerFromContext(r.Context()).Info("oauth_quota_response",
+		sdk.LoggerFromContext(r.Context()).Info("oauth_token_refresh_response",
 			sdk.LogFieldAccountID, id,
 			"source", "realtime",
-			"plan_type", quota.Extra["plan_type"],
-			"subscription_active_until", quota.ExpiresAt,
+			"plan_type", result.Extra["plan_type"],
+			"subscription_active_until", result.ExpiresAt,
 			"updated_credentials", updated,
 		)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"plan_type":                 quota.Extra["plan_type"],
-			"subscription_active_until": quota.ExpiresAt,
+			"plan_type":                 result.Extra["plan_type"],
+			"subscription_active_until": result.ExpiresAt,
 			"source":                    "realtime",
 		})
 		return
 	}
 
 	// 实时查询失败，回退到 credentials 中的缓存值
-	sdk.LoggerFromContext(r.Context()).Warn("oauth_quota_realtime_query_failed",
+	sdk.LoggerFromContext(r.Context()).Warn("oauth_token_refresh_realtime_failed",
 		sdk.LogFieldAccountID, id,
 		sdk.LogFieldError, queryErr,
 	)
-	sdk.LoggerFromContext(r.Context()).Info("oauth_quota_response",
+	sdk.LoggerFromContext(r.Context()).Info("oauth_token_refresh_response",
 		sdk.LogFieldAccountID, id,
 		"source", "cached",
 		"plan_type", account.Credentials["plan_type"],

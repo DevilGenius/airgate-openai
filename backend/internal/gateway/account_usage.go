@@ -5,11 +5,11 @@ import (
 	"time"
 )
 
-// quotaInfo 是 OpenAI 插件私有的账号订阅探测结果。
+// tokenRefreshInfo 是 OpenAI 插件私有的令牌及订阅元数据刷新结果。
 //
 // SDK v1 不再定义统一额度模型；不同网关的账号标识、订阅字段和用量窗口差异很大，
 // 这里仅服务本插件的 OAuth 开发接口和账号页面。
-type quotaInfo struct {
+type tokenRefreshInfo struct {
 	ExpiresAt string            `json:"expires_at,omitempty"`
 	Extra     map[string]string `json:"extra,omitempty"`
 }

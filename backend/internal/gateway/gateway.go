@@ -319,15 +319,15 @@ func (g *OpenAIGateway) validateAPIKeyViaResponses(ctx context.Context, account 
 	return nil
 }
 
-// ReauthRequiredPrefix 是 QueryQuota 在 refresh_token 失效且无法本地降级时返回的错误前缀。
+// ReauthRequiredPrefix 是 RefreshToken 在 refresh_token 失效且无法本地降级时返回的错误前缀。
 // Core 侧按前缀匹配以映射为"需要重新授权"的领域错误（gRPC 会保留 Go error 的字符串）。
 const ReauthRequiredPrefix = "reauth_required: "
 
-// QueryQuota 查询账号额度
+// RefreshToken 刷新账号令牌及订阅元数据。
 // OAuth 账号：优先用 refresh_token 刷新；refresh_token 为空但 session_token 存在
 // 时走 chatgpt.com session 端点刷新；两者都失败则降级解析存储的 access_token。
-// API Key 账号：不支持额度查询
-func (g *OpenAIGateway) QueryQuota(ctx context.Context, credentials map[string]string) (*quotaInfo, error) {
+// API Key 账号：不支持令牌刷新。
+func (g *OpenAIGateway) RefreshToken(ctx context.Context, credentials map[string]string) (*tokenRefreshInfo, error) {
 	refreshToken := credentials["refresh_token"]
 	sessionToken := credentials["session_token"]
 	proxyURL := credentials["proxy_url"]
@@ -335,16 +335,16 @@ func (g *OpenAIGateway) QueryQuota(ctx context.Context, credentials map[string]s
 	if refreshToken == "" {
 		// 没有 RT：优先尝试 session 端点刷新；失败再降级到存储的 access_token。
 		if sessionToken != "" {
-			if info, err := g.quotaInfoViaSession(ctx, sessionToken, credentials, proxyURL); err == nil {
+			if info, err := g.tokenRefreshViaSession(ctx, sessionToken, credentials, proxyURL); err == nil {
 				return info, nil
 			} else if access := credentials["access_token"]; access != "" {
-				return g.quotaInfoFromAccessToken(ctx, access, credentials, "session_refresh_failed: "+err.Error())
+				return g.tokenRefreshFromAccessToken(ctx, access, credentials, "session_refresh_failed: "+err.Error())
 			} else {
 				return nil, fmt.Errorf("%ssession_token 刷新失败且无 access_token 可用 (原因: %s)", ReauthRequiredPrefix, err.Error())
 			}
 		}
 		if access := credentials["access_token"]; access != "" {
-			return g.quotaInfoFromAccessToken(ctx, access, credentials, "")
+			return g.tokenRefreshFromAccessToken(ctx, access, credentials, "")
 		}
 		return nil, sdk.ErrNotSupported
 	}
@@ -362,12 +362,12 @@ func (g *OpenAIGateway) QueryQuota(ctx context.Context, credentials map[string]s
 		// "需要重新授权"，其实账号还能正常服务请求。现在放宽：有 access_token
 		// 就成功返回，带上 refresh_warning 标记数据陈旧即可。
 		if sessionToken != "" {
-			if info, sessErr := g.quotaInfoViaSession(ctx, sessionToken, credentials, proxyURL); sessErr == nil {
+			if info, sessErr := g.tokenRefreshViaSession(ctx, sessionToken, credentials, proxyURL); sessErr == nil {
 				return info, nil
 			}
 		}
 		if access := credentials["access_token"]; access != "" {
-			return g.quotaInfoFromAccessToken(ctx, access, credentials, "refresh_token_invalid: "+err.Error())
+			return g.tokenRefreshFromAccessToken(ctx, access, credentials, "refresh_token_invalid: "+err.Error())
 		}
 		return nil, fmt.Errorf("%srefresh_token 已失效，请重新授权 OAuth (原因: %s)", ReauthRequiredPrefix, err.Error())
 	}
@@ -395,15 +395,15 @@ func (g *OpenAIGateway) QueryQuota(ctx context.Context, credentials map[string]s
 		extra["refresh_token"] = tokens.RefreshToken
 	}
 
-	return &quotaInfo{
+	return &tokenRefreshInfo{
 		ExpiresAt: info.SubscriptionActiveUntil,
 		Extra:     extra,
 	}, nil
 }
 
-// quotaInfoViaSession 走 chatgpt.com /api/auth/session 拉一份新 session，
+// tokenRefreshViaSession 走 chatgpt.com /api/auth/session 拉一份新 session，
 // 把 accessToken / session_token / 元信息回写到 extra，供调用方持久化。
-func (g *OpenAIGateway) quotaInfoViaSession(ctx context.Context, sessionToken string, credentials map[string]string, proxyURL string) (*quotaInfo, error) {
+func (g *OpenAIGateway) tokenRefreshViaSession(ctx context.Context, sessionToken string, credentials map[string]string, proxyURL string) (*tokenRefreshInfo, error) {
 	sess, err := g.refreshViaSession(ctx, sessionToken, proxyURL)
 	if err != nil {
 		return nil, err
@@ -443,13 +443,13 @@ func (g *OpenAIGateway) quotaInfoViaSession(ctx context.Context, sessionToken st
 	if info.Email != "" {
 		extra["email"] = info.Email
 	}
-	return &quotaInfo{
+	return &tokenRefreshInfo{
 		ExpiresAt: info.SubscriptionActiveUntil,
 		Extra:     extra,
 	}, nil
 }
 
-func (g *OpenAIGateway) quotaInfoFromAccessToken(ctx context.Context, access string, credentials map[string]string, warning string) (*quotaInfo, error) {
+func (g *OpenAIGateway) tokenRefreshFromAccessToken(ctx context.Context, access string, credentials map[string]string, warning string) (*tokenRefreshInfo, error) {
 	info := g.enrichTokenInfo(ctx, parseIDToken(access), access, credentials["proxy_url"])
 	extra := map[string]string{
 		"plan_type":                 info.PlanType,
@@ -467,7 +467,7 @@ func (g *OpenAIGateway) quotaInfoFromAccessToken(ctx context.Context, access str
 	if info.Email != "" {
 		extra["email"] = info.Email
 	}
-	return &quotaInfo{
+	return &tokenRefreshInfo{
 		ExpiresAt: info.SubscriptionActiveUntil,
 		Extra:     extra,
 	}, nil
@@ -733,7 +733,7 @@ func (g *OpenAIGateway) HandleRequest(ctx context.Context, method, path, _ strin
 			return http.StatusMethodNotAllowed, nil, jsonError("method not allowed"), nil
 		}
 
-	case "accounts/quota":
+	case "accounts/token-refresh":
 		var req struct {
 			ID          int64             `json:"id"`
 			Credentials map[string]string `json:"credentials"`
@@ -741,10 +741,10 @@ func (g *OpenAIGateway) HandleRequest(ctx context.Context, method, path, _ strin
 		if err := json.Unmarshal(body, &req); err != nil || req.ID == 0 {
 			return http.StatusBadRequest, nil, jsonError("invalid request body"), nil
 		}
-		quota, err := g.QueryQuota(ctx, req.Credentials)
+		result, err := g.RefreshToken(ctx, req.Credentials)
 		if err != nil {
 			if errors.Is(err, sdk.ErrNotSupported) {
-				return http.StatusNotFound, nil, jsonError("quota refresh unsupported"), nil
+				return http.StatusNotFound, nil, jsonError("token refresh unsupported"), nil
 			}
 			if strings.HasPrefix(err.Error(), ReauthRequiredPrefix) {
 				return http.StatusUnauthorized, nil, jsonMarshal(map[string]string{
@@ -754,15 +754,15 @@ func (g *OpenAIGateway) HandleRequest(ctx context.Context, method, path, _ strin
 			}
 			return http.StatusInternalServerError, nil, jsonError(err.Error()), nil
 		}
-		if quota == nil {
-			return http.StatusNotFound, nil, jsonError("quota refresh unsupported"), nil
+		if result == nil {
+			return http.StatusNotFound, nil, jsonError("token refresh unsupported"), nil
 		}
 		resp := map[string]any{
-			"expires_at": quota.ExpiresAt,
-			"extra":      quota.Extra,
+			"expires_at": result.ExpiresAt,
+			"extra":      result.Extra,
 		}
-		if quota.Extra != nil {
-			if warning := quota.Extra["refresh_warning"]; warning != "" {
+		if result.Extra != nil {
+			if warning := result.Extra["refresh_warning"]; warning != "" {
 				resp["reauth_warning"] = warning
 			}
 		}

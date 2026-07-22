@@ -86,7 +86,7 @@ func TestAccountInfoFromAccountFallsBackToEntitlementPlan(t *testing.T) {
 	}
 }
 
-func TestQueryQuotaFallsBackToAccessTokenWithoutRefreshToken(t *testing.T) {
+func TestRefreshTokenFallsBackToAccessTokenWithoutRefreshToken(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -97,24 +97,24 @@ func TestQueryQuotaFallsBackToAccessTokenWithoutRefreshToken(t *testing.T) {
 		"chatgpt_subscription_active_until": "2026-06-01T00:00:00Z",
 		"name":                              "Example User",
 	})
-	quota, err := (&OpenAIGateway{}).QueryQuota(ctx, map[string]string{"access_token": accessToken})
+	result, err := (&OpenAIGateway{}).RefreshToken(ctx, map[string]string{"access_token": accessToken})
 	if err != nil {
-		t.Fatalf("QueryQuota returned err: %v", err)
+		t.Fatalf("RefreshToken returned err: %v", err)
 	}
-	if quota == nil {
-		t.Fatal("QueryQuota returned nil quota")
+	if result == nil {
+		t.Fatal("RefreshToken returned nil result")
 	}
-	if quota.Extra["plan_type"] != "plus" {
-		t.Fatalf("plan_type = %q, want plus", quota.Extra["plan_type"])
+	if result.Extra["plan_type"] != "plus" {
+		t.Fatalf("plan_type = %q, want plus", result.Extra["plan_type"])
 	}
-	if quota.Extra["email"] != "user@example.com" {
-		t.Fatalf("email = %q, want user@example.com", quota.Extra["email"])
+	if result.Extra["email"] != "user@example.com" {
+		t.Fatalf("email = %q, want user@example.com", result.Extra["email"])
 	}
-	if quota.Extra["chatgpt_account_id"] != "acct_123" {
-		t.Fatalf("chatgpt_account_id = %q, want acct_123", quota.Extra["chatgpt_account_id"])
+	if result.Extra["chatgpt_account_id"] != "acct_123" {
+		t.Fatalf("chatgpt_account_id = %q, want acct_123", result.Extra["chatgpt_account_id"])
 	}
-	if quota.ExpiresAt != "2026-06-01T00:00:00Z" {
-		t.Fatalf("ExpiresAt = %q", quota.ExpiresAt)
+	if result.ExpiresAt != "2026-06-01T00:00:00Z" {
+		t.Fatalf("ExpiresAt = %q", result.ExpiresAt)
 	}
 }
 
