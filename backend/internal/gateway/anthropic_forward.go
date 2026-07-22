@@ -275,7 +275,7 @@ func (g *OpenAIGateway) forwardAnthropicResponses(
 		return transientOutcome(reason), nil, fmt.Errorf("%s", reason)
 	}
 
-	isOAuth := account.Credentials["access_token"] != ""
+	isOAuth := isOpenAIOAuthCredentials(account.Credentials)
 	accountType := "apikey"
 	if isOAuth {
 		accountType = "oauth"
@@ -305,36 +305,74 @@ func (g *OpenAIGateway) forwardAnthropicResponses(
 		)
 		return transientOutcome(err.Error()), nil, fmt.Errorf("请求上游失败: %w", err)
 	}
-	defer cancel()
+	defer func() {
+		if cancel != nil {
+			cancel()
+		}
+	}()
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		body, _ := readLimitedErrorBody(resp.Body)
-		if req.TraceFinalError {
-			captureFinalErrorUpstreamBody(ctx, body)
-		}
-		dur := time.Since(start)
-		logger.Warn("upstream_request_non_2xx",
-			sdk.LogFieldAccountID, account.ID,
-			sdk.LogFieldModel, mappedModel,
-			sdk.LogFieldStatus, resp.StatusCode,
-			sdk.LogFieldDurationMs, dur.Milliseconds(),
-			"body_preview", truncate(string(body), 300),
-			"protocol", "anthropic",
-		)
-
-		if suppressErrorWrite {
-			// fallback 模式：不写客户端，把 body 返给调用方判断是否降级
-			msg := extractOpenAIErrorMessage(body)
-			if msg == "" {
-				msg = truncate(string(body), 200)
+		if isOpenAIAgentIdentityAccount(account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, body) {
+			// A task can expire while an Anthropic request is in flight.  Re-register
+			// once before exposing the authentication failure to the caller.
+			g.invalidateAgentIdentityTask(account)
+			oldCancel := cancel
+			_ = resp.Body.Close()
+			if oldCancel != nil {
+				oldCancel()
 			}
-			outcome := failureOutcome(resp.StatusCode, body, resp.Header.Clone(), msg, extractRetryAfterHeader(resp.Header))
-			outcome.Duration = time.Since(start)
-			return outcome, body, nil
+			cancel = nil
+			retryAuth, authErr := g.buildOpenAIAuthHeaders(ctx, account, true)
+			if authErr != nil {
+				reason := fmt.Sprintf("Agent Identity task 恢复失败: %v", authErr)
+				return accountDeadOutcome(reason), nil, fmt.Errorf("%s", reason)
+			}
+			retryReq, buildErr := g.buildAnthropicUpstreamRequest(ctx, req, account, responsesBody, session)
+			if buildErr != nil {
+				reason := fmt.Sprintf("构建 Agent Identity 重试请求失败: %v", buildErr)
+				return transientOutcome(reason), nil, fmt.Errorf("%s", reason)
+			}
+			retryReq.Header.Set("Authorization", retryAuth.Get("Authorization"))
+			retryResp, retryCancel, retryErr := g.doStreamableUpstream(ctx, client, retryReq, streamable)
+			if retryErr != nil {
+				reason := fmt.Sprintf("Agent Identity 重试请求失败: %v", retryErr)
+				return transientOutcome(reason), nil, fmt.Errorf("%s", reason)
+			}
+			resp = retryResp
+			cancel = retryCancel
+			if resp.StatusCode >= 400 {
+				body, _ = readLimitedErrorBody(resp.Body)
+			}
 		}
-		outcome, err := g.writeAnthropicUpstreamError(w, resp.StatusCode, body, start)
-		return outcome, nil, err
+		if resp.StatusCode >= 400 {
+			if req.TraceFinalError {
+				captureFinalErrorUpstreamBody(ctx, body)
+			}
+			dur := time.Since(start)
+			logger.Warn("upstream_request_non_2xx",
+				sdk.LogFieldAccountID, account.ID,
+				sdk.LogFieldModel, mappedModel,
+				sdk.LogFieldStatus, resp.StatusCode,
+				sdk.LogFieldDurationMs, dur.Milliseconds(),
+				"body_preview", truncate(string(body), 300),
+				"protocol", "anthropic",
+			)
+
+			if suppressErrorWrite {
+				// fallback 模式：不写客户端，把 body 返给调用方判断是否降级
+				msg := extractOpenAIErrorMessage(body)
+				if msg == "" {
+					msg = truncate(string(body), 200)
+				}
+				outcome := failureOutcome(resp.StatusCode, body, resp.Header.Clone(), msg, extractRetryAfterHeader(resp.Header))
+				outcome.Duration = time.Since(start)
+				return outcome, body, nil
+			}
+			outcome, err := g.writeAnthropicUpstreamError(w, resp.StatusCode, body, start)
+			return outcome, nil, err
+		}
 	}
 
 	if snapshot := parseCodexUsageFromHeaders(resp.Header); snapshot != nil {
@@ -392,7 +430,7 @@ func (g *OpenAIGateway) buildAnthropicUpstreamRequest(
 	responsesBody []byte,
 	session openAISessionResolution,
 ) (*http.Request, error) {
-	isOAuth := account.Credentials["access_token"] != ""
+	isOAuth := isOpenAIOAuthCredentials(account.Credentials)
 	responsesBody = applyOpenAIWireReasoningEffort(
 		responsesBody,
 		gjson.GetBytes(responsesBody, "model").String(),
@@ -416,8 +454,16 @@ func (g *OpenAIGateway) buildAnthropicUpstreamRequest(
 	upstreamReq.Header.Set("Accept", "text/event-stream")
 
 	if isOAuth {
-		// OAuth 模式：手动设置认证头（SSE 模式不需要 OpenAI-Beta 头）
-		upstreamReq.Header.Set("Authorization", "Bearer "+account.Credentials["access_token"])
+		// OAuth 模式：Agent Identity 使用逐请求签名，普通 OAuth 使用 Bearer。
+		authHeaders, authErr := g.buildOpenAIAuthHeaders(ctx, account, false)
+		if authErr != nil {
+			return nil, authErr
+		}
+		for key, values := range authHeaders {
+			for _, value := range values {
+				upstreamReq.Header.Add(key, value)
+			}
+		}
 		if aid := account.Credentials["chatgpt_account_id"]; aid != "" {
 			upstreamReq.Header.Set("ChatGPT-Account-ID", aid)
 		}

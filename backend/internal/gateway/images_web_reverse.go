@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -183,9 +185,8 @@ func (g *OpenAIGateway) forwardImagesViaWebReverse(ctx context.Context, req *sdk
 		}
 	}
 
-	accessToken := account.Credentials["access_token"]
-	if accessToken == "" {
-		return webReverseImagesError(start, http.StatusUnauthorized, req.Writer, "OAuth 账号缺少 access_token")
+	if !isOpenAIOAuthCredentials(account.Credentials) {
+		return webReverseImagesError(start, http.StatusUnauthorized, req.Writer, "OAuth/Agent Identity 账号缺少有效凭证")
 	}
 	var proxyURL *url.URL
 	if account.ProxyURL != "" {
@@ -193,7 +194,22 @@ func (g *OpenAIGateway) forwardImagesViaWebReverse(ctx context.Context, req *sdk
 			proxyURL = u
 		}
 	}
-	client := imgen.NewClient(accessToken, proxyURL)
+	authProvider := func() (string, error) {
+		headers, authErr := g.buildOpenAIAuthHeaders(ctx, account, false)
+		if authErr != nil {
+			g.logger.Warn("images_web_reverse_auth_header_failed",
+				sdk.LogFieldAccountID, account.ID,
+				sdk.LogFieldError, authErr,
+			)
+			return "", authErr
+		}
+		authorization := strings.TrimSpace(headers.Get("Authorization"))
+		if authorization == "" {
+			return "", errors.New("认证头缺少 Authorization")
+		}
+		return authorization, nil
+	}
+	client := imgen.NewClientWithAuth(authProvider, proxyURL)
 	defer client.Close()
 
 	var sseKA *ssePingKeepAlive
@@ -204,6 +220,16 @@ func (g *OpenAIGateway) forwardImagesViaWebReverse(ctx context.Context, req *sdk
 	prompt := applyWebReverseSizeHint(imgReq.Prompt, imgReq.Size)
 	imgRes, err := client.GenerateImage(ctx, prompt, imageInputs)
 	if err != nil {
+		var authErr *imgen.AuthorizationError
+		if errors.As(err, &authErr) {
+			if sseKA != nil {
+				sseKA.Stop()
+				g.logger.Warn("Images WebReverse 认证构建失败，已脱敏响应",
+					"model", imgReq.Model, "error", authErr)
+				writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
+			}
+			return webReverseAuthError(start, authErr.Err)
+		}
 		if imgRes == nil || len(imgRes.Images) == 0 {
 			if isImageSafetyRejectionText(err.Error()) {
 				upstreamReason := err.Error()
@@ -297,6 +323,36 @@ func (g *OpenAIGateway) forwardImagesViaWebReverse(ctx context.Context, req *sdk
 		outcome.Upstream.Headers = http.Header{"Content-Type": []string{"application/json"}}
 	}
 	return outcome, nil
+}
+
+// webReverseAuthError 保留认证头构建阶段的原始错误，避免将本地认证失败
+// 静默降级为上游 401。网络或任务注册服务异常按临时错误处理，确定性的
+// 凭证/密钥错误按账号失效处理。
+func webReverseAuthError(start time.Time, err error) (sdk.ForwardOutcome, error) {
+	reason := fmt.Sprintf("构建 Images WebReverse 认证头失败: %v", err)
+	var outcome sdk.ForwardOutcome
+	if isTransientWebReverseAuthError(err) {
+		outcome = transientOutcome(reason)
+	} else {
+		outcome = accountDeadOutcome(reason)
+	}
+	outcome.Duration = time.Since(start)
+	outcome.Usage = newTokenUsage(imagesWebReverseModel, "", 0, 0, 0, 0, 0, 0)
+	return outcome, fmt.Errorf("%s", reason)
+}
+
+func isTransientWebReverseAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var networkErr net.Error
+	if errors.As(err, &networkErr) {
+		return true
+	}
+	return isTransientAgentIdentityTaskRegistrationError(err)
 }
 
 // buildWebReverseImagesResponse 按 OpenAI Images API 官方契约打包 Web 逆向响应。

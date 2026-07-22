@@ -1908,11 +1908,16 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 			}, nil
 		}
 
+		authHeaders, authHeaderErr := g.buildOpenAIAuthHeaders(ctx, account, false)
+		if authHeaderErr != nil {
+			reason := fmt.Sprintf("构建 Images OAuth 认证头失败: %v", authHeaderErr)
+			return accountDeadOutcome(reason), fmt.Errorf("%s", reason)
+		}
 		cfg := WSConfig{
 			URL:            targetURL,
-			Token:          account.Credentials["access_token"],
 			AccountID:      account.Credentials["chatgpt_account_id"],
 			ProxyURL:       account.ProxyURL,
+			Headers:        authHeaders,
 			SessionID:      session.SessionID,
 			ConversationID: session.ConversationID,
 			TurnState:      session.LastTurnState,
@@ -1920,6 +1925,16 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 		}
 		wsDialStart := time.Now()
 		conn, wsResp, err := DialWebSocket(ctx, cfg)
+		if err != nil && isOpenAIAgentIdentityAccount(account) && wsResp != nil &&
+			isAgentIdentityTaskInvalidWSError(wsResp.StatusCode, err) {
+			g.invalidateAgentIdentityTask(account)
+			if refreshedHeaders, refreshErr := g.buildOpenAIAuthHeaders(ctx, account, true); refreshErr == nil {
+				cfg.Headers = refreshedHeaders
+				conn, wsResp, err = DialWebSocket(ctx, cfg)
+			} else {
+				err = refreshErr
+			}
+		}
 		attemptWSDialMs := time.Since(wsDialStart).Milliseconds()
 		if err != nil {
 			var outcome sdk.ForwardOutcome
@@ -1984,6 +1999,28 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 		wsResult = ReceiveWSResponse(ctx, conn, handler)
 		if req.TraceFinalError && len(wsResult.FailedEventRaw) > 0 {
 			captureFinalErrorUpstreamBody(ctx, wsResult.FailedEventRaw)
+		}
+		if isOpenAIAgentIdentityAccount(account) && isAgentIdentityTaskInvalidWSResult(wsResult) {
+			g.invalidateAgentIdentityTask(account)
+			_ = conn.Close()
+			if refreshedHeaders, refreshErr := g.buildOpenAIAuthHeaders(ctx, account, true); refreshErr == nil {
+				cfg.Headers = refreshedHeaders
+				retryDialStart := time.Now()
+				if retryConn, _, dialErr := DialWebSocket(ctx, cfg); dialErr == nil {
+					conn = retryConn
+					wsDialMs += time.Since(retryDialStart).Milliseconds()
+					handler = &imagesSilentHandler{accountID: account.ID, timing: newResponseEventTiming(start)}
+					if writeErr := writeWebSocketJSON(conn, json.RawMessage(createMsg)); writeErr == nil {
+						wsResult = ReceiveWSResponse(ctx, conn, handler)
+					} else {
+						wsResult = WSResult{Err: fmt.Errorf("发送 Agent Identity 重试消息失败: %w", writeErr)}
+					}
+				} else {
+					wsResult = WSResult{Err: fmt.Errorf("Agent Identity task 恢复后重拨失败: %w", dialErr)}
+				}
+			} else {
+				wsResult = WSResult{Err: fmt.Errorf("Agent Identity task 恢复失败: %w", refreshErr)}
+			}
 		}
 		_ = conn.Close()
 		if wsResult.ResponseID != "" && session.SessionKey != "" {

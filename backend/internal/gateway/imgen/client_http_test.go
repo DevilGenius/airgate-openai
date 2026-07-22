@@ -42,10 +42,10 @@ func (errReader) Read([]byte) (int, error) { return 0, errors.New("read failed")
 func newTestClient(fn roundTripFunc) *Client {
 	jar, _ := cookiejar.New(nil)
 	return &Client{
-		http:        &http.Client{Transport: fn, Jar: jar},
-		accessToken: "access-token",
-		deviceID:    "device-id",
-		sessionID:   "session-id",
+		http:      &http.Client{Transport: fn, Jar: jar},
+		auth:      authorizationState{fallbackToken: "access-token"},
+		deviceID:  "device-id",
+		sessionID: "session-id",
 	}
 }
 
@@ -75,7 +75,7 @@ func tinyPNG(t *testing.T) []byte {
 func TestNewClientCloseAndRequestHelpers(t *testing.T) {
 	proxy, _ := url.Parse("http://proxy.example:8080")
 	c := NewClient("token", proxy)
-	if c == nil || c.http == nil || c.accessToken != "token" || c.deviceID == "" || c.sessionID == "" {
+	if c == nil || c.http == nil || c.auth.fallbackToken != "token" || c.deviceID == "" || c.sessionID == "" {
 		t.Fatalf("NewClient returned incomplete client: %#v", c)
 	}
 	if c.http.Jar == nil {
@@ -115,6 +115,71 @@ func TestNewClientCloseAndRequestHelpers(t *testing.T) {
 	cancel()
 	if err := sleepContext(ctx, time.Hour); err == nil {
 		t.Fatal("sleepContext should return canceled context error")
+	}
+}
+
+func TestDynamicAuthorizationErrorStopsUpstreamRequest(t *testing.T) {
+	authCause := errors.New("task 注册失败")
+	c := newTestClient(func(*http.Request) (*http.Response, error) {
+		t.Fatal("认证构建失败时不应发送上游请求")
+		return nil, nil
+	})
+	c.auth.fallbackToken = ""
+	c.auth.provider = func() (string, error) {
+		return "", authCause
+	}
+
+	_, err := c.getChatRequirements()
+	if err == nil {
+		t.Fatal("expected authorization error")
+	}
+	var authErr *AuthorizationError
+	if !errors.As(err, &authErr) {
+		t.Fatalf("error type = %T, want *AuthorizationError", err)
+	}
+	if !errors.Is(err, authCause) {
+		t.Fatalf("error = %v, want wrapped auth cause", err)
+	}
+}
+
+func TestGenerateImageReturnsAuthorizationCauseFromOptionalStep(t *testing.T) {
+	authCause := errors.New("task 注册失败")
+	authCalls := 0
+	c := newTestClient(func(*http.Request) (*http.Response, error) {
+		t.Fatal("认证构建失败时不应发送上游请求")
+		return nil, nil
+	})
+	c.bootstrapped = true
+	c.auth.fallbackToken = ""
+	c.auth.provider = func() (string, error) {
+		authCalls++
+		if authCalls == 1 {
+			return "Bearer initial-token", nil
+		}
+		return "", authCause
+	}
+
+	_, err := c.GenerateImage(context.Background(), "draw a cat", nil)
+	if err == nil {
+		t.Fatal("expected authorization error")
+	}
+	var authErr *AuthorizationError
+	if !errors.As(err, &authErr) || !errors.Is(err, authCause) {
+		t.Fatalf("GenerateImage error = %v, want wrapped authorization cause", err)
+	}
+}
+
+func TestUpstreamUnauthorizedIsNotAuthorizationError(t *testing.T) {
+	c := newTestClient(func(*http.Request) (*http.Response, error) {
+		return imgenHTTPResponse(http.StatusUnauthorized, `{"error":"unauthorized"}`, nil), nil
+	})
+
+	_, err := c.getChatRequirements()
+	if err == nil {
+		t.Fatal("expected upstream unauthorized error")
+	}
+	if IsAuthorizationError(err) {
+		t.Fatalf("upstream 401 must not be classified as local authorization error: %v", err)
 	}
 }
 

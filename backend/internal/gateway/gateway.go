@@ -27,6 +27,7 @@ type OpenAIGateway struct {
 	host               sdk.Host
 	snapshotStore      *codexUsagePersistenceStore
 	transportPool      *TransportPool
+	agentIdentity      agentIdentityRuntime
 	tasks              *TaskRegistry
 	runtimeHash        runtimeHash
 	longContextModelID string
@@ -43,6 +44,7 @@ func (g *OpenAIGateway) Init(ctx sdk.PluginContext) error {
 	g.runtimeHash.initialize()
 	g.longContextModelID = configuredLongContextModel()
 	g.transportPool = NewTransportPool()
+	g.agentIdentity.initialize()
 	g.tasks = NewTaskRegistry()
 	g.tasks.Register(imageGenerateHandler{})
 	g.tasks.Register(imageEditHandler{})
@@ -112,6 +114,9 @@ func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (s
 	}
 	ctx = sdk.WithLogger(ctx, logger)
 	ctx = sdk.WithRequestID(ctx, rid)
+	if req != nil && isOpenAIAgentIdentityAccount(req.Account) {
+		ctx = withAgentIdentityRequestState(ctx)
+	}
 	var traceCapture *finalErrorTraceCapture
 	if req.TraceFinalError {
 		ctx, traceCapture = withFinalErrorTrace(ctx)
@@ -217,6 +222,9 @@ func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (s
 	if traceCapture != nil && shouldAttachFinalErrorDiagnostic(outcome, err) {
 		outcome.FinalErrorDiagnostic = traceCapture.snapshot()
 	}
+	if req != nil && isOpenAIAgentIdentityAccount(req.Account) {
+		mergeAgentIdentityUpdatedCredentials(&outcome, ctx)
+	}
 	return outcome, err
 }
 
@@ -238,6 +246,12 @@ func redactProxyURL(raw string) string {
 func (g *OpenAIGateway) ValidateAccount(ctx context.Context, credentials map[string]string) error {
 	apiKey := credentials["api_key"]
 	accessToken := credentials["access_token"]
+	if isOpenAIAgentIdentityCredentials(credentials) {
+		if _, err := agentIdentityKeyFromCredentials(credentials, credentials["task_id"]); err != nil {
+			return err
+		}
+		return nil
+	}
 
 	if apiKey == "" && accessToken == "" {
 		return fmt.Errorf("缺少 api_key 或 access_token")
@@ -328,6 +342,9 @@ const ReauthRequiredPrefix = "reauth_required: "
 // 时走 chatgpt.com session 端点刷新；两者都失败则降级解析存储的 access_token。
 // API Key 账号：不支持令牌刷新。
 func (g *OpenAIGateway) RefreshToken(ctx context.Context, credentials map[string]string) (*tokenRefreshInfo, error) {
+	if isOpenAIAgentIdentityCredentials(credentials) {
+		return g.refreshAgentIdentityToken(ctx, credentials)
+	}
 	refreshToken := credentials["refresh_token"]
 	sessionToken := credentials["session_token"]
 	proxyURL := credentials["proxy_url"]
@@ -477,7 +494,7 @@ func (g *OpenAIGateway) tokenRefreshFromAccessToken(ctx context.Context, access 
 // OAuth 账号：建立 WebSocket 连接发送最小请求，等待 codex.rate_limits 事件
 // API Key 账号：发送 GET /v1/models 捕获响应头
 func (g *OpenAIGateway) ProbeUsage(ctx context.Context, accountID int64, credentials map[string]string) *CodexUsageSnapshot {
-	if credentials["access_token"] != "" {
+	if isOpenAIOAuthCredentials(credentials) {
 		return g.probeOAuthUsage(ctx, accountID, credentials)
 	}
 	return g.probeAPIKeyUsage(ctx, accountID, credentials)
@@ -527,67 +544,87 @@ func (g *OpenAIGateway) probeOAuthUsage(ctx context.Context, accountID int64, cr
 	defer cancel()
 
 	probeBody := buildOAuthUsageProbeBody()
-
-	// 构建 HTTP POST 请求到 SSE 端点（与 buildAnthropicUpstreamRequest OAuth 模式一致）
-	req, err := http.NewRequestWithContext(probeCtx, http.MethodPost, ChatGPTSSEURL, bytes.NewReader(probeBody))
-	if err != nil {
-		g.logger.Warn("probe_oauth_build_request_failed",
-			sdk.LogFieldAccountID, accountID,
-			sdk.LogFieldError, err,
-		)
-		return nil
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("Authorization", "Bearer "+credentials["access_token"])
-	if aid := credentials["chatgpt_account_id"]; aid != "" {
-		req.Header.Set("ChatGPT-Account-ID", aid)
-	}
-
 	account := &sdk.Account{ID: accountID, Credentials: credentials, ProxyURL: credentials["proxy_url"]}
 	client := g.buildHTTPClient(account)
-	resp, err := client.Do(req)
-	if err != nil {
-		g.logger.Warn("probe_oauth_request_failed",
-			sdk.LogFieldAccountID, accountID,
-			sdk.LogFieldError, err,
-		)
-		return nil
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if snapshot := parseCodexUsageFromHeaders(resp.Header); snapshot != nil {
-		StoreCodexUsage(accountID, snapshot)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := readLimitedErrorBody(resp.Body)
-		g.logger.Warn("probe_oauth_non_2xx",
-			sdk.LogFieldAccountID, accountID,
-			sdk.LogFieldStatus, resp.StatusCode,
-			sdk.LogFieldReason, truncate(string(body), 200),
-		)
-		// 401/403 标记为凭证错误，存入 probe error 缓存供 HandleRequest 查询
-		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			StoreProbeError(accountID, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(body)))
+	for recovered := false; ; {
+		// 构建 HTTP POST 请求到 SSE 端点（与 buildAnthropicUpstreamRequest OAuth 模式一致）。
+		req, err := http.NewRequestWithContext(probeCtx, http.MethodPost, ChatGPTSSEURL, bytes.NewReader(probeBody))
+		if err != nil {
+			g.logger.Warn("probe_oauth_build_request_failed",
+				sdk.LogFieldAccountID, accountID,
+				sdk.LogFieldError, err,
+			)
+			return nil
 		}
-		return GetCodexUsage(accountID)
-	}
-
-	// 读取 SSE 流，从 codex.rate_limits 事件中捕获用量
-	// 使用 bufio.Scanner 逐行读取，避免跨 chunk 边界截断不完整行
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if strings.HasPrefix(line, "data: ") {
-			data := strings.TrimPrefix(line, "data: ")
-			if snapshot := parseCodexUsageFromSSEEvent([]byte(data)); snapshot != nil {
-				StoreCodexUsage(accountID, snapshot)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "text/event-stream")
+		authHeaders, authErr := g.buildOpenAIAuthHeaders(probeCtx, account, recovered)
+		if authErr != nil {
+			g.logger.Warn("probe_oauth_auth_header_failed",
+				sdk.LogFieldAccountID, accountID,
+				sdk.LogFieldError, authErr,
+			)
+			return nil
+		}
+		for key, values := range authHeaders {
+			for _, value := range values {
+				req.Header.Add(key, value)
 			}
 		}
-	}
+		if aid := credentials["chatgpt_account_id"]; aid != "" {
+			req.Header.Set("ChatGPT-Account-ID", aid)
+		}
 
-	return GetCodexUsage(accountID)
+		resp, err := client.Do(req)
+		if err != nil {
+			g.logger.Warn("probe_oauth_request_failed",
+				sdk.LogFieldAccountID, accountID,
+				sdk.LogFieldError, err,
+			)
+			return nil
+		}
+
+		if snapshot := parseCodexUsageFromHeaders(resp.Header); snapshot != nil {
+			StoreCodexUsage(accountID, snapshot)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := readLimitedErrorBody(resp.Body)
+			_ = resp.Body.Close()
+			if isOpenAIAgentIdentityAccount(account) && !recovered &&
+				isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, body) {
+				g.invalidateAgentIdentityTask(account)
+				recovered = true
+				continue
+			}
+			g.logger.Warn("probe_oauth_non_2xx",
+				sdk.LogFieldAccountID, accountID,
+				sdk.LogFieldStatus, resp.StatusCode,
+				sdk.LogFieldReason, truncate(string(body), 200),
+			)
+			// 401/403 标记为凭证错误，存入 probe error 缓存供 HandleRequest 查询
+			if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+				StoreProbeError(accountID, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(body)))
+			}
+			return GetCodexUsage(accountID)
+		}
+
+		// 读取 SSE 流，从 codex.rate_limits 事件中捕获用量
+		// 使用 bufio.Scanner 逐行读取，避免跨 chunk 边界截断不完整行
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if strings.HasPrefix(line, "data: ") {
+				data := strings.TrimPrefix(line, "data: ")
+				if snapshot := parseCodexUsageFromSSEEvent([]byte(data)); snapshot != nil {
+					StoreCodexUsage(accountID, snapshot)
+				}
+			}
+		}
+		_ = resp.Body.Close()
+
+		return GetCodexUsage(accountID)
+	}
 }
 
 func buildOAuthUsageProbeBody() []byte {

@@ -20,7 +20,7 @@ func oauthModelRerouteOutcome(req *sdk.ForwardRequest, reqPath string) (sdk.Forw
 	}
 
 	credentials := req.Account.Credentials
-	if strings.TrimSpace(credentials["access_token"]) == "" || strings.TrimSpace(credentials["api_key"]) != "" {
+	if !isOpenAIOAuthCredentials(credentials) || strings.TrimSpace(credentials["api_key"]) != "" {
 		return sdk.ForwardOutcome{}, false
 	}
 	if isAnthropicRequest(req) || isModelsListingRequest(req) || isImagesRequest(reqPath) || isResponsesCompactRequestPath(reqPath) {

@@ -135,6 +135,10 @@ func (h *OAuthDevHandler) handleTokenRefresh(w http.ResponseWriter, r *http.Requ
 			account.Credentials["refresh_token"] = newRT
 			updated = true
 		}
+		if newTaskID := result.Extra["task_id"]; newTaskID != "" && newTaskID != account.Credentials["task_id"] {
+			account.Credentials["task_id"] = newTaskID
+			updated = true
+		}
 		if pt := result.Extra["plan_type"]; pt != "" {
 			account.Credentials["plan_type"] = pt
 			updated = true

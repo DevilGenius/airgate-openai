@@ -123,7 +123,9 @@ func (c *Client) fetchBinary(targetURL string) ([]byte, error) {
 		return nil, err
 	}
 	if strings.HasPrefix(targetURL, BaseURL+"/") {
-		c.setCommonHeaders(imgReq)
+		if err := c.setCommonHeaders(imgReq); err != nil {
+			return nil, err
+		}
 		imgReq.Header.Set("Accept", "image/*,*/*;q=0.8")
 	} else {
 		imgReq.Header.Set("User-Agent", DefaultUA)

@@ -198,7 +198,9 @@ func (c *Client) fileUploadToURL(uploadURL string, body io.Reader, mimeType, fil
 		req.Header.Set("Content-Type", "application/octet-stream")
 		req.Header.Set("Origin", BaseURL)
 	} else if strings.HasPrefix(uploadURL, BaseURL) {
-		c.setCommonHeaders(req)
+		if err := c.setCommonHeaders(req); err != nil {
+			return err
+		}
 		req.Header.Set("Content-Type", mimeType)
 		req.Header.Set("X-File-Id", fileID)
 	} else {

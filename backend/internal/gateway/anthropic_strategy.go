@@ -16,7 +16,7 @@ func resolveAnthropicUpstreamStrategy(account *sdk.Account) anthropicUpstreamStr
 	if account == nil {
 		return anthropicStrategyGenericAPIKey
 	}
-	if account.Credentials["access_token"] != "" {
+	if isOpenAIOAuthCredentials(account.Credentials) {
 		return anthropicStrategyOAuth
 	}
 	if isSub2APIAccount(account) {

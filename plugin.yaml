@@ -300,7 +300,7 @@ gateway:
           placeholder: https://api.openai.com
     - key: oauth
       label: OAuth 登录
-      description: 通过浏览器授权登录 ChatGPT 账号
+      description: 浏览器 OAuth 或新版 Sub2API Agent Identity 凭证
       fields:
         - key: access_token
           label: Access Token
@@ -322,3 +322,28 @@ gateway:
           type: text
           required: false
           placeholder: 授权后自动填充
+        - key: auth_mode
+          label: 认证模式
+          type: text
+          required: false
+          placeholder: agentIdentity
+        - key: agent_runtime_id
+          label: Agent Runtime ID
+          type: text
+          required: false
+          placeholder: Agent Identity 导入后自动填充
+        - key: agent_private_key
+          label: Agent Private Key
+          type: password
+          required: false
+          placeholder: Agent Identity 导入后自动填充
+        - key: task_id
+          label: Agent Task ID
+          type: text
+          required: false
+          placeholder: 首次请求自动注册
+        - key: chatgpt_user_id
+          label: ChatGPT User ID
+          type: text
+          required: false
+          placeholder: Agent Identity 导入后自动填充

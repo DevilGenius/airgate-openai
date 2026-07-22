@@ -207,7 +207,11 @@ func formatWebSocketDialError(resp *http.Response, err error) error {
 		hint := ""
 		switch resp.StatusCode {
 		case 401:
-			hint = "认证失败，access_token 已过期或账号已被停用"
+			if strings.Contains(strings.ToLower(upstreamMsg), "task") {
+				hint = "认证失败，Agent Identity task 可能已失效"
+			} else {
+				hint = "认证失败，access_token 已过期或账号已被停用"
+			}
 		case 402:
 			if isDeactivatedWorkspaceText(upstreamMsg) {
 				hint = "认证失败，access_token 已过期或账号已被停用"

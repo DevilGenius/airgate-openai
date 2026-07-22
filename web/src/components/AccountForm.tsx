@@ -124,6 +124,19 @@ const pillActiveStyle: React.CSSProperties = {
 
 type AccountType = 'apikey' | 'oauth';
 
+function isAgentIdentityCredentials(credentials: Record<string, string>): boolean {
+  const mode = (credentials.auth_mode || credentials.authMode || '')
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, '');
+  return mode === 'agentidentity' || Boolean(
+    credentials.agent_private_key ||
+      credentials.agentPrivateKey ||
+      credentials.agent_runtime_id ||
+      credentials.agentRuntimeId,
+  );
+}
+
 /** parseSessionLines —— 批量 session 输入解析：支持两种格式混合
  *  1) 每行一个完整的 /api/auth/session JSON（必须是单行 JSON）
  *  2) 每行一个裸 sessionToken（JWE 串）
@@ -149,7 +162,7 @@ const mobileRefreshTokenClientID = 'app_LlGpXReQgckcGGUo2JrYvtJK';
 
 function detectType(credentials: Record<string, string>): AccountType | '' {
   if (credentials.api_key) return 'apikey';
-  if (credentials.access_token) return 'oauth';
+  if (credentials.access_token || isAgentIdentityCredentials(credentials)) return 'oauth';
   return '';
 }
 
@@ -226,6 +239,7 @@ export function AccountForm({
   const [oauthStatus, setOAuthStatus] = useState<{ type: 'info' | 'success' | 'error'; text: string } | null>(null);
   const accountType = (propType as AccountType | undefined) ?? localType;
   const oauthExt = oauth as OAuthBridgeWithSession | undefined;
+  const agentIdentity = isAgentIdentityCredentials(credentials);
 
   // 进入/退出批量模式时通知外层隐藏"下一步/创建"按钮
   const isBatchActive =
@@ -275,10 +289,37 @@ export function AccountForm({
       if (type === 'apikey') {
         onChange({ api_key: '', base_url: baseUrl, provider: '' });
       } else {
-        onChange({ access_token: '', refresh_token: '', session_token: '', chatgpt_account_id: '', base_url: baseUrl, provider: '' });
+        const nextCredentials: Record<string, string> = {
+          access_token: '',
+          refresh_token: '',
+          session_token: '',
+          chatgpt_account_id: '',
+          base_url: baseUrl,
+          provider: '',
+        };
+        // Switching modes should not discard an imported Agent Identity key.
+        for (const key of [
+          'auth_mode',
+          'agent_private_key',
+          'agent_runtime_id',
+          'task_id',
+          'id_token',
+          'chatgpt_account_id',
+          'chatgpt_user_id',
+          'chatgpt_account_is_fedramp',
+          'account_id',
+          'workspace_id',
+          'email',
+          'client_id',
+          'plan_type',
+          'subscription_active_until',
+        ]) {
+          if (credentials[key] !== undefined) nextCredentials[key] = credentials[key];
+        }
+        onChange(nextCredentials);
       }
     },
-    [credentials.base_url, onChange, onAccountTypeChange],
+    [credentials, onChange, onAccountTypeChange],
   );
 
   const startOAuth = useCallback(async () => {
@@ -1002,6 +1043,85 @@ export function AccountForm({
                 />
               </div>
             </>
+          )}
+
+          {/* Agent Identity 凭证。普通 OAuth 可留空；Agent Identity 不需要 access_token。 */}
+          {!isBatchActive && (
+            <div style={{
+              borderWidth: '1px',
+              borderStyle: 'solid',
+              borderColor: cssVar('border'),
+              borderRadius: cssVar('radiusLg'),
+              padding: '0.75rem',
+              backgroundColor: cssVar('surfaceSecondary'),
+            }}>
+              <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: cssVar('text'), marginBottom: '0.25rem' }}>
+                Agent Identity 凭证
+              </div>
+              <div style={{ ...descStyle, marginTop: 0, marginBottom: '0.75rem' }}>
+                从新版 Sub2API 导入的 Agent Identity 账号只需要以下签名凭证，首次请求时会自动注册 task。
+              </div>
+              <div style={{ marginBottom: '0.75rem' }}>
+                <label style={labelStyle}>认证模式</label>
+                <input
+                  type="text"
+                  autoComplete="off"
+                  style={inputStyle}
+                  placeholder="agentIdentity"
+                  value={credentials.auth_mode ?? ''}
+                  onChange={(e) => updateField('auth_mode', e.target.value)}
+                />
+              </div>
+              <div style={{ marginBottom: '0.75rem' }}>
+                <label style={labelStyle}>Agent Runtime ID</label>
+                <input
+                  type="text"
+                  autoComplete="off"
+                  style={inputStyle}
+                  placeholder="Agent Identity 导入后自动填充"
+                  value={credentials.agent_runtime_id ?? ''}
+                  onChange={(e) => updateField('agent_runtime_id', e.target.value)}
+                />
+              </div>
+              <div style={{ marginBottom: '0.75rem' }}>
+                <label style={labelStyle}>Agent Private Key</label>
+                <input
+                  type="text"
+                  autoComplete="off"
+                  style={passwordInputStyle}
+                  placeholder="Base64 PKCS#8 Ed25519 私钥"
+                  value={credentials.agent_private_key ?? ''}
+                  onChange={(e) => updateField('agent_private_key', e.target.value)}
+                />
+              </div>
+              <div style={{ marginBottom: '0.75rem' }}>
+                <label style={labelStyle}>Agent Task ID</label>
+                <input
+                  type="text"
+                  autoComplete="off"
+                  style={inputStyle}
+                  placeholder="留空则首次请求自动注册"
+                  value={credentials.task_id ?? ''}
+                  onChange={(e) => updateField('task_id', e.target.value)}
+                />
+              </div>
+              <div>
+                <label style={labelStyle}>ChatGPT User ID</label>
+                <input
+                  type="text"
+                  autoComplete="off"
+                  style={inputStyle}
+                  placeholder="Agent Identity 导入后自动填充"
+                  value={credentials.chatgpt_user_id ?? ''}
+                  onChange={(e) => updateField('chatgpt_user_id', e.target.value)}
+                />
+              </div>
+              {agentIdentity && (
+                <div style={{ ...descStyle, color: cssVar('success'), marginTop: '0.625rem' }}>
+                  已识别为 Agent Identity：请求将使用 AgentAssertion 签名，不读取 access_token。
+                </div>
+              )}
+            </div>
           )}
 
           {/* 编辑模式下显示 Refresh Token / Session Token，可查看和修改 */}

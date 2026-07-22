@@ -68,12 +68,17 @@ func BuildPluginInfo() sdk.PluginInfo {
 			{
 				Key:         "oauth",
 				Label:       "OAuth 登录",
-				Description: "通过浏览器授权登录 ChatGPT 账号",
+				Description: "浏览器 OAuth 或新版 Sub2API Agent Identity 凭证",
 				Fields: []sdk.CredentialField{
 					{Key: "access_token", Label: "Access Token", Type: "password", Required: false, Placeholder: "授权后自动填充", EditDisabled: true},
 					{Key: "refresh_token", Label: "Refresh Token", Type: "password", Required: false, Placeholder: "授权后自动填充"},
 					{Key: "session_token", Label: "Session Token (JWE)", Type: "password", Required: false, Placeholder: "Session 导入后自动填充"},
 					{Key: "chatgpt_account_id", Label: "ChatGPT Account ID", Type: "text", Required: false, Placeholder: "授权后自动填充", EditDisabled: true},
+					{Key: "auth_mode", Label: "认证模式", Type: "text", Required: false, Placeholder: "agentIdentity"},
+					{Key: "agent_runtime_id", Label: "Agent Runtime ID", Type: "text", Required: false, Placeholder: "Agent Identity 导入后自动填充", EditDisabled: true},
+					{Key: "agent_private_key", Label: "Agent Private Key", Type: "password", Required: false, Placeholder: "Agent Identity 导入后自动填充"},
+					{Key: "task_id", Label: "Agent Task ID", Type: "text", Required: false, Placeholder: "首次请求自动注册", EditDisabled: true},
+					{Key: "chatgpt_user_id", Label: "ChatGPT User ID", Type: "text", Required: false, Placeholder: "Agent Identity 导入后自动填充", EditDisabled: true},
 				},
 			},
 		},

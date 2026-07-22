@@ -19,6 +19,14 @@ function typeLabel(type?: string) {
   return type || '';
 }
 
+function isAgentIdentity(credentials: Record<string, string>) {
+  const mode = (credentials.auth_mode || credentials.authMode || '')
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, '');
+  return mode === 'agentidentity' || Boolean(credentials.agent_private_key || credentials.agent_runtime_id);
+}
+
 function titleCase(value: string) {
   return value ? value.charAt(0).toUpperCase() + value.slice(1) : value;
 }
@@ -64,6 +72,7 @@ export function AccountIdentity({ accountType, context }: AccountSurfaceProps) {
   const account = readAccount(context);
   const credentials = (context?.credentials as Record<string, string> | undefined) ?? account.credentials ?? {};
   const type = account.type || accountType;
+  const displayType = type === 'oauth' && isAgentIdentity(credentials) ? 'Agent Identity' : typeLabel(type);
   const planType = credentials.plan_type;
   const subscriptionUntil = credentials.subscription_active_until;
   const subscriptionExpired = subscriptionUntil ? new Date(subscriptionUntil) < new Date() : false;
@@ -81,7 +90,7 @@ export function AccountIdentity({ accountType, context }: AccountSurfaceProps) {
 
   return (
     <div style={rowStyle}>
-      {type && <span style={typeBadgeStyle}>{typeLabel(type)}</span>}
+      {type && <span style={typeBadgeStyle}>{displayType}</span>}
       {displayPlan && (
         <span style={planBadgeStyle} title={planTitle}>
           {titleCase(displayPlan)}

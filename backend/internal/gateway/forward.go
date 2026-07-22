@@ -89,7 +89,7 @@ func (g *OpenAIGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest
 			req.Body = normalizeResponsesToolCompatibility(req.Body)
 		}
 		reqServiceTier = normalizeOpenAIServiceTier(gjson.GetBytes(req.Body, "service_tier").String())
-		if req.Account.Credentials["api_key"] != "" && req.Account.Credentials["access_token"] == "" {
+		if req.Account.Credentials["api_key"] != "" && !isOpenAIOAuthCredentials(req.Account.Credentials) {
 			req.Body = applyOpenAIWireServiceTier(req.Body)
 		}
 	}
@@ -157,7 +157,7 @@ func (g *OpenAIGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest
 	if account.Credentials["api_key"] != "" {
 		return g.forwardAPIKey(ctx, req, reqServiceTier)
 	}
-	if account.Credentials["access_token"] != "" {
+	if isOpenAIOAuthCredentials(account.Credentials) {
 		if isImagesRequest(reqPath) {
 			if shouldUseImagesWebReverse(account, req.Model) {
 				return g.forwardImagesViaWebReverse(ctx, req)
@@ -201,7 +201,16 @@ func (g *OpenAIGateway) forwardOAuthCompact(ctx context.Context, req *sdk.Forwar
 
 	upstreamReq.Header.Set("Content-Type", "application/json")
 	upstreamReq.Header.Set("Accept", "application/json")
-	upstreamReq.Header.Set("Authorization", "Bearer "+account.Credentials["access_token"])
+	authHeaders, authErr := g.buildOpenAIAuthHeaders(ctx, account, false)
+	if authErr != nil {
+		reason := fmt.Sprintf("构建 OAuth 认证头失败: %v", authErr)
+		return accountDeadOutcome(reason), fmt.Errorf("%s", reason)
+	}
+	for key, values := range authHeaders {
+		for _, value := range values {
+			upstreamReq.Header.Add(key, value)
+		}
+	}
 	if aid := account.Credentials["chatgpt_account_id"]; aid != "" {
 		upstreamReq.Header.Set("ChatGPT-Account-ID", aid)
 	}
@@ -239,7 +248,11 @@ func (g *OpenAIGateway) forwardOAuthCompact(ctx context.Context, req *sdk.Forwar
 		)
 		return transientOutcome(err.Error()), fmt.Errorf("请求上游失败: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	if snapshot := parseCodexUsageFromHeaders(resp.Header); snapshot != nil {
 		StoreCodexUsage(account.ID, snapshot)
@@ -250,6 +263,66 @@ func (g *OpenAIGateway) forwardOAuthCompact(ctx context.Context, req *sdk.Forwar
 
 	if resp.StatusCode >= 400 {
 		respBody, _ := readLimitedErrorBody(resp.Body)
+		if isOpenAIAgentIdentityAccount(account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
+			g.invalidateAgentIdentityTask(account)
+			refreshedHeaders, refreshErr := g.buildOpenAIAuthHeaders(ctx, account, true)
+			if refreshErr != nil {
+				reason := fmt.Sprintf("Agent Identity task 恢复失败: %v", refreshErr)
+				return accountDeadOutcome(reason), fmt.Errorf("%s", reason)
+			}
+			_ = resp.Body.Close()
+			retryReq, buildErr := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(upstreamBody))
+			if buildErr != nil {
+				reason := fmt.Sprintf("构建 Agent Identity 重试请求失败: %v", buildErr)
+				return transientOutcome(reason), fmt.Errorf("%s", reason)
+			}
+			retryReq.Header.Set("Content-Type", "application/json")
+			retryReq.Header.Set("Accept", "application/json")
+			for key, values := range refreshedHeaders {
+				for _, value := range values {
+					retryReq.Header.Add(key, value)
+				}
+			}
+			if aid := account.Credentials["chatgpt_account_id"]; aid != "" {
+				retryReq.Header.Set("ChatGPT-Account-ID", aid)
+			}
+			if session.SessionID != "" {
+				retryReq.Header.Set("session_id", isolateSessionID(session.SessionID))
+			}
+			if session.ConversationID != "" {
+				retryReq.Header.Set("conversation_id", isolateSessionID(session.ConversationID))
+			}
+			if session.LastTurnState != "" {
+				retryReq.Header.Set("x-codex-turn-state", session.LastTurnState)
+			}
+			retryReq.Header.Set("originator", resolveCodexOriginator(req.Headers.Get("originator")))
+			if ua := req.Headers.Get("User-Agent"); ua != "" {
+				retryReq.Header.Set("User-Agent", ua)
+			}
+			retryResp, retryErr := g.buildForwardHTTPClient(ctx, req, account).Do(retryReq)
+			if retryErr != nil {
+				reason := fmt.Sprintf("Agent Identity 重试请求失败: %v", retryErr)
+				return transientOutcome(reason), fmt.Errorf("%s", reason)
+			}
+			resp = retryResp
+			respBody = nil
+			if resp.StatusCode >= http.StatusBadRequest {
+				respBody, _ = readLimitedErrorBody(resp.Body)
+			}
+		}
+		if resp == nil {
+			reason := "上游未返回有效响应"
+			return transientOutcome(reason), fmt.Errorf("%s", reason)
+		}
+		if resp.StatusCode < http.StatusBadRequest {
+			if snapshot := parseCodexUsageFromHeaders(resp.Header); snapshot != nil {
+				StoreCodexUsage(account.ID, snapshot)
+			}
+			if turnState := decodeTurnStateHeader(resp.Header); turnState != "" {
+				updateSessionStateTurnState(session.SessionKey, turnState)
+			}
+			return handleNonStreamResponse(resp, req.Writer, start, reqServiceTier)
+		}
 		errDetail := gjson.GetBytes(respBody, "error.message").String()
 		if errDetail == "" {
 			errDetail = truncate(string(respBody), 200)
@@ -913,10 +986,15 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 	session := resolveOpenAISession(req.Headers, req.Body, account.ID)
 	updateSessionStateFromRequest(session, account.ID)
 
+	authHeaders, authErr := g.buildOpenAIAuthHeaders(ctx, account, false)
+	if authErr != nil {
+		reason := fmt.Sprintf("构建 OAuth WebSocket 认证头失败: %v", authErr)
+		return accountDeadOutcome(reason), fmt.Errorf("%s", reason)
+	}
 	cfg := WSConfig{
-		Token:          account.Credentials["access_token"],
 		AccountID:      account.Credentials["chatgpt_account_id"],
 		ProxyURL:       account.ProxyURL,
+		Headers:        authHeaders,
 		SessionID:      session.SessionID,
 		ConversationID: session.ConversationID,
 		TurnState:      session.LastTurnState,
@@ -934,6 +1012,16 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 
 	wsDialStart := time.Now()
 	conn, wsResp, err := DialWebSocket(ctx, cfg)
+	if err != nil && isOpenAIAgentIdentityAccount(account) && wsResp != nil &&
+		isAgentIdentityTaskInvalidWSError(wsResp.StatusCode, err) {
+		g.invalidateAgentIdentityTask(account)
+		if refreshedHeaders, refreshErr := g.buildOpenAIAuthHeaders(ctx, account, true); refreshErr == nil {
+			cfg.Headers = refreshedHeaders
+			conn, wsResp, err = DialWebSocket(ctx, cfg)
+		} else {
+			err = refreshErr
+		}
+	}
 	wsDialMs := time.Since(wsDialStart).Milliseconds()
 	if err != nil {
 		dur := time.Since(start)
@@ -1094,6 +1182,30 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 	streamOutputStarted := func() bool {
 		return (lastChatWriter != nil && lastChatWriter.wrote) ||
 			(lastSSEHandler != nil && lastSSEHandler.wrote)
+	}
+	if isOpenAIAgentIdentityAccount(account) && !streamOutputStarted() && isAgentIdentityTaskInvalidWSResult(result) {
+		logger.Warn("agent_identity_task_invalid_retry", sdk.LogFieldAccountID, account.ID)
+		_ = conn.Close()
+		g.invalidateAgentIdentityTask(account)
+		if refreshedHeaders, refreshErr := g.buildOpenAIAuthHeaders(ctx, account, true); refreshErr == nil {
+			cfg.Headers = refreshedHeaders
+			if refreshedConn, _, dialErr := DialWebSocket(ctx, cfg); dialErr == nil {
+				conn = refreshedConn
+				result, err = runAttempt(createMsg, w, currentModel)
+			} else {
+				err = dialErr
+			}
+		}
+	}
+	if err != nil {
+		logger.Warn("upstream_request_failed",
+			sdk.LogFieldAccountID, account.ID,
+			sdk.LogFieldModel, req.Model,
+			sdk.LogFieldDurationMs, time.Since(start).Milliseconds(),
+			sdk.LogFieldError, err,
+			"phase", "agent_identity_task_recovery",
+		)
+		return transientOutcome(err.Error()), err
 	}
 	if airgateContinuationRecoveryRequested(req.Headers) && !delegatedRecoveryApplied && isContextTooLargeErrorResult(result.Err) && !streamOutputStarted() {
 		logger.Warn("delegated_full_replay_context_too_large_not_recoverable",

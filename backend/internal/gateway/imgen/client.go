@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -16,16 +17,17 @@ import (
 
 // Client 一个 chatgpt.com 网页端图片生成的逆向客户端。
 //
-// 单个 Client 绑定一个 access_token（一个 OAuth 账号）。Bootstrap 成功后持久
-// 的 cookie（oai-did / __cf_bm / _cfuvid）存在内嵌的 cookiejar 里，多次
-// GenerateImage 复用同一 Client 能省掉重复的 bootstrap + Cloudflare 握手。
+// 单个 Client 绑定一套认证状态（OAuth token 或 Agent Identity provider）。
+// Bootstrap 成功后的 cookie（oai-did / __cf_bm / _cfuvid）存在内嵌的
+// cookiejar 里，多次 GenerateImage 复用同一 Client 能省掉重复的 bootstrap
+// 和 Cloudflare 握手。
 //
 // **不** 并发安全：同一个 Client 同一时间只发起一次 GenerateImage 调用。
 // 若上层要并发，给每个请求 / 账户实例化独立的 Client（NewClient 开销主要
 // 在首次 Bootstrap，Cookie 可外部持久化后注入）。
 type Client struct {
 	http         *http.Client
-	accessToken  string
+	auth         authorizationState
 	deviceID     string
 	sessionID    string
 	bootstrapped bool
@@ -34,6 +36,16 @@ type Client struct {
 
 // NewClient 构造一个 Client。proxyURL 可为 nil（直连）。
 func NewClient(accessToken string, proxyURL *url.URL) *Client {
+	accessToken = strings.TrimSpace(accessToken)
+	client := NewClientWithAuth(nil, proxyURL)
+	client.auth.fallbackToken = accessToken
+	return client
+}
+
+// NewClientWithAuth 构造一个使用动态 Authorization 头的 Client。
+// 回调在每个请求构造时调用，适合 Agent Identity 这类每次请求都必须
+// 重新签名的认证方式。回调失败时请求不会发送到上游。
+func NewClientWithAuth(authHeader AuthHeaderProvider, proxyURL *url.URL) *Client {
 	transport := newUTLSTransport(proxyURL, 30*time.Second)
 	jar, _ := cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
 
@@ -43,9 +55,9 @@ func NewClient(accessToken string, proxyURL *url.URL) *Client {
 			Timeout:   300 * time.Second,
 			Jar:       jar,
 		},
-		accessToken: accessToken,
-		deviceID:    uuid.New().String(),
-		sessionID:   uuid.New().String(),
+		auth:      authorizationState{provider: authHeader},
+		deviceID:  uuid.New().String(),
+		sessionID: uuid.New().String(),
 	}
 }
 
@@ -110,11 +122,15 @@ func (c *Client) Bootstrap() error {
 
 // setCommonHeaders 设置完整的浏览器伪装头。任一 sec-ch-ua-* / oai-* 头缺失
 // 都会让 Sentinel 把请求判为脚本，触发 chat-requirements 的难度升级或 403。
-func (c *Client) setCommonHeaders(req *http.Request) {
+func (c *Client) setCommonHeaders(req *http.Request) error {
+	authHeader, err := c.auth.resolve()
+	if err != nil {
+		return err
+	}
 	req.Header.Set("Authority", "chatgpt.com")
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6")
-	req.Header.Set("Authorization", "Bearer "+c.accessToken)
+	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("Cache-Control", "no-cache")
 	req.Header.Set("Origin", BaseURL)
 	req.Header.Set("Pragma", "no-cache")
@@ -140,6 +156,7 @@ func (c *Client) setCommonHeaders(req *http.Request) {
 	req.Header.Set("Oai-Language", "zh-CN")
 	req.Header.Set("Oai-Client-Version", clientVersion)
 	req.Header.Set("Oai-Client-Build-Number", clientBuildNum)
+	return nil
 }
 
 func (c *Client) newReq(method, path string, body io.Reader) (*http.Request, error) {
@@ -147,7 +164,9 @@ func (c *Client) newReq(method, path string, body io.Reader) (*http.Request, err
 	if err != nil {
 		return nil, err
 	}
-	c.setCommonHeaders(req)
+	if err := c.setCommonHeaders(req); err != nil {
+		return nil, err
+	}
 	req.Header.Set("X-Openai-Target-Path", path)
 	req.Header.Set("X-Openai-Target-Route", path)
 	if body != nil {

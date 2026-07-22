@@ -30,10 +30,14 @@ func (g *OpenAIGateway) HandleWebSocket(ctx context.Context, conn sdk.WebSocketC
 	}
 
 	account := info.Account
+	isAgentIdentity := isOpenAIAgentIdentityAccount(account)
+	if isAgentIdentity {
+		ctx = withAgentIdentityRequestState(ctx)
+	}
 
 	var err error
 	var dialInfo *wsDialResult
-	if account.Credentials["access_token"] != "" {
+	if isOpenAIOAuthCredentials(account.Credentials) {
 		dialInfo, err = g.handleWSWithOAuth(ctx, conn, account)
 	} else if account.Credentials["api_key"] != "" {
 		dialInfo, err = g.handleWSWithAPIKey(ctx, conn, account)
@@ -44,37 +48,62 @@ func (g *OpenAIGateway) HandleWebSocket(ctx context.Context, conn sdk.WebSocketC
 
 	elapsed := time.Since(start)
 	if err == nil {
-		return sdk.ForwardOutcome{
+		outcome := sdk.ForwardOutcome{
 			Kind:     sdk.OutcomeSuccess,
 			Upstream: sdk.UpstreamResponse{StatusCode: http.StatusOK},
 			Duration: elapsed,
-		}, nil
+		}
+		if isAgentIdentity {
+			mergeAgentIdentityUpdatedCredentials(&outcome, ctx)
+		}
+		return outcome, nil
 	}
 
 	// 认证 / 上游失败：按 HTTP 状态码归类
 	if dialInfo != nil {
 		outcome := failureOutcome(dialInfo.statusCode, nil, nil, dialInfo.errorMessage, 0)
 		outcome.Duration = elapsed
+		if isAgentIdentity {
+			mergeAgentIdentityUpdatedCredentials(&outcome, ctx)
+		}
 		return outcome, forwardErrForOutcome(outcome, err)
 	}
 	// WS 桥接中途断开，视为流式中断
-	return sdk.ForwardOutcome{
+	outcome := sdk.ForwardOutcome{
 		Kind:     sdk.OutcomeStreamAborted,
 		Upstream: sdk.UpstreamResponse{StatusCode: http.StatusBadGateway},
 		Reason:   err.Error(),
 		Duration: elapsed,
-	}, err
+	}
+	if isAgentIdentity {
+		mergeAgentIdentityUpdatedCredentials(&outcome, ctx)
+	}
+	return outcome, err
 }
 
 // handleWSWithOAuth 使用上游 WebSocket 直通（端到端 WS 桥接）
 func (g *OpenAIGateway) handleWSWithOAuth(ctx context.Context, clientConn sdk.WebSocketConn, account *sdk.Account) (*wsDialResult, error) {
+	authHeaders, err := g.buildOpenAIAuthHeaders(ctx, account, false)
+	if err != nil {
+		return nil, err
+	}
 	cfg := WSConfig{
-		Token:      account.Credentials["access_token"],
 		AccountID:  account.Credentials["chatgpt_account_id"],
 		ProxyURL:   account.ProxyURL,
+		Headers:    authHeaders,
 		Originator: defaultCodexOriginator,
 	}
 	upstreamConn, wsResp, err := DialWebSocket(ctx, cfg)
+	if err != nil && isOpenAIAgentIdentityAccount(account) && wsResp != nil &&
+		isAgentIdentityTaskInvalidWSError(wsResp.StatusCode, err) {
+		g.invalidateAgentIdentityTask(account)
+		if refreshedHeaders, refreshErr := g.buildOpenAIAuthHeaders(ctx, account, true); refreshErr == nil {
+			cfg.Headers = refreshedHeaders
+			upstreamConn, wsResp, err = DialWebSocket(ctx, cfg)
+		} else {
+			err = refreshErr
+		}
+	}
 	if err != nil {
 		var info *wsDialResult
 		if wsResp != nil {

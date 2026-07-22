@@ -35,9 +35,22 @@ type Result struct {
 //
 // 失败时返回 partial result：已经成功下载的图片会在 Result.Images 里，
 // error 指明哪一步失败。
-func (c *Client) GenerateImage(ctx context.Context, prompt string, images []ImageInput) (*Result, error) {
+func (c *Client) GenerateImage(ctx context.Context, prompt string, images []ImageInput) (result *Result, err error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	ctx, cancel := context.WithCancelCause(ctx)
+	authScope := c.auth.begin(cancel)
+	defer func() {
+		cause := context.Cause(ctx)
+		c.auth.end(authScope)
+		cancel(nil)
+		if IsAuthorizationError(cause) {
+			err = cause
+		}
+	}()
+	if err := c.auth.validate(); err != nil {
+		return nil, err
 	}
 	prevCtx := c.ctx
 	c.ctx = ctx
@@ -154,7 +167,7 @@ func (c *Client) GenerateImage(ctx context.Context, prompt string, images []Imag
 	}
 
 	// Step 5: 下载
-	result := &Result{ConversationID: sr.ConversationID, ModelSlug: modelSlug}
+	result = &Result{ConversationID: sr.ConversationID, ModelSlug: modelSlug}
 	for _, ref := range imageRefs {
 		if err := ctx.Err(); err != nil {
 			return result, err

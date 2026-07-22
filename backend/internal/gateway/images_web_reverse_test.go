@@ -1,6 +1,9 @@
 package gateway
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -32,5 +35,49 @@ func TestWebReverseImagesErrorAccountStatusKeepsErr(t *testing.T) {
 	}
 	if outcome.Kind != sdk.OutcomeAccountDead {
 		t.Fatalf("Kind = %v, want OutcomeAccountDead", outcome.Kind)
+	}
+}
+
+func TestWebReverseAuthErrorClassification(t *testing.T) {
+	transient, err := webReverseAuthError(time.Now(), context.DeadlineExceeded)
+	if err == nil {
+		t.Fatal("expected transient auth error")
+	}
+	if transient.Kind != sdk.OutcomeUpstreamTransient {
+		t.Fatalf("transient Kind = %v, want OutcomeUpstreamTransient", transient.Kind)
+	}
+	if !strings.Contains(transient.Reason, "认证头失败") {
+		t.Fatalf("transient reason = %q", transient.Reason)
+	}
+
+	dead, err := webReverseAuthError(time.Now(), errors.New("Agent Identity 私钥无效"))
+	if err == nil {
+		t.Fatal("expected account auth error")
+	}
+	if dead.Kind != sdk.OutcomeAccountDead {
+		t.Fatalf("dead Kind = %v, want OutcomeAccountDead", dead.Kind)
+	}
+}
+
+func TestTransientWebReverseAuthErrorUsesRegistrationTypes(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "request failed", err: fmt.Errorf("%w: transport", errAgentIdentityTaskRegistrationRequestFailed), want: true},
+		{name: "invalid response", err: errAgentIdentityTaskRegistrationResponseInvalid, want: true},
+		{name: "missing task id", err: errAgentIdentityTaskRegistrationTaskIDMissing, want: true},
+		{name: "rate limited", err: &agentIdentityTaskRegistrationHTTPError{StatusCode: http.StatusTooManyRequests}, want: true},
+		{name: "server error", err: &agentIdentityTaskRegistrationHTTPError{StatusCode: http.StatusBadGateway}, want: true},
+		{name: "unauthorized", err: &agentIdentityTaskRegistrationHTTPError{StatusCode: http.StatusUnauthorized}, want: false},
+		{name: "credential error", err: errors.New("Agent Identity 私钥无效"), want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isTransientWebReverseAuthError(tt.err); got != tt.want {
+				t.Fatalf("isTransientWebReverseAuthError(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
 	}
 }
