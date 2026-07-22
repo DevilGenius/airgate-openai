@@ -114,7 +114,7 @@ func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (s
 	}
 	ctx = sdk.WithLogger(ctx, logger)
 	ctx = sdk.WithRequestID(ctx, rid)
-	if req != nil && isOpenAIAgentIdentityAccount(req.Account) {
+	if isOpenAIAgentIdentityAccount(req.Account) {
 		ctx = withAgentIdentityRequestState(ctx)
 	}
 	var traceCapture *finalErrorTraceCapture
@@ -222,7 +222,7 @@ func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (s
 	if traceCapture != nil && shouldAttachFinalErrorDiagnostic(outcome, err) {
 		outcome.FinalErrorDiagnostic = traceCapture.snapshot()
 	}
-	if req != nil && isOpenAIAgentIdentityAccount(req.Account) {
+	if isOpenAIAgentIdentityAccount(req.Account) {
 		mergeAgentIdentityUpdatedCredentials(&outcome, ctx)
 	}
 	return outcome, err

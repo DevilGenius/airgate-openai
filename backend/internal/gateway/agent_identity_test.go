@@ -109,7 +109,7 @@ func TestAgentIdentityAuthenticationErrorFinalization(t *testing.T) {
 		{name: "rate limited", err: &agentIdentityTaskRegistrationHTTPError{StatusCode: http.StatusTooManyRequests}, kind: sdk.OutcomeUpstreamTransient},
 		{name: "server error", err: &agentIdentityTaskRegistrationHTTPError{StatusCode: http.StatusBadGateway}, kind: sdk.OutcomeUpstreamTransient},
 		{name: "context deadline", err: context.DeadlineExceeded, kind: sdk.OutcomeUpstreamTransient},
-		{name: "invalid private key", err: errors.New("Agent Identity 私钥无效"), kind: sdk.OutcomeAccountDead},
+		{name: "invalid private key", err: errors.New("agent identity 私钥无效"), kind: sdk.OutcomeAccountDead},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

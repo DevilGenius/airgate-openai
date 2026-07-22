@@ -50,7 +50,7 @@ func TestWebReverseAuthErrorClassification(t *testing.T) {
 		t.Fatalf("transient reason = %q", transient.Reason)
 	}
 
-	dead, err := webReverseAuthError(time.Now(), errors.New("Agent Identity 私钥无效"))
+	dead, err := webReverseAuthError(time.Now(), errors.New("agent identity 私钥无效"))
 	if err == nil {
 		t.Fatal("expected account auth error")
 	}
@@ -71,7 +71,7 @@ func TestTransientWebReverseAuthErrorUsesRegistrationTypes(t *testing.T) {
 		{name: "rate limited", err: &agentIdentityTaskRegistrationHTTPError{StatusCode: http.StatusTooManyRequests}, want: true},
 		{name: "server error", err: &agentIdentityTaskRegistrationHTTPError{StatusCode: http.StatusBadGateway}, want: true},
 		{name: "unauthorized", err: &agentIdentityTaskRegistrationHTTPError{StatusCode: http.StatusUnauthorized}, want: false},
-		{name: "credential error", err: errors.New("Agent Identity 私钥无效"), want: false},
+		{name: "credential error", err: errors.New("agent identity 私钥无效"), want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

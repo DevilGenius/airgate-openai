@@ -2016,10 +2016,10 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 						wsResult = WSResult{Err: fmt.Errorf("发送 Agent Identity 重试消息失败: %w", writeErr)}
 					}
 				} else {
-					wsResult = WSResult{Err: fmt.Errorf("Agent Identity task 恢复后重拨失败: %w", dialErr)}
+					wsResult = WSResult{Err: fmt.Errorf("agent identity task 恢复后重拨失败: %w", dialErr)}
 				}
 			} else {
-				wsResult = WSResult{Err: fmt.Errorf("Agent Identity task 恢复失败: %w", refreshErr)}
+				wsResult = WSResult{Err: fmt.Errorf("agent identity task 恢复失败: %w", refreshErr)}
 			}
 		}
 		_ = conn.Close()

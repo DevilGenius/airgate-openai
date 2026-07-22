@@ -99,7 +99,7 @@ func (a *authorizationState) resolve() (string, error) {
 		authHeader = "Bearer " + a.fallbackToken
 	}
 	if strings.TrimSpace(authHeader) == "" {
-		return "", a.fail(errors.New("Authorization 头为空"))
+		return "", a.fail(errors.New("authorization 头为空"))
 	}
 	return authHeader, nil
 }

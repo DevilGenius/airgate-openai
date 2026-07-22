@@ -43,9 +43,9 @@ var agentIdentityJSONWhitespaceStripper = strings.NewReplacer(
 )
 
 var (
-	errAgentIdentityTaskRegistrationRequestFailed   = errors.New("Agent Identity task 注册请求失败")
-	errAgentIdentityTaskRegistrationResponseInvalid = errors.New("Agent Identity task 注册响应格式无效")
-	errAgentIdentityTaskRegistrationTaskIDMissing   = errors.New("Agent Identity 注册响应缺少 task_id")
+	errAgentIdentityTaskRegistrationRequestFailed   = errors.New("agent identity task 注册请求失败")
+	errAgentIdentityTaskRegistrationResponseInvalid = errors.New("agent identity task 注册响应格式无效")
+	errAgentIdentityTaskRegistrationTaskIDMissing   = errors.New("agent identity 注册响应缺少 task_id")
 )
 
 type agentIdentityTaskRegistrationHTTPError struct {
@@ -54,9 +54,9 @@ type agentIdentityTaskRegistrationHTTPError struct {
 
 func (e *agentIdentityTaskRegistrationHTTPError) Error() string {
 	if e == nil {
-		return "Agent Identity task 注册返回无效 HTTP 状态"
+		return "agent identity task 注册返回无效 HTTP 状态"
 	}
-	return fmt.Sprintf("Agent Identity task 注册返回 HTTP %d", e.StatusCode)
+	return fmt.Sprintf("agent identity task 注册返回 HTTP %d", e.StatusCode)
 }
 
 func isTransientAgentIdentityTaskRegistrationError(err error) bool {
@@ -302,25 +302,25 @@ func agentIdentityPrivateKey(credentials map[string]string) (ed25519.PrivateKey,
 		raw = strings.TrimSpace(credentials["agentPrivateKey"])
 	}
 	if raw == "" {
-		return nil, errors.New("Agent Identity 缺少 agent_private_key")
+		return nil, errors.New("agent identity 缺少 agent_private_key")
 	}
 	der, err := base64.StdEncoding.DecodeString(raw)
 	if err != nil {
 		if der, err = base64.RawStdEncoding.DecodeString(raw); err != nil {
 			if der, err = base64.RawURLEncoding.DecodeString(raw); err != nil {
 				if der, err = base64.URLEncoding.DecodeString(raw); err != nil {
-					return nil, errors.New("Agent Identity 的 agent_private_key 不是有效 Base64")
+					return nil, errors.New("agent identity 的 agent_private_key 不是有效 Base64")
 				}
 			}
 		}
 	}
 	parsed, err := x509.ParsePKCS8PrivateKey(der)
 	if err != nil {
-		return nil, errors.New("Agent Identity 的 agent_private_key 不是有效 PKCS#8")
+		return nil, errors.New("agent identity 的 agent_private_key 不是有效 PKCS#8")
 	}
 	privateKey, ok := parsed.(ed25519.PrivateKey)
 	if !ok || len(privateKey) != ed25519.PrivateKeySize {
-		return nil, errors.New("Agent Identity 的 agent_private_key 不是 Ed25519 私钥")
+		return nil, errors.New("agent identity 的 agent_private_key 不是 Ed25519 私钥")
 	}
 	return privateKey, nil
 }
@@ -335,7 +335,7 @@ func agentIdentityKeyFromCredentials(credentials map[string]string, taskID strin
 		runtimeID = strings.TrimSpace(credentials["agentRuntimeId"])
 	}
 	if runtimeID == "" {
-		return agentIdentityKey{}, errors.New("Agent Identity 缺少 agent_runtime_id")
+		return agentIdentityKey{}, errors.New("agent identity 缺少 agent_runtime_id")
 	}
 	if strings.TrimSpace(taskID) == "" {
 		taskID = strings.TrimSpace(credentials["task_id"])
@@ -352,13 +352,13 @@ func agentIdentityKeyFromCredentials(credentials map[string]string, taskID strin
 
 func buildAgentAssertion(key agentIdentityKey, now time.Time) (string, error) {
 	if key.runtimeID == "" || key.taskID == "" {
-		return "", errors.New("Agent Identity 缺少 runtime_id 或 task_id")
+		return "", errors.New("agent identity 缺少 runtime_id 或 task_id")
 	}
 	timestamp := now.UTC().Format(time.RFC3339)
 	payload := []byte(key.runtimeID + ":" + key.taskID + ":" + timestamp)
 	signature, err := key.privateKey.Sign(nil, payload, crypto.Hash(0))
 	if err != nil {
-		return "", errors.New("Agent Identity assertion 签名失败")
+		return "", errors.New("agent identity assertion 签名失败")
 	}
 	envelope, err := json.Marshal(map[string]string{
 		"agent_runtime_id": key.runtimeID,
@@ -367,19 +367,19 @@ func buildAgentAssertion(key agentIdentityKey, now time.Time) (string, error) {
 		"signature":        base64.StdEncoding.EncodeToString(signature),
 	})
 	if err != nil {
-		return "", errors.New("Agent Identity assertion 序列化失败")
+		return "", errors.New("agent identity assertion 序列化失败")
 	}
 	return "AgentAssertion " + base64.RawURLEncoding.EncodeToString(envelope), nil
 }
 
 func signAgentTaskRegistration(key agentIdentityKey, now time.Time) (string, string, error) {
 	if key.runtimeID == "" {
-		return "", "", errors.New("Agent Identity 缺少 agent_runtime_id")
+		return "", "", errors.New("agent identity 缺少 agent_runtime_id")
 	}
 	timestamp := now.UTC().Format(time.RFC3339)
 	signature, err := key.privateKey.Sign(nil, []byte(key.runtimeID+":"+timestamp), crypto.Hash(0))
 	if err != nil {
-		return "", "", errors.New("Agent Identity task 注册签名失败")
+		return "", "", errors.New("agent identity task 注册签名失败")
 	}
 	return timestamp, base64.StdEncoding.EncodeToString(signature), nil
 }
@@ -390,7 +390,7 @@ func decryptAgentTaskID(key agentIdentityKey, encoded string) (string, error) {
 	if err != nil {
 		if ciphertext, err = base64.RawStdEncoding.DecodeString(encoded); err != nil {
 			if ciphertext, err = base64.RawURLEncoding.DecodeString(encoded); err != nil {
-				return "", errors.New("Agent Identity encrypted task_id 不是有效 Base64")
+				return "", errors.New("agent identity encrypted task_id 不是有效 Base64")
 			}
 		}
 	}
@@ -403,17 +403,17 @@ func decryptAgentTaskID(key agentIdentityKey, encoded string) (string, error) {
 	curvePrivate[31] |= 64
 	curvePublicBytes, err := curve25519.X25519(curvePrivate[:], curve25519.Basepoint)
 	if err != nil {
-		return "", errors.New("Agent Identity 解密密钥派生失败")
+		return "", errors.New("agent identity 解密密钥派生失败")
 	}
 	var curvePublic [32]byte
 	copy(curvePublic[:], curvePublicBytes)
 	plaintext, ok := box.OpenAnonymous(nil, ciphertext, &curvePublic, &curvePrivate)
 	if !ok {
-		return "", errors.New("Agent Identity encrypted task_id 解密失败")
+		return "", errors.New("agent identity encrypted task_id 解密失败")
 	}
 	taskID := strings.TrimSpace(string(plaintext))
 	if taskID == "" {
-		return "", errors.New("Agent Identity 注册响应没有有效 task_id")
+		return "", errors.New("agent identity 注册响应没有有效 task_id")
 	}
 	return taskID, nil
 }
@@ -434,7 +434,7 @@ func agentIdentityCacheKey(account *sdk.Account) string {
 
 func (g *OpenAIGateway) registerAgentIdentityTask(ctx context.Context, account *sdk.Account) (string, error) {
 	if account == nil {
-		return "", errors.New("Agent Identity account 为空")
+		return "", errors.New("agent identity account 为空")
 	}
 	key, err := agentIdentityKeyFromCredentials(account.Credentials, "")
 	if err != nil {
@@ -449,7 +449,7 @@ func (g *OpenAIGateway) registerAgentIdentityTask(ctx context.Context, account *
 		"signature": signature,
 	})
 	if err != nil {
-		return "", errors.New("Agent Identity task 注册请求序列化失败")
+		return "", errors.New("agent identity task 注册请求序列化失败")
 	}
 	endpoint := strings.TrimRight(strings.TrimSpace(openAIAgentIdentityAuthAPIBaseURL), "/") +
 		"/v1/agent/" + url.PathEscape(key.runtimeID) + "/task/register"
@@ -457,7 +457,7 @@ func (g *OpenAIGateway) registerAgentIdentityTask(ctx context.Context, account *
 	defer cancel()
 	req, err := http.NewRequestWithContext(registerCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return "", errors.New("Agent Identity task 注册请求构造失败")
+		return "", errors.New("agent identity task 注册请求构造失败")
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
@@ -588,21 +588,21 @@ func agentIdentityTaskIDFromAuthHeaders(headers http.Header) (string, error) {
 	const prefix = "AgentAssertion "
 	authorization := strings.TrimSpace(headers.Get("Authorization"))
 	if !strings.HasPrefix(authorization, prefix) {
-		return "", errors.New("Agent Identity assertion 缺失")
+		return "", errors.New("agent identity assertion 缺失")
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(strings.TrimPrefix(authorization, prefix)))
 	if err != nil {
-		return "", errors.New("Agent Identity assertion 不是有效 Base64URL")
+		return "", errors.New("agent identity assertion 不是有效 Base64URL")
 	}
 	var envelope struct {
 		TaskID string `json:"task_id"`
 	}
 	if err := json.Unmarshal(payload, &envelope); err != nil {
-		return "", errors.New("Agent Identity assertion 格式无效")
+		return "", errors.New("agent identity assertion 格式无效")
 	}
 	taskID := strings.TrimSpace(envelope.TaskID)
 	if taskID == "" {
-		return "", errors.New("Agent Identity assertion 缺少 task_id")
+		return "", errors.New("agent identity assertion 缺少 task_id")
 	}
 	return taskID, nil
 }
