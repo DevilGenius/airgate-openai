@@ -593,7 +593,7 @@ func (g *OpenAIGateway) probeOAuthUsage(ctx context.Context, accountID int64, cr
 			_ = resp.Body.Close()
 			if isOpenAIAgentIdentityAccount(account) && !recovered &&
 				isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, body) {
-				g.invalidateAgentIdentityTask(account)
+				g.invalidateAgentIdentityTask(account, req.Header)
 				recovered = true
 				continue
 			}

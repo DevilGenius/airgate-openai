@@ -78,6 +78,12 @@ func isTransientAgentIdentityTaskRegistrationError(err error) bool {
 		(statusErr.StatusCode >= http.StatusInternalServerError && statusErr.StatusCode < 600)
 }
 
+func isTransientAgentIdentityAuthenticationError(err error) bool {
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		isTransientAgentIdentityTaskRegistrationError(err)
+}
+
 type agentIdentityKey struct {
 	runtimeID  string
 	privateKey ed25519.PrivateKey
@@ -137,6 +143,16 @@ type agentIdentityRequestState struct {
 
 type agentIdentityRequestStateKey struct{}
 
+const (
+	agentIdentityStateAuthenticationError     = "\x00agent_identity_authentication_error"
+	agentIdentityStateAuthenticationTransient = "\x00agent_identity_authentication_transient"
+)
+
+type agentIdentityAuthenticationFailure struct {
+	reason    string
+	transient bool
+}
+
 func withAgentIdentityRequestState(ctx context.Context) context.Context {
 	return context.WithValue(ctx, agentIdentityRequestStateKey{}, &agentIdentityRequestState{})
 }
@@ -163,28 +179,73 @@ func recordAgentIdentityUpdatedCredential(ctx context.Context, key, value string
 	return true
 }
 
-func agentIdentityUpdatedCredentials(ctx context.Context) map[string]string {
+func recordAgentIdentityAuthenticationError(ctx context.Context, err error) {
+	state := agentIdentityRequestStateFromContext(ctx)
+	if state == nil || err == nil {
+		return
+	}
+	state.mu.Lock()
+	if state.updated == nil {
+		state.updated = make(map[string]string)
+	}
+	state.updated[agentIdentityStateAuthenticationError] = err.Error()
+	if isTransientAgentIdentityAuthenticationError(err) {
+		state.updated[agentIdentityStateAuthenticationTransient] = "1"
+	} else {
+		delete(state.updated, agentIdentityStateAuthenticationTransient)
+	}
+	state.mu.Unlock()
+}
+
+func agentIdentityRequestResult(ctx context.Context) (map[string]string, agentIdentityAuthenticationFailure, bool) {
 	state := agentIdentityRequestStateFromContext(ctx)
 	if state == nil {
-		return nil
+		return nil, agentIdentityAuthenticationFailure{}, false
 	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if len(state.updated) == 0 {
-		return nil
+	var updated map[string]string
+	var failure agentIdentityAuthenticationFailure
+	hasAuthenticationFailure := false
+	if len(state.updated) > 0 {
+		updated = make(map[string]string, len(state.updated))
+		for key, value := range state.updated {
+			switch key {
+			case agentIdentityStateAuthenticationError:
+				failure.reason = value
+				hasAuthenticationFailure = true
+			case agentIdentityStateAuthenticationTransient:
+				failure.transient = value == "1"
+			default:
+				updated[key] = value
+			}
+		}
+		if len(updated) == 0 {
+			updated = nil
+		}
 	}
-	updated := make(map[string]string, len(state.updated))
-	for key, value := range state.updated {
-		updated[key] = value
-	}
-	return updated
+	return updated, failure, hasAuthenticationFailure
 }
 
 func mergeAgentIdentityUpdatedCredentials(outcome *sdk.ForwardOutcome, ctx context.Context) {
 	if outcome == nil {
 		return
 	}
-	updated := agentIdentityUpdatedCredentials(ctx)
+	updated, authFailure, hasAuthFailure := agentIdentityRequestResult(ctx)
+	if hasAuthFailure && outcome.Kind != sdk.OutcomeSuccess {
+		if authFailure.transient {
+			outcome.Kind = sdk.OutcomeUpstreamTransient
+			outcome.Upstream = sdk.UpstreamResponse{StatusCode: http.StatusBadGateway}
+		} else {
+			outcome.Kind = sdk.OutcomeAccountDead
+			outcome.Upstream = sdk.UpstreamResponse{StatusCode: http.StatusUnauthorized}
+		}
+		outcome.FailoverScope = sdk.FailoverScopeNone
+		outcome.RetryAfter = 0
+		if strings.TrimSpace(outcome.Reason) == "" {
+			outcome.Reason = authFailure.reason
+		}
+	}
 	if len(updated) == 0 {
 		return
 	}
@@ -426,7 +487,11 @@ func (g *OpenAIGateway) registerAgentIdentityTask(ctx context.Context, account *
 	if encrypted == "" {
 		return "", errAgentIdentityTaskRegistrationTaskIDMissing
 	}
-	return decryptAgentTaskID(key, encrypted)
+	taskID, err := decryptAgentTaskID(key, encrypted)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", errAgentIdentityTaskRegistrationResponseInvalid, err)
+	}
+	return taskID, nil
 }
 
 func (g *OpenAIGateway) ensureAgentIdentityTask(ctx context.Context, account *sdk.Account, force bool) (string, bool, error) {
@@ -517,18 +582,54 @@ func (g *OpenAIGateway) ensureAgentIdentityTask(ctx context.Context, account *sd
 	return taskID, updated, nil
 }
 
-func (g *OpenAIGateway) invalidateAgentIdentityTask(account *sdk.Account) {
+// agentIdentityTaskIDFromAuthHeaders runs only on an invalid-task response; the
+// normal forwarding path does not decode assertions.
+func agentIdentityTaskIDFromAuthHeaders(headers http.Header) (string, error) {
+	const prefix = "AgentAssertion "
+	authorization := strings.TrimSpace(headers.Get("Authorization"))
+	if !strings.HasPrefix(authorization, prefix) {
+		return "", errors.New("Agent Identity assertion 缺失")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(strings.TrimPrefix(authorization, prefix)))
+	if err != nil {
+		return "", errors.New("Agent Identity assertion 不是有效 Base64URL")
+	}
+	var envelope struct {
+		TaskID string `json:"task_id"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return "", errors.New("Agent Identity assertion 格式无效")
+	}
+	taskID := strings.TrimSpace(envelope.TaskID)
+	if taskID == "" {
+		return "", errors.New("Agent Identity assertion 缺少 task_id")
+	}
+	return taskID, nil
+}
+
+// invalidateAgentIdentityTask evicts only the task used by the rejected
+// request. A stale concurrent failure therefore cannot delete a newer task
+// that another request has already registered.
+func (g *OpenAIGateway) invalidateAgentIdentityTask(account *sdk.Account, failedAuthHeaders http.Header) {
 	if g == nil || account == nil {
 		return
 	}
 	g.agentIdentity.initialize()
+	failedTaskID, err := agentIdentityTaskIDFromAuthHeaders(failedAuthHeaders)
+	if err != nil {
+		return
+	}
 	cacheKey := agentIdentityCacheKey(account)
 	accountLock := g.agentIdentity.lockFor(cacheKey)
 	accountLock.Lock()
 	defer accountLock.Unlock()
 	g.agentIdentity.mu.Lock()
-	delete(g.agentIdentity.taskID, cacheKey)
-	delete(g.agentIdentity.reportedTaskID, cacheKey)
+	if strings.TrimSpace(g.agentIdentity.taskID[cacheKey]) == failedTaskID {
+		delete(g.agentIdentity.taskID, cacheKey)
+		if g.agentIdentity.reportedTaskID[cacheKey] == failedTaskID {
+			delete(g.agentIdentity.reportedTaskID, cacheKey)
+		}
+	}
 	g.agentIdentity.mu.Unlock()
 }
 
@@ -539,14 +640,17 @@ func (g *OpenAIGateway) buildOpenAIAuthHeaders(ctx context.Context, account *sdk
 	if isOpenAIAgentIdentityAccount(account) {
 		taskID, _, err := g.ensureAgentIdentityTask(ctx, account, forceTaskRecovery)
 		if err != nil {
+			recordAgentIdentityAuthenticationError(ctx, err)
 			return nil, err
 		}
 		key, err := agentIdentityKeyFromCredentials(account.Credentials, taskID)
 		if err != nil {
+			recordAgentIdentityAuthenticationError(ctx, err)
 			return nil, err
 		}
 		assertion, err := buildAgentAssertion(key, time.Now())
 		if err != nil {
+			recordAgentIdentityAuthenticationError(ctx, err)
 			return nil, err
 		}
 		return http.Header{"Authorization": []string{assertion}}, nil

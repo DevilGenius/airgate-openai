@@ -264,7 +264,7 @@ func (g *OpenAIGateway) forwardOAuthCompact(ctx context.Context, req *sdk.Forwar
 	if resp.StatusCode >= 400 {
 		respBody, _ := readLimitedErrorBody(resp.Body)
 		if isOpenAIAgentIdentityAccount(account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
-			g.invalidateAgentIdentityTask(account)
+			g.invalidateAgentIdentityTask(account, authHeaders)
 			refreshedHeaders, refreshErr := g.buildOpenAIAuthHeaders(ctx, account, true)
 			if refreshErr != nil {
 				reason := fmt.Sprintf("Agent Identity task 恢复失败: %v", refreshErr)
@@ -1014,7 +1014,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 	conn, wsResp, err := DialWebSocket(ctx, cfg)
 	if err != nil && isOpenAIAgentIdentityAccount(account) && wsResp != nil &&
 		isAgentIdentityTaskInvalidWSError(wsResp.StatusCode, err) {
-		g.invalidateAgentIdentityTask(account)
+		g.invalidateAgentIdentityTask(account, cfg.Headers)
 		if refreshedHeaders, refreshErr := g.buildOpenAIAuthHeaders(ctx, account, true); refreshErr == nil {
 			cfg.Headers = refreshedHeaders
 			conn, wsResp, err = DialWebSocket(ctx, cfg)
@@ -1186,7 +1186,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 	if isOpenAIAgentIdentityAccount(account) && !streamOutputStarted() && isAgentIdentityTaskInvalidWSResult(result) {
 		logger.Warn("agent_identity_task_invalid_retry", sdk.LogFieldAccountID, account.ID)
 		_ = conn.Close()
-		g.invalidateAgentIdentityTask(account)
+		g.invalidateAgentIdentityTask(account, cfg.Headers)
 		if refreshedHeaders, refreshErr := g.buildOpenAIAuthHeaders(ctx, account, true); refreshErr == nil {
 			cfg.Headers = refreshedHeaders
 			if refreshedConn, _, dialErr := DialWebSocket(ctx, cfg); dialErr == nil {

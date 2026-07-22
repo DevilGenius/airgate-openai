@@ -1927,7 +1927,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 		conn, wsResp, err := DialWebSocket(ctx, cfg)
 		if err != nil && isOpenAIAgentIdentityAccount(account) && wsResp != nil &&
 			isAgentIdentityTaskInvalidWSError(wsResp.StatusCode, err) {
-			g.invalidateAgentIdentityTask(account)
+			g.invalidateAgentIdentityTask(account, cfg.Headers)
 			if refreshedHeaders, refreshErr := g.buildOpenAIAuthHeaders(ctx, account, true); refreshErr == nil {
 				cfg.Headers = refreshedHeaders
 				conn, wsResp, err = DialWebSocket(ctx, cfg)
@@ -2001,7 +2001,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 			captureFinalErrorUpstreamBody(ctx, wsResult.FailedEventRaw)
 		}
 		if isOpenAIAgentIdentityAccount(account) && isAgentIdentityTaskInvalidWSResult(wsResult) {
-			g.invalidateAgentIdentityTask(account)
+			g.invalidateAgentIdentityTask(account, cfg.Headers)
 			_ = conn.Close()
 			if refreshedHeaders, refreshErr := g.buildOpenAIAuthHeaders(ctx, account, true); refreshErr == nil {
 				cfg.Headers = refreshedHeaders

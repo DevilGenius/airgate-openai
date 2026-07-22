@@ -317,7 +317,7 @@ func (g *OpenAIGateway) forwardAnthropicResponses(
 		if isOpenAIAgentIdentityAccount(account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, body) {
 			// A task can expire while an Anthropic request is in flight.  Re-register
 			// once before exposing the authentication failure to the caller.
-			g.invalidateAgentIdentityTask(account)
+			g.invalidateAgentIdentityTask(account, upstreamReq.Header)
 			oldCancel := cancel
 			_ = resp.Body.Close()
 			if oldCancel != nil {
