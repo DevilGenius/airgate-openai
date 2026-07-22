@@ -266,7 +266,8 @@ describe('OpenAI AccountForm', () => {
     expect(screen.getByRole('button', { name: '批量导入 (0)' })).toBeDisabled();
   });
 
-  it('updates editable OAuth refresh and session tokens', () => {
+  it('updates editable OAuth refresh and session tokens', async () => {
+    const user = userEvent.setup();
     const onChange = vi.fn();
 
     render(
@@ -277,6 +278,12 @@ describe('OpenAI AccountForm', () => {
         onChange={onChange}
       />,
     );
+
+    expect(screen.queryByDisplayValue('old-refresh')).toBeNull();
+    expect(screen.getByText('Refresh Token', { selector: 'span' })).toBeTruthy();
+    expect(screen.getByText('Session', { selector: 'span' })).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: /账号凭证/ }));
 
     fireEvent.change(screen.getByDisplayValue('old-refresh'), { target: { value: 'new-refresh' } });
     fireEvent.change(screen.getByDisplayValue('old-session'), { target: { value: 'new-session' } });

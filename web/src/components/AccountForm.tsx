@@ -41,13 +41,6 @@ const inputStyle: React.CSSProperties = {
   transition: 'border-color 0.2s, box-shadow 0.2s',
 };
 
-/** 密码字段样式：用 CSS 遮蔽代替 type="password"，避免浏览器自动填充 */
-const passwordInputStyle = {
-  ...inputStyle,
-  WebkitTextSecurity: 'disc',
-  textSecurity: 'disc',
-} as React.CSSProperties;
-
 const labelStyle: React.CSSProperties = {
   display: 'block',
   fontSize: '0.75rem',
@@ -191,6 +184,57 @@ function parseRefreshTokenLines(text: string): string[] {
     .filter((line) => line.length > 0 && !line.startsWith('#'));
 }
 
+/** 密钥类输入框：值默认被覆盖层遮住，聚焦输入框后覆盖层消失，可直接选中复制 */
+function SecretInput({
+  value,
+  onChange,
+  placeholder,
+  name,
+}: {
+  value: string;
+  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  placeholder?: string;
+  name?: string;
+}) {
+  const [focused, setFocused] = useState(false);
+  const masked = Boolean(value) && !focused;
+  return (
+    <div style={{ position: 'relative' }}>
+      <input
+        name={name}
+        type="text"
+        autoComplete="off"
+        style={inputStyle}
+        placeholder={placeholder}
+        value={value}
+        onChange={onChange}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+      />
+      <div
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          inset: '1px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          borderRadius: cssVar('radiusMd'),
+          backgroundColor: cssVar('fieldBackground'),
+          color: cssVar('textTertiary'),
+          fontSize: '0.75rem',
+          letterSpacing: '0.05em',
+          pointerEvents: 'none',
+          opacity: masked ? 1 : 0,
+          transition: 'opacity 0.15s',
+        }}
+      >
+        聚焦查看凭证
+      </div>
+    </div>
+  );
+}
+
 function StatusMessage({ status }: { status: { type: 'info' | 'success' | 'error'; text: string } | null }) {
   if (!status) return null;
   return (
@@ -237,9 +281,22 @@ export function AccountForm({
   const [batchImportedCount, setBatchImportedCount] = useState(0);
   const [oauthLoading, setOAuthLoading] = useState(false);
   const [oauthStatus, setOAuthStatus] = useState<{ type: 'info' | 'success' | 'error'; text: string } | null>(null);
+  const [credentialsExpanded, setCredentialsExpanded] = useState(false);
   const accountType = (propType as AccountType | undefined) ?? localType;
   const oauthExt = oauth as OAuthBridgeWithSession | undefined;
   const agentIdentity = isAgentIdentityCredentials(credentials);
+
+  // 账号凭证区域徽章：标明账号当前持有的凭证类型
+  const credentialBadges = useMemo(() => {
+    const badges: string[] = [];
+    if (agentIdentity) badges.push('Agent Identity');
+    if (credentials.access_token) badges.push('Access Token');
+    if (credentials.refresh_token) badges.push('Refresh Token');
+    if (credentials.session_token) badges.push('Session');
+    if (credentials.id_token) badges.push('ID Token');
+    if (credentials.api_key) badges.push('API Key');
+    return badges;
+  }, [agentIdentity, credentials.access_token, credentials.refresh_token, credentials.session_token, credentials.id_token, credentials.api_key]);
 
   // 进入/退出批量模式时通知外层隐藏"下一步/创建"按钮
   const isBatchActive =
@@ -571,6 +628,77 @@ export function AccountForm({
     </div>
   );
 
+  // Agent Identity 凭证。普通 OAuth 可留空；Agent Identity 不需要 access_token。
+  const agentIdentityBlock = (
+    <div style={{
+      borderWidth: '1px',
+      borderStyle: 'solid',
+      borderColor: cssVar('border'),
+      borderRadius: cssVar('radiusLg'),
+      padding: '0.75rem',
+      backgroundColor: cssVar('surfaceSecondary'),
+    }}>
+      <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: cssVar('text'), marginBottom: '0.25rem' }}>
+        Agent Identity 凭证
+      </div>
+      <div style={{ ...descStyle, marginTop: 0, marginBottom: '0.75rem' }}>
+        从新版 Sub2API 导入的 Agent Identity 账号只需要以下签名凭证，首次请求时会自动注册 task。
+      </div>
+      <div style={{ marginBottom: '0.75rem' }}>
+        <label style={labelStyle}>认证模式</label>
+        <input
+          type="text"
+          autoComplete="off"
+          style={inputStyle}
+          placeholder="agentIdentity"
+          value={credentials.auth_mode ?? ''}
+          onChange={(e) => updateField('auth_mode', e.target.value)}
+        />
+      </div>
+      <div style={{ marginBottom: '0.75rem' }}>
+        <label style={labelStyle}>Agent Runtime ID</label>
+        <input
+          type="text"
+          autoComplete="off"
+          style={inputStyle}
+          placeholder="Agent Identity 导入后自动填充"
+          value={credentials.agent_runtime_id ?? ''}
+          onChange={(e) => updateField('agent_runtime_id', e.target.value)}
+        />
+      </div>
+      <div style={{ marginBottom: '0.75rem' }}>
+        <label style={labelStyle}>Agent Private Key</label>
+        <SecretInput
+          placeholder="Base64 PKCS#8 Ed25519 私钥"
+          value={credentials.agent_private_key ?? ''}
+          onChange={(e) => updateField('agent_private_key', e.target.value)}
+        />
+      </div>
+      <div style={{ marginBottom: '0.75rem' }}>
+        <label style={labelStyle}>Agent Task ID</label>
+        <input
+          type="text"
+          autoComplete="off"
+          style={inputStyle}
+          placeholder="留空则首次请求自动注册"
+          value={credentials.task_id ?? ''}
+          onChange={(e) => updateField('task_id', e.target.value)}
+        />
+      </div>
+      <div>
+        <label style={labelStyle}>ChatGPT User ID</label>
+        <input
+          type="text"
+          autoComplete="off"
+          style={inputStyle}
+          placeholder="Agent Identity 导入后自动填充"
+          value={credentials.chatgpt_user_id ?? ''}
+          onChange={(e) => updateField('chatgpt_user_id', e.target.value)}
+        />
+      </div>
+    </div>
+  );
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
       {/* 账号类型选择（编辑模式下只读） */}
@@ -600,22 +728,8 @@ export function AccountForm({
         </div>
       </div>
 
-      {accountType === 'apikey' && (
+      {accountType === 'apikey' && mode === 'create' && (
         <>
-          <div>
-            <label style={labelStyle}>
-              API Key <span style={{ color: cssVar('danger') }}>*</span>
-            </label>
-            <input
-              name="api_key"
-              type="password"
-              autoComplete="off"
-              style={inputStyle}
-              placeholder="sk-..."
-              value={credentials.api_key ?? ''}
-              onChange={(e) => updateField('api_key', e.target.value)}
-            />
-          </div>
           <div>
             <label style={labelStyle}>API 地址</label>
             <input
@@ -628,6 +742,17 @@ export function AccountForm({
             <div style={{ ...descStyle, marginTop: '0.375rem' }}>
               留空使用默认地址，支持自定义反向代理
             </div>
+          </div>
+          <div>
+            <label style={labelStyle}>
+              API Key <span style={{ color: cssVar('danger') }}>*</span>
+            </label>
+            <SecretInput
+              name="api_key"
+              placeholder="sk-..."
+              value={credentials.api_key ?? ''}
+              onChange={(e) => updateField('api_key', e.target.value)}
+            />
           </div>
         </>
       )}
@@ -990,10 +1115,7 @@ export function AccountForm({
                 <label style={labelStyle}>
                   Access Token {!oauth && <span style={{ color: cssVar('danger') }}>*</span>}
                 </label>
-                <input
-                  type="text"
-                  autoComplete="off"
-                  style={passwordInputStyle}
+                <SecretInput
                   placeholder={oauth ? '授权后自动填充，或手动输入' : 'eyJhbG...'}
                   value={credentials.access_token ?? ''}
                   onChange={(e) => updateField('access_token', e.target.value)}
@@ -1001,10 +1123,7 @@ export function AccountForm({
               </div>
               <div>
                 <label style={labelStyle}>Refresh Token</label>
-                <input
-                  type="text"
-                  autoComplete="off"
-                  style={passwordInputStyle}
+                <SecretInput
                   placeholder="授权后自动填充"
                   value={credentials.refresh_token ?? ''}
                   onChange={(e) => updateField('refresh_token', e.target.value)}
@@ -1012,10 +1131,7 @@ export function AccountForm({
               </div>
               <div>
                 <label style={labelStyle}>Session Token (JWE)</label>
-                <input
-                  type="text"
-                  autoComplete="off"
-                  style={passwordInputStyle}
+                <SecretInput
                   placeholder="Session 导入后自动填充，或手动粘贴"
                   value={credentials.session_token ?? ''}
                   onChange={(e) => updateField('session_token', e.target.value)}
@@ -1045,113 +1161,145 @@ export function AccountForm({
             </>
           )}
 
-          {/* Agent Identity 凭证。普通 OAuth 可留空；Agent Identity 不需要 access_token。 */}
-          {!isBatchActive && (
+          {/* Agent Identity 凭证（仅 Agent Identity 账号展示） */}
+          {!isBatchActive && mode === 'create' && agentIdentity && agentIdentityBlock}
+        </>
+      )}
+
+      {/* 账号凭证区域：编辑模式下默认折叠，展开后标明凭证类型并可查看/修改凭证值 */}
+      {mode === 'edit' && accountType && (
+        <div style={{
+          width: '100%',
+          boxSizing: 'border-box',
+          borderWidth: '1px',
+          borderStyle: 'solid',
+          borderColor: cssVar('border'),
+          borderRadius: cssVar('radiusLg'),
+          backgroundColor: cssVar('surfaceSecondary'),
+          overflow: 'hidden',
+        }}>
+          <button
+            type="button"
+            aria-expanded={credentialsExpanded}
+            onClick={() => setCredentialsExpanded((prev) => !prev)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              flexWrap: 'wrap',
+              width: '100%',
+              boxSizing: 'border-box',
+              padding: '0.5rem 0.75rem',
+              border: 'none',
+              backgroundColor: 'transparent',
+              cursor: 'pointer',
+              textAlign: 'left',
+            }}
+          >
+            <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: cssVar('text') }}>
+              账号凭证
+            </span>
+            {credentialBadges.map((badge) => (
+              <span
+                key={badge}
+                style={{
+                  display: 'inline-block',
+                  padding: '0.0625rem 0.375rem',
+                  borderRadius: '9999px',
+                  fontSize: '0.6875rem',
+                  fontWeight: 600,
+                  lineHeight: 1.4,
+                  color: cssVar('primary'),
+                  backgroundColor: cssVar('primarySubtle'),
+                }}
+              >
+                {badge}
+              </span>
+            ))}
+            <span
+              aria-hidden="true"
+              style={{
+                marginLeft: 'auto',
+                color: cssVar('textTertiary'),
+                fontSize: '0.75rem',
+                transform: credentialsExpanded ? 'rotate(180deg)' : 'none',
+                transition: 'transform 0.15s',
+              }}
+            >
+              ▾
+            </span>
+          </button>
+          {credentialsExpanded && (
             <div style={{
-              borderWidth: '1px',
-              borderStyle: 'solid',
-              borderColor: cssVar('border'),
-              borderRadius: cssVar('radiusLg'),
-              padding: '0.75rem',
-              backgroundColor: cssVar('surfaceSecondary'),
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.75rem',
+              padding: '0 0.75rem 0.75rem',
             }}>
-              <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: cssVar('text'), marginBottom: '0.25rem' }}>
-                Agent Identity 凭证
-              </div>
-              <div style={{ ...descStyle, marginTop: 0, marginBottom: '0.75rem' }}>
-                从新版 Sub2API 导入的 Agent Identity 账号只需要以下签名凭证，首次请求时会自动注册 task。
-              </div>
-              <div style={{ marginBottom: '0.75rem' }}>
-                <label style={labelStyle}>认证模式</label>
-                <input
-                  type="text"
-                  autoComplete="off"
-                  style={inputStyle}
-                  placeholder="agentIdentity"
-                  value={credentials.auth_mode ?? ''}
-                  onChange={(e) => updateField('auth_mode', e.target.value)}
-                />
-              </div>
-              <div style={{ marginBottom: '0.75rem' }}>
-                <label style={labelStyle}>Agent Runtime ID</label>
-                <input
-                  type="text"
-                  autoComplete="off"
-                  style={inputStyle}
-                  placeholder="Agent Identity 导入后自动填充"
-                  value={credentials.agent_runtime_id ?? ''}
-                  onChange={(e) => updateField('agent_runtime_id', e.target.value)}
-                />
-              </div>
-              <div style={{ marginBottom: '0.75rem' }}>
-                <label style={labelStyle}>Agent Private Key</label>
-                <input
-                  type="text"
-                  autoComplete="off"
-                  style={passwordInputStyle}
-                  placeholder="Base64 PKCS#8 Ed25519 私钥"
-                  value={credentials.agent_private_key ?? ''}
-                  onChange={(e) => updateField('agent_private_key', e.target.value)}
-                />
-              </div>
-              <div style={{ marginBottom: '0.75rem' }}>
-                <label style={labelStyle}>Agent Task ID</label>
-                <input
-                  type="text"
-                  autoComplete="off"
-                  style={inputStyle}
-                  placeholder="留空则首次请求自动注册"
-                  value={credentials.task_id ?? ''}
-                  onChange={(e) => updateField('task_id', e.target.value)}
-                />
-              </div>
-              <div>
-                <label style={labelStyle}>ChatGPT User ID</label>
-                <input
-                  type="text"
-                  autoComplete="off"
-                  style={inputStyle}
-                  placeholder="Agent Identity 导入后自动填充"
-                  value={credentials.chatgpt_user_id ?? ''}
-                  onChange={(e) => updateField('chatgpt_user_id', e.target.value)}
-                />
-              </div>
-              {agentIdentity && (
-                <div style={{ ...descStyle, color: cssVar('success'), marginTop: '0.625rem' }}>
-                  已识别为 Agent Identity：请求将使用 AgentAssertion 签名，不读取 access_token。
-                </div>
+              {accountType === 'apikey' && (
+                <>
+                  <div>
+                    <label style={labelStyle}>API 地址</label>
+                    <input
+                      type="text"
+                      style={inputStyle}
+                      placeholder="https://api.openai.com"
+                      value={credentials.base_url ?? ''}
+                      onChange={(e) => updateField('base_url', e.target.value)}
+                    />
+                    <div style={{ ...descStyle, marginTop: '0.375rem' }}>
+                      留空使用默认地址，支持自定义反向代理
+                    </div>
+                  </div>
+                  <div>
+                    <label style={labelStyle}>API Key</label>
+                    <SecretInput
+                      name="api_key"
+                      placeholder="sk-..."
+                      value={credentials.api_key ?? ''}
+                      onChange={(e) => updateField('api_key', e.target.value)}
+                    />
+                  </div>
+                </>
+              )}
+              {accountType === 'oauth' && (
+                <>
+                  {credentials.access_token && (
+                    <div>
+                      <label style={labelStyle}>Access Token</label>
+                      <SecretInput
+                        placeholder="未设置"
+                        value={credentials.access_token ?? ''}
+                        onChange={(e) => updateField('access_token', e.target.value)}
+                      />
+                    </div>
+                  )}
+                  {credentials.refresh_token && (
+                    <div>
+                      <label style={labelStyle}>Refresh Token</label>
+                      <SecretInput
+                        placeholder="未设置"
+                        value={credentials.refresh_token ?? ''}
+                        onChange={(e) => updateField('refresh_token', e.target.value)}
+                      />
+                    </div>
+                  )}
+                  {credentials.session_token && (
+                    <div>
+                      <label style={labelStyle}>Session Token (JWE)</label>
+                      <SecretInput
+                        placeholder="未设置"
+                        value={credentials.session_token ?? ''}
+                        onChange={(e) => updateField('session_token', e.target.value)}
+                      />
+                    </div>
+                  )}
+                  {agentIdentity && agentIdentityBlock}
+                </>
               )}
             </div>
           )}
-
-          {/* 编辑模式下显示 Refresh Token / Session Token，可查看和修改 */}
-          {mode === 'edit' && (
-            <>
-              <div>
-                <label style={labelStyle}>Refresh Token</label>
-                <input
-                  type="text"
-                  autoComplete="off"
-                  style={passwordInputStyle}
-                  placeholder="未设置"
-                  value={credentials.refresh_token ?? ''}
-                  onChange={(e) => updateField('refresh_token', e.target.value)}
-                />
-              </div>
-              <div>
-                <label style={labelStyle}>Session Token (JWE)</label>
-                <input
-                  type="text"
-                  autoComplete="off"
-                  style={passwordInputStyle}
-                  placeholder="未设置"
-                  value={credentials.session_token ?? ''}
-                  onChange={(e) => updateField('session_token', e.target.value)}
-                />
-              </div>
-            </>
-          )}
-        </>
+        </div>
       )}
     </div>
   );
