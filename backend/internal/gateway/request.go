@@ -327,8 +327,9 @@ func preserveOpenAIConversationImages(body []byte) []byte {
 // encrypted_content 以及 content/summary 等上下文字段，仅移除 store=false 下会
 // 触发服务端存储查找的 rs_* id，并补齐上游要求的 summary。已有续链锚点的请求会
 // 在外层移除重复的加密 replay item；外层结构无效的密文由请求预处理 sanitizer 删除。
-// message/function_call item 仅保留各自合法的 msg_*/fc_* id；其他前缀直接移除，
-// 避免 Codex 返回 invalid_id_prefix。call_id 是独立的调用配对字段，不在这里改写。
+// message/function_call/custom_tool_call item 仅保留各自合法的
+// msg_*/fc_*/ctc_* id；其他前缀直接移除，避免 Codex 返回
+// invalid_id_prefix。call_id 是独立的调用配对字段，不在这里改写。
 func normalizeResponsesInput(body []byte, reqPath string) []byte {
 	if !isResponsesRequestPath(reqPath) {
 		return body
@@ -535,6 +536,8 @@ func isValidResponsesInputItemIDForType(itemType, id string) bool {
 		requiredPrefix = "msg_"
 	case "function_call":
 		requiredPrefix = "fc_"
+	case "custom_tool_call":
+		requiredPrefix = "ctc_"
 	default:
 		return true
 	}

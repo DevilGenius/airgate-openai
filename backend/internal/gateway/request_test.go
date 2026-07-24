@@ -1750,6 +1750,45 @@ func TestNormalizeResponsesInputFunctionCallIDPrefixes(t *testing.T) {
 	}
 }
 
+func TestNormalizeResponsesInputCustomToolCallIDPrefixes(t *testing.T) {
+	const callID = "call_919b3a9db8d3f2360fa1cfcd"
+	tests := []struct {
+		name   string
+		id     string
+		wantID string
+	}{
+		{name: "valid ctc prefix", id: "ctc_919b3a9db8d3f2360fa1cfcd", wantID: "ctc_919b3a9db8d3f2360fa1cfcd"},
+		{name: "generic item prefix", id: "item_919b3a9db8d3f2360fa1cfcd"},
+		{name: "function call prefix", id: "fc_919b3a9db8d3f2360fa1cfcd"},
+		{name: "call id used as item id", id: callID},
+		{name: "uppercase prefix", id: "CTC_919b3a9db8d3f2360fa1cfcd"},
+		{name: "missing underscore", id: "ctc919b3a9db8d3f2360fa1cfcd"},
+		{name: "empty suffix", id: "ctc_"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body := []byte(fmt.Sprintf(
+				`{"model":"gpt-5.5","input":[{"type":"custom_tool_call","id":%q,"call_id":%q,"name":"exec","input":"pwd"}]}`,
+				test.id,
+				callID,
+			))
+			result := normalizeResponsesInput(body, "/v1/responses")
+			id := gjson.GetBytes(result, "input.0.id")
+			if test.wantID == "" {
+				if id.Exists() {
+					t.Fatalf("invalid custom_tool_call id was not removed: %s", result)
+				}
+			} else if got := id.String(); got != test.wantID {
+				t.Fatalf("custom_tool_call id = %q, want %q; body=%s", got, test.wantID, result)
+			}
+			if got := gjson.GetBytes(result, "input.0.call_id").String(); got != callID {
+				t.Fatalf("call_id = %q, want %q preserved; body=%s", got, callID, result)
+			}
+		})
+	}
+}
+
 func TestNormalizeResponsesInputPreservesExistingFunctionCallID(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.5","input":[{"type":"function_call","id":"call_wrong","call_id":"call_existing","name":"lookup","arguments":"{}"}]}`)
 	result := normalizeResponsesInput(body, "/v1/responses")
@@ -1779,6 +1818,25 @@ func TestPreprocessRequestBodyRepairsFunctionCallIDPrefix(t *testing.T) {
 	}
 	if got := gjson.GetBytes(result, "input.2.call_id").String(); got != callID {
 		t.Fatalf("function_call_output call_id = %q, want %q; body=%s", got, callID, result)
+	}
+}
+
+func TestPreprocessRequestBodyRepairsCustomToolCallIDPrefix(t *testing.T) {
+	const callID = "call_919b3a9db8d3f2360fa1cfcd"
+	body := []byte(`{"model":"gpt-5.5","input":[` +
+		`{"type":"custom_tool_call","id":"item_919b3a9db8d3f2360fa1cfcd","call_id":"` + callID + `","name":"exec","input":"pwd"},` +
+		`{"type":"custom_tool_call_output","call_id":"` + callID + `","output":"ok"}` +
+		`]}`)
+	result := preprocessRequestBody(body, "gpt-5.5", "/v1/responses")
+
+	if gjson.GetBytes(result, "input.0.id").Exists() {
+		t.Fatalf("invalid custom_tool_call id was not removed: %s", result)
+	}
+	if got := gjson.GetBytes(result, "input.0.call_id").String(); got != callID {
+		t.Fatalf("custom_tool_call call_id = %q, want %q; body=%s", got, callID, result)
+	}
+	if got := gjson.GetBytes(result, "input.1.call_id").String(); got != callID {
+		t.Fatalf("custom_tool_call_output call_id = %q, want %q; body=%s", got, callID, result)
 	}
 }
 
