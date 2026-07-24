@@ -72,7 +72,7 @@ export function AccountIdentity({ accountType, context }: AccountSurfaceProps) {
   const account = readAccount(context);
   const credentials = (context?.credentials as Record<string, string> | undefined) ?? account.credentials ?? {};
   const type = account.type || accountType;
-  const displayType = type === 'oauth' && isAgentIdentity(credentials) ? 'Agent Identity' : typeLabel(type);
+  const displayType = type === 'oauth' && isAgentIdentity(credentials) ? 'Identity' : typeLabel(type);
   const planType = credentials.plan_type;
   const subscriptionUntil = credentials.subscription_active_until;
   const subscriptionExpired = subscriptionUntil ? new Date(subscriptionUntil) < new Date() : false;
