@@ -77,7 +77,7 @@ func classifyAnthropicBody(statusCode int, body []byte) sdk.OutcomeKind {
 // classifyHTTPFailureResponse 在通用 HTTP 分类基础上读取结构化错误体。
 // 传输层只提交完整上游响应，不感知具体账号处置策略。
 func classifyHTTPFailureResponse(statusCode int, body []byte, message string) sdk.OutcomeKind {
-	if statusCode == http.StatusForbidden && hasQuotaExhaustionCode(body) {
+	if (statusCode == http.StatusPaymentRequired || statusCode == http.StatusForbidden) && hasQuotaExhaustionCode(body) {
 		return sdk.OutcomeAccountQuotaExhausted
 	}
 	return classifyHTTPFailure(statusCode, message)

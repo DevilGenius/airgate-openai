@@ -326,6 +326,18 @@ func TestFailureOutcomeClassifiesQuotaExhaustion(t *testing.T) {
 	}
 }
 
+func TestFailureOutcomeClassifiesPaymentRequiredQuotaExhaustion(t *testing.T) {
+	body := []byte(`{"error":{"code":"insufficient_quota","message":"API Key 配额已用尽"}}`)
+	outcome := failureOutcome(http.StatusPaymentRequired, body, nil, "API Key 配额已用尽", 0)
+
+	if outcome.Kind != sdk.OutcomeAccountQuotaExhausted {
+		t.Fatalf("kind = %v, want AccountQuotaExhausted", outcome.Kind)
+	}
+	if outcome.Reason != "HTTP 402: API Key 配额已用尽" {
+		t.Fatalf("reason = %q, want original reason", outcome.Reason)
+	}
+}
+
 func TestClassifyHTTPFailureResponseMatchesQuotaExhaustionCodesOnly(t *testing.T) {
 	for _, code := range []string{"insufficient_quota", "user_quota_exhausted", "quota_exceeded"} {
 		body := []byte(`{"error":{"code":"` + code + `"}}`)
