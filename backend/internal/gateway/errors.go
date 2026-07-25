@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -70,7 +71,42 @@ func classifyAnthropicBody(statusCode int, body []byte) sdk.OutcomeKind {
 	if msg == "" {
 		msg = string(body)
 	}
-	return classifyHTTPFailure(statusCode, msg)
+	return classifyHTTPFailureResponse(statusCode, body, msg)
+}
+
+// classifyHTTPFailureResponse 在通用 HTTP 分类基础上读取结构化错误体。
+// 传输层只提交完整上游响应，不感知具体账号处置策略。
+func classifyHTTPFailureResponse(statusCode int, body []byte, message string) sdk.OutcomeKind {
+	if statusCode == http.StatusForbidden && hasQuotaExhaustionCode(body) {
+		return sdk.OutcomeAccountQuotaExhausted
+	}
+	return classifyHTTPFailure(statusCode, message)
+}
+
+func hasQuotaExhaustionCode(body []byte) bool {
+	for _, path := range []string{"error.code", "response.error.code", "code"} {
+		if isQuotaExhaustionCode(gjson.GetBytes(body, path).String()) {
+			return true
+		}
+	}
+	return false
+}
+
+func isQuotaExhaustionCode(code string) bool {
+	tokens := strings.FieldsFunc(strings.ToLower(strings.TrimSpace(code)), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	hasQuota := false
+	hasExhaustion := false
+	for _, token := range tokens {
+		switch token {
+		case "quota":
+			hasQuota = true
+		case "insufficient", "exhausted", "exceeded", "depleted":
+			hasExhaustion = true
+		}
+	}
+	return hasQuota && hasExhaustion
 }
 
 func isTemporaryRateLimitText(parts ...string) bool {

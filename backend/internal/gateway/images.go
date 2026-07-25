@@ -362,7 +362,7 @@ func shouldRetryImageFallback(outcome sdk.ForwardOutcome, err error) bool {
 		return false
 	}
 	switch outcome.Kind {
-	case sdk.OutcomeAccountRateLimited, sdk.OutcomeAccountDead, sdk.OutcomeAccountUnavailable:
+	case sdk.OutcomeAccountRateLimited, sdk.OutcomeAccountDead, sdk.OutcomeAccountUnavailable, sdk.OutcomeAccountQuotaExhausted:
 		return false
 	}
 	reason := strings.Join([]string{

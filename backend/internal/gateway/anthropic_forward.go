@@ -619,11 +619,7 @@ func (g *OpenAIGateway) writeAnthropicUpstreamError(
 		Duration:       time.Since(start),
 		SafetyRejected: isCybersecurityRiskRejectionText(errMsg, string(body)),
 	}
-
-	if kind == sdk.OutcomeAccountRateLimited || kind == sdk.OutcomeAccountDead || kind == sdk.OutcomeUpstreamTransient {
-		return outcome, fmt.Errorf("上游返回 %d: %s", statusCode, errMsg)
-	}
-	return outcome, nil
+	return outcome, forwardErrForOutcome(outcome, fmt.Errorf("上游返回 %d: %s", statusCode, errMsg))
 }
 
 // extractOpenAIErrorMessage 从上游错误响应中提取错误消息（纯 gjson）

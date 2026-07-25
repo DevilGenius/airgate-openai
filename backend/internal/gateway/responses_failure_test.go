@@ -314,6 +314,32 @@ func TestClassifyHTTPFailureTreatsPlain403AsAccountUnavailable(t *testing.T) {
 	}
 }
 
+func TestFailureOutcomeClassifiesQuotaExhaustion(t *testing.T) {
+	body := []byte(`{"error":{"code":"insufficient_user_quota","message":"预扣费额度失败"}}`)
+	outcome := failureOutcome(http.StatusForbidden, body, nil, "预扣费额度失败", 0)
+
+	if outcome.Kind != sdk.OutcomeAccountQuotaExhausted {
+		t.Fatalf("kind = %v, want AccountQuotaExhausted", outcome.Kind)
+	}
+	if outcome.Reason != "HTTP 403: 预扣费额度失败" {
+		t.Fatalf("reason = %q, want original reason", outcome.Reason)
+	}
+}
+
+func TestClassifyHTTPFailureResponseMatchesQuotaExhaustionCodesOnly(t *testing.T) {
+	for _, code := range []string{"insufficient_quota", "user_quota_exhausted", "quota_exceeded"} {
+		body := []byte(`{"error":{"code":"` + code + `"}}`)
+		if got := classifyHTTPFailureResponse(http.StatusForbidden, body, "forbidden"); got != sdk.OutcomeAccountQuotaExhausted {
+			t.Fatalf("code %q kind = %v, want AccountQuotaExhausted", code, got)
+		}
+	}
+
+	body := []byte(`{"error":{"code":"quota_information_unavailable"}}`)
+	if got := classifyHTTPFailureResponse(http.StatusForbidden, body, "forbidden"); got != sdk.OutcomeAccountUnavailable {
+		t.Fatalf("non-exhaustion quota code kind = %v, want AccountUnavailable", got)
+	}
+}
+
 func TestClassifyHTTPFailureTreatsDisabled400AsAccountDead(t *testing.T) {
 	got := classifyHTTPFailure(400, "Organization disabled due to policy violation")
 	if got != sdk.OutcomeAccountDead {
