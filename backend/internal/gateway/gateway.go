@@ -181,6 +181,7 @@ func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (s
 		"proxy_target", redactProxyURL(proxyURL),
 	)
 	outcome, err := g.forwardHTTP(ctx, req)
+	outcome = applyForwardOutcomePolicies(logger, req, outcome)
 	hashFinish := hashRequest.Finish(outcome, err)
 	if hashFinish.ContextWindowLongModelFailed {
 		logger.Warn("context_window_long_model_failed",
