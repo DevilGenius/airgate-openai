@@ -50,10 +50,13 @@ func TestChatCompletionsStreamWriter_TextOnly(t *testing.T) {
 
 	// 模拟 Codex 上游 SSE 事件序列
 	writer.OnRawEvent("response.created", []byte(`{"type":"response.created","response":{"id":"resp_abc","model":"gpt-5.4"}}`))
-	if got := w.buf.String(); !writer.wrote || !strings.Contains(got, `"role":"assistant"`) {
-		t.Fatalf("response.created should be forwarded immediately, stream = %q", got)
+	if got := w.buf.String(); writer.wrote || got != "" {
+		t.Fatalf("response.created should remain buffered, stream = %q", got)
 	}
 	writer.OnRawEvent("response.output_text.delta", []byte(`{"type":"response.output_text.delta","delta":"你"}`))
+	if got := w.buf.String(); !writer.wrote || !strings.Contains(got, `"role":"assistant"`) {
+		t.Fatalf("first output should commit role and content chunks, stream = %q", got)
+	}
 	writer.OnRawEvent("response.output_text.delta", []byte(`{"type":"response.output_text.delta","delta":"好"}`))
 	writer.OnRawEvent("response.completed", []byte(`{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":5,"output_tokens":2}}}`))
 	writer.finalize()
@@ -112,6 +115,18 @@ func TestChatCompletionsStreamWriter_TextOnly(t *testing.T) {
 		if obj, _ := chunk["object"].(string); obj != "chat.completion.chunk" {
 			t.Errorf("chunk %d object = %v, want chat.completion.chunk", i, chunk["object"])
 		}
+	}
+}
+
+func TestChatCompletionsStreamWriter_SuppressesFailureBeforeOutput(t *testing.T) {
+	w := newFakeWriter()
+	writer := newChatCompletionsStreamWriter(w, "gpt-5.6-sol", 0, "", false, time.Now())
+
+	writer.OnRawEvent("response.created", []byte(`{"type":"response.created","response":{"id":"resp_failed"}}`))
+	writer.OnRawEvent("error", []byte(`{"type":"error","error":{"type":"service_unavailable_error","code":"server_is_overloaded","message":"overloaded"}}`))
+
+	if got := w.buf.String(); writer.wrote || got != "" {
+		t.Fatalf("pre-output failure should not commit chat stream, stream = %q", got)
 	}
 }
 

@@ -1259,7 +1259,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 			}
 		}
 	}
-	if session.SessionKey != "" {
+	if result.Err == nil && session.SessionKey != "" {
 		if result.ResponseID != "" {
 			updateSessionStateResponseID(session.SessionKey, result.ResponseID, account.ID)
 		}
@@ -1435,6 +1435,7 @@ type sseEventWriter struct {
 	accountID              int64 // 用于存储 Codex 用量快照
 	sessionKey             string
 	timing                 responseEventTiming
+	pendingEvents          []string // 首个真实输出前暂存控制事件，保留 Core failover 能力
 	wrote                  bool
 	terminalErrorForwarded bool
 }
@@ -1455,7 +1456,10 @@ func (s *sseEventWriter) OnRawEvent(eventType string, data []byte) {
 		return
 	}
 	data = normalizeInvalidImageInputEvent(eventType, data)
-	terminalErrorEvent := eventType == "response.failed" || eventType == "error"
+	terminalErrorEvent := eventType == "response.failed" || eventType == "error" ||
+		(eventType == "response.incomplete" && gjson.GetBytes(data, "response.incomplete_details.reason").String() != "max_output_tokens")
+	terminalSuccessEvent := eventType == "response.completed" || eventType == "response.done" ||
+		(eventType == "response.incomplete" && gjson.GetBytes(data, "response.incomplete_details.reason").String() == "max_output_tokens")
 	s.timing.observe(eventType, data)
 	// 过滤不需要转发给客户端的内部事件，并捕获用量
 	switch eventType {
@@ -1466,21 +1470,39 @@ func (s *sseEventWriter) OnRawEvent(eventType string, data []byte) {
 			}
 		}
 		return
-	case "response.failed", "error":
+	case "response.failed", "error", "response.incomplete":
+		if !terminalErrorEvent {
+			break
+		}
 		if !s.wrote {
+			s.pendingEvents = nil
 			return
 		}
-	case "response.created", "response.completed", "response.done":
+	case "response.completed", "response.done":
 		if s.sessionKey != "" {
 			if responseID := gjson.GetBytes(data, "response.id").String(); strings.TrimSpace(responseID) != "" {
 				updateSessionStateResponseID(s.sessionKey, responseID, s.accountID)
 			}
 		}
 	}
-	if _, err := fmt.Fprint(s.w, formatSSEEvent(eventType, data)); err != nil {
+	formatted := formatSSEEvent(eventType, data)
+	if !s.wrote {
+		// response.created / in_progress 不代表模型已经产生输出。先缓冲这些控制事件；
+		// 若上游随后 overload，整个 attempt 仍可由 Core 丢弃并换账号重试。
+		s.pendingEvents = append(s.pendingEvents, formatted)
+		if !isResponseOutputEvent(eventType, data) && !terminalSuccessEvent {
+			return
+		}
+		formatted = strings.Join(s.pendingEvents, "")
+		s.pendingEvents = nil
+	}
+	written, err := fmt.Fprint(s.w, formatted)
+	if written > 0 {
+		s.wrote = true
+	}
+	if err != nil {
 		return
 	}
-	s.wrote = true
 	if terminalErrorEvent {
 		s.terminalErrorForwarded = true
 	}

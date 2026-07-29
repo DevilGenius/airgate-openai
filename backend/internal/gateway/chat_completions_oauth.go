@@ -153,7 +153,7 @@ func (s *chatCompletionsStreamWriter) OnRawEvent(eventType string, data []byte) 
 			}
 		}
 		return
-	case "response.created", "response.completed", "response.done":
+	case "response.completed", "response.done":
 		if s.sessionKey != "" {
 			if responseID := gjson.GetBytes(data, "response.id").String(); strings.TrimSpace(responseID) != "" {
 				updateSessionStateResponseID(s.sessionKey, responseID, s.accountID)
@@ -191,6 +191,11 @@ func (s *chatCompletionsStreamWriter) writeChunks(chunks [][]byte) bool {
 	if s == nil || s.w == nil {
 		return false
 	}
+	// role 空首帧也会提交 HTTP 流，因此延迟到首个真实输出或成功终止 chunk 一起发送。
+	if !s.sentRole {
+		chunks = append([][]byte{s.makeDeltaChunk(map[string]any{"role": "assistant"})}, chunks...)
+		s.sentRole = true
+	}
 	for _, chunk := range chunks {
 		if _, err := fmt.Fprintf(s.w, "data: %s\n\n", chunk); err != nil {
 			return false
@@ -207,11 +212,7 @@ func (s *chatCompletionsStreamWriter) translateEvent(eventType string, data []by
 		if id := gjson.GetBytes(data, "response.id").String(); id != "" {
 			s.id = id
 		}
-		if s.sentRole {
-			return nil
-		}
-		s.sentRole = true
-		return [][]byte{s.makeDeltaChunk(map[string]any{"role": "assistant"})}
+		return nil
 
 	case "response.output_text.delta":
 		delta := gjson.GetBytes(data, "delta").String()
@@ -526,7 +527,7 @@ func (h *chatCompletionsSilentHandler) OnRawEvent(eventType string, data []byte)
 				StoreCodexUsage(h.accountID, snapshot)
 			}
 		}
-	case "response.created", "response.completed", "response.done":
+	case "response.completed", "response.done":
 		if h.sessionKey != "" {
 			if responseID := gjson.GetBytes(data, "response.id").String(); strings.TrimSpace(responseID) != "" {
 				updateSessionStateResponseID(h.sessionKey, responseID, h.accountID)
@@ -573,7 +574,7 @@ func (h *responsesSilentHandler) OnRawEvent(eventType string, data []byte) {
 				StoreCodexUsage(h.accountID, snapshot)
 			}
 		}
-	case "response.created", "response.completed", "response.done":
+	case "response.completed", "response.done":
 		if h.sessionKey != "" {
 			if responseID := gjson.GetBytes(data, "response.id").String(); strings.TrimSpace(responseID) != "" {
 				updateSessionStateResponseID(h.sessionKey, responseID, h.accountID)
