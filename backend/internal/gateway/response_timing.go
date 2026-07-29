@@ -7,7 +7,9 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// responseEventTiming 分别记录首个上游事件与首个真实输出。
+// responseEventTiming 分别记录首个上游事件与首个模型输出。
+// 首个模型输出包含思考内容；上游不暴露思考文本 delta 时，使用 reasoning item
+// 开始事件作为隐藏思考开始输出的最早可观察信号。
 // 所有回调都由单个响应读取循环串行调用，因此无需在热路径上加锁。
 type responseEventTiming struct {
 	start              time.Time
@@ -53,15 +55,24 @@ func isChatCompletionsOutput(data []byte) bool {
 		if choice.Get("text").String() != "" ||
 			choice.Get("delta.content").String() != "" ||
 			choice.Get("delta.reasoning_content").String() != "" ||
+			choice.Get("delta.reasoning").String() != "" ||
+			choice.Get("delta.thinking").String() != "" ||
 			choice.Get("delta.refusal").String() != "" ||
-			choice.Get("delta.tool_calls.#").Int() > 0 {
+			choice.Get("delta.tool_calls.#").Int() > 0 ||
+			choice.Get("delta.function_call").Exists() ||
+			choice.Get("message.content").String() != "" ||
+			choice.Get("message.reasoning_content").String() != "" ||
+			choice.Get("message.reasoning").String() != "" ||
+			choice.Get("message.thinking").String() != "" ||
+			choice.Get("message.tool_calls.#").Int() > 0 ||
+			choice.Get("message.function_call").Exists() {
 			return true
 		}
 	}
 	return false
 }
 
-// isResponseOutputEvent 判断事件是否已经包含客户端可消费的模型输出。
+// isResponseOutputEvent 判断事件是否已经包含模型输出，包括思考内容。
 // response.created、rate_limits、内容 part 初始化等控制事件不计入 TTFT。
 func isResponseOutputEvent(eventType string, data []byte) bool {
 	switch eventType {
@@ -76,7 +87,7 @@ func isResponseOutputEvent(eventType string, data []byte) bool {
 		return gjson.GetBytes(data, "delta").String() != ""
 
 	case "response.output_item.added", "response.output_item.done":
-		return isResponseToolCallItem(gjson.GetBytes(data, "item.type").String())
+		return responseItemHasModelOutput(gjson.GetBytes(data, "item"))
 
 	case "response.function_call_arguments.done":
 		return gjson.GetBytes(data, "arguments").Exists()
@@ -105,19 +116,27 @@ func isResponseToolCallItem(itemType string) bool {
 
 func responseEventContainsCompletedOutput(data []byte) bool {
 	for _, item := range gjson.GetBytes(data, "response.output").Array() {
-		itemType := item.Get("type").String()
-		if isResponseToolCallItem(itemType) {
+		if responseItemHasModelOutput(item) {
 			return true
 		}
-		for _, content := range item.Get("content").Array() {
-			if content.Get("text").String() != "" || content.Get("refusal").String() != "" {
-				return true
-			}
+	}
+	return false
+}
+
+func responseItemHasModelOutput(item gjson.Result) bool {
+	itemType := strings.TrimSpace(item.Get("type").String())
+	// 隐藏思考通常没有可见 delta；reasoning item 是能观察到的最早输出信号。
+	if itemType == "reasoning" || isResponseToolCallItem(itemType) {
+		return true
+	}
+	for _, content := range item.Get("content").Array() {
+		if content.Get("text").String() != "" || content.Get("refusal").String() != "" {
+			return true
 		}
-		for _, summary := range item.Get("summary").Array() {
-			if summary.Get("text").String() != "" {
-				return true
-			}
+	}
+	for _, summary := range item.Get("summary").Array() {
+		if summary.Get("text").String() != "" {
+			return true
 		}
 	}
 	return false

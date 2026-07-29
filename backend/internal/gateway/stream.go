@@ -694,80 +694,12 @@ func streamDataHasOutput(data string) bool {
 	if data == "" || data == "[DONE]" {
 		return false
 	}
-	if streamChatChoicesHaveOutput(data) {
+	payload := []byte(data)
+	if isChatCompletionsOutput(payload) {
 		return true
 	}
-
 	eventType := gjson.Get(data, "type").String()
-	switch eventType {
-	case "response.output_text.delta", "response.reasoning_summary_text.delta", "response.refusal.delta":
-		return strings.TrimSpace(gjson.Get(data, "delta").String()) != ""
-	case "response.output_text.done":
-		return strings.TrimSpace(gjson.Get(data, "text").String()) != ""
-	case "response.function_call_arguments.delta":
-		return gjson.Get(data, "delta").Exists()
-	case "response.function_call_arguments.done":
-		return gjson.Get(data, "arguments").Exists()
-	case "response.output_item.added", "response.output_item.done":
-		return responseItemHasOutput(gjson.Get(data, "item"))
-	case "response.completed", "response.done":
-		return responseOutputHasContent(gjson.Get(data, "response.output"))
-	default:
-		return false
-	}
-}
-
-func streamChatChoicesHaveOutput(data string) bool {
-	choices := gjson.Get(data, "choices")
-	if !choices.Exists() {
-		return false
-	}
-	for _, choice := range choices.Array() {
-		delta := choice.Get("delta")
-		if strings.TrimSpace(delta.Get("content").String()) != "" {
-			return true
-		}
-		if toolCalls := delta.Get("tool_calls"); toolCalls.Exists() && len(toolCalls.Array()) > 0 {
-			return true
-		}
-		if delta.Get("function_call").Exists() {
-			return true
-		}
-		message := choice.Get("message")
-		if strings.TrimSpace(message.Get("content").String()) != "" {
-			return true
-		}
-		if message.Get("tool_calls").Exists() || message.Get("function_call").Exists() {
-			return true
-		}
-	}
-	return false
-}
-
-func responseOutputHasContent(output gjson.Result) bool {
-	for _, item := range output.Array() {
-		if responseItemHasOutput(item) {
-			return true
-		}
-	}
-	return false
-}
-
-func responseItemHasOutput(item gjson.Result) bool {
-	itemType := item.Get("type").String()
-	switch itemType {
-	case "message":
-		for _, content := range item.Get("content").Array() {
-			if strings.TrimSpace(content.Get("text").String()) != "" {
-				return true
-			}
-		}
-		return false
-	case "function_call", "web_search_call", "image_generation_call", "code_interpreter_call":
-		return true
-	default:
-		return strings.Contains(itemType, "call")
-	}
+	return isResponseOutputEvent(eventType, payload)
 }
 
 func firstNonEmptyHeader(headers http.Header, keys ...string) string {
