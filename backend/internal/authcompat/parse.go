@@ -341,7 +341,7 @@ func normalizeAgentIdentity(source map[string]any, fallback string) (Account, bo
 	copyCredentialFields(credentials, candidates)
 	credentials["auth_mode"] = "agentIdentity"
 	if credentials["agent_runtime_id"] == "" || credentials["agent_private_key"] == "" {
-		return Account{}, true, errors.New("Agent Identity 缺少 agent_runtime_id 或 agent_private_key")
+		return Account{}, true, errors.New("agent identity 缺少 agent_runtime_id 或 agent_private_key")
 	}
 	emailValues := make([]any, 0, len(candidates)+3)
 	for _, candidate := range candidates {
