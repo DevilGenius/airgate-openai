@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/mail"
-	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -118,7 +117,7 @@ func normalizeEmail(values ...any) string {
 }
 
 func fallbackName(fileName string) string {
-	name := filepath.Base(strings.TrimSpace(fileName))
+	name := inputFileBaseName(fileName)
 	for _, suffix := range []string{".auth.json", ".json"} {
 		if strings.HasSuffix(strings.ToLower(name), suffix) {
 			name = name[:len(name)-len(suffix)]
@@ -127,6 +126,14 @@ func fallbackName(fileName string) string {
 	}
 	if strings.TrimSpace(name) == "" {
 		return "OpenAI OAuth"
+	}
+	return name
+}
+
+func inputFileBaseName(fileName string) string {
+	name := strings.ReplaceAll(strings.TrimSpace(fileName), "\\", "/")
+	if index := strings.LastIndexByte(name, '/'); index >= 0 {
+		return name[index+1:]
 	}
 	return name
 }

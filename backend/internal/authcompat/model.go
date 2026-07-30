@@ -1,5 +1,16 @@
 package authcompat
 
+type Format string
+
+const (
+	FormatSub2API       Format = "sub2api"
+	FormatCPA           Format = "cpa"
+	FormatCodex         Format = "codex"
+	FormatCockpit       Format = "cockpit"
+	FormatAgentIdentity Format = "agent_identity"
+	FormatAccountJSON   Format = "account_json"
+)
+
 // InputFile 是兼容导入器接收的内存文件。解析器不会自行访问文件系统。
 type InputFile struct {
 	Name    string

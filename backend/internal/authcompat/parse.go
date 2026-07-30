@@ -13,8 +13,13 @@ type authMeta struct {
 	byEmail map[string]map[string]any
 }
 
-// Parse 将兼容凭据文件解析为 OpenAI 账号草稿。单文件失败不会阻止其他文件继续解析。
-func Parse(files []InputFile) (Result, error) {
+// Parse 将上传人指定格式的兼容凭据文件解析为 OpenAI 账号草稿。
+// 单文件失败不会阻止其他文件继续解析，所有内容都只在内存中处理。
+func Parse(format Format, files []InputFile) (Result, error) {
+	format, err := normalizeFormat(format)
+	if err != nil {
+		return Result{}, err
+	}
 	if len(files) == 0 {
 		return Result{}, errors.New("没有可解析的文件")
 	}
@@ -24,11 +29,14 @@ func Parse(files []InputFile) (Result, error) {
 		return strings.ToLower(sorted[i].Name) < strings.ToLower(sorted[j].Name)
 	})
 
-	meta, metaIssues := readAuthMeta(sorted)
-	result := Result{Accounts: []Account{}, Issues: metaIssues}
-	formats := map[string]bool{}
+	meta := authMeta{byFile: map[string]map[string]any{}, byEmail: map[string]map[string]any{}}
+	metaIssues := []Issue{}
+	if format == FormatCodex {
+		meta, metaIssues = readAuthMeta(sorted)
+	}
+	result := Result{Format: string(format), Accounts: []Account{}, Issues: metaIssues}
 	for _, file := range sorted {
-		if strings.EqualFold(strings.TrimSpace(file.Name), metaFileName) {
+		if format == FormatCodex && strings.EqualFold(inputFileBaseName(file.Name), metaFileName) {
 			continue
 		}
 		if len(file.Content) == 0 {
@@ -41,9 +49,7 @@ func Parse(files []InputFile) (Result, error) {
 			result.Issues = append(result.Issues, Issue{File: file.Name, Level: "warning", Message: "JSON 解析失败: " + err.Error()})
 			continue
 		}
-		format := detectFormat(value, file.Name)
-		formats[format] = true
-		accounts, issues := parseValue(value, file.Name, meta)
+		accounts, issues := parseValue(format, value, file.Name, meta)
 		result.Accounts = append(result.Accounts, accounts...)
 		result.Issues = append(result.Issues, issues...)
 	}
@@ -51,15 +57,24 @@ func Parse(files []InputFile) (Result, error) {
 	if len(result.Accounts) == 0 {
 		return result, errors.New("未识别到可导入的 OpenAI 账号")
 	}
-	result.Format = joinedFormat(formats)
 	return result, nil
+}
+
+func normalizeFormat(format Format) (Format, error) {
+	normalized := Format(strings.ToLower(strings.TrimSpace(string(format))))
+	switch normalized {
+	case FormatSub2API, FormatCPA, FormatCodex, FormatCockpit, FormatAgentIdentity, FormatAccountJSON:
+		return normalized, nil
+	default:
+		return "", errors.New("请选择支持的凭据格式")
+	}
 }
 
 func readAuthMeta(files []InputFile) (authMeta, []Issue) {
 	meta := authMeta{byFile: map[string]map[string]any{}, byEmail: map[string]map[string]any{}}
 	issues := []Issue{}
 	for _, file := range files {
-		if !strings.EqualFold(strings.TrimSpace(file.Name), metaFileName) {
+		if !strings.EqualFold(inputFileBaseName(file.Name), metaFileName) {
 			continue
 		}
 		var source map[string]any
@@ -83,12 +98,15 @@ func readAuthMeta(files []InputFile) (authMeta, []Issue) {
 	return meta, issues
 }
 
-func parseValue(value any, fileName string, meta authMeta) ([]Account, []Issue) {
+func parseValue(format Format, value any, fileName string, meta authMeta) ([]Account, []Issue) {
 	accounts := []Account{}
 	issues := []Issue{}
 	appendAccount := func(source map[string]any, index int) {
-		prepared := prepareAuthFileSource(source, fileName, meta)
-		account, err := normalizeAccount(prepared, fallbackName(fileName))
+		prepared := source
+		if format == FormatCodex {
+			prepared = prepareAuthFileSource(source, fileName, meta)
+		}
+		account, err := normalizeAccount(format, prepared, fallbackName(fileName))
 		if err != nil {
 			issues = append(issues, Issue{File: fileName, Index: index, Level: "warning", Message: err.Error()})
 			return
@@ -137,13 +155,14 @@ func parseValue(value any, fileName string, meta authMeta) ([]Account, []Issue) 
 }
 
 func prepareAuthFileSource(source map[string]any, fileName string, meta authMeta) map[string]any {
-	lowerFile := strings.ToLower(strings.TrimSpace(fileName))
+	baseFileName := inputFileBaseName(fileName)
+	lowerFile := strings.ToLower(baseFileName)
 	if !strings.HasSuffix(lowerFile, ".auth.json") {
 		return source
 	}
 	entry := meta.byFile[lowerFile]
 	if entry == nil {
-		email := strings.ToLower(strings.TrimSuffix(fileName, ".auth.json"))
+		email := strings.ToLower(strings.TrimSuffix(baseFileName, ".auth.json"))
 		entry = meta.byEmail[email]
 	}
 	if entry == nil {
@@ -161,51 +180,15 @@ func prepareAuthFileSource(source map[string]any, fileName string, meta authMeta
 	return prepared
 }
 
-func detectFormat(value any, fileName string) string {
-	if strings.HasSuffix(strings.ToLower(fileName), ".auth.json") {
-		return "auth"
-	}
-	source := asMap(value)
-	if source == nil {
-		return "json"
-	}
-	if accounts := asSlice(source["accounts"]); accounts != nil {
-		if source["proxies"] != nil {
-			return "sub2api"
-		}
-		return "accounts"
-	}
-	if isAgentIdentity(source) {
-		return "agent_identity"
-	}
-	if strings.EqualFold(firstString(source["type"]), "codex") {
-		if firstString(source["account_note"], source["accountInfo"], source["account_info"], source["note"], source["remark"]) != "" {
-			return "cockpit"
-		}
-		if firstString(source["chatgpt_plan_type"], source["plan_type"], source["session_token"]) != "" || source["id_token_synthetic"] != nil {
-			return "cpa"
-		}
-	}
-	return "json"
-}
-
-func joinedFormat(formats map[string]bool) string {
-	if len(formats) == 0 {
-		return "json"
-	}
-	if len(formats) == 1 {
-		for format := range formats {
-			return format
-		}
-	}
-	return "mixed"
-}
-
-func normalizeAccount(source map[string]any, fallback string) (Account, error) {
+func normalizeAccount(format Format, source map[string]any, fallback string) (Account, error) {
 	if source == nil {
 		return Account{}, errors.New("账号内容为空")
 	}
-	if account, handled, err := normalizeAgentIdentity(source, fallback); handled {
+	if format == FormatAgentIdentity {
+		account, handled, err := normalizeAgentIdentity(source, fallback)
+		if !handled {
+			return Account{}, errors.New("所选内容不是 Agent Identity 凭据")
+		}
 		return account, err
 	}
 

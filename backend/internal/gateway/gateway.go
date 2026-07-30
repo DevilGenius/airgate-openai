@@ -34,6 +34,11 @@ type OpenAIGateway struct {
 
 const oauthUsageProbeModel = "gpt-5.4-mini"
 
+const (
+	compatImportMaxInputs = 1024
+	compatImportMaxBytes  = 32 << 20
+)
+
 func (g *OpenAIGateway) Info() sdk.PluginInfo {
 	return BuildPluginInfo()
 }
@@ -744,16 +749,17 @@ func (g *OpenAIGateway) HandleRequest(ctx context.Context, method, path, _ strin
 			return http.StatusMethodNotAllowed, nil, jsonError("method not allowed"), nil
 		}
 		var raw struct {
-			Files []struct {
+			Format string `json:"format"`
+			Files  []struct {
 				Name    string `json:"name"`
 				Content string `json:"content"`
 			} `json:"files"`
 		}
 		if err := json.Unmarshal(body, &raw); err != nil || len(raw.Files) == 0 {
-			return http.StatusBadRequest, nil, jsonError("缺少兼容导入文件"), nil
+			return http.StatusBadRequest, nil, jsonError("缺少兼容导入内容"), nil
 		}
-		if len(raw.Files) > 512 {
-			return http.StatusBadRequest, nil, jsonError("单次最多导入 512 个文件"), nil
+		if len(raw.Files) > compatImportMaxInputs {
+			return http.StatusBadRequest, nil, jsonError(fmt.Sprintf("单次最多导入 %d 项内容", compatImportMaxInputs)), nil
 		}
 		files := make([]authcompat.InputFile, 0, len(raw.Files))
 		totalBytes := 0
@@ -764,12 +770,12 @@ func (g *OpenAIGateway) HandleRequest(ctx context.Context, method, path, _ strin
 			}
 			content := []byte(file.Content)
 			totalBytes += len(content)
-			if totalBytes > 16<<20 {
-				return http.StatusRequestEntityTooLarge, nil, jsonError("兼容导入文件总大小不能超过 16 MiB"), nil
+			if totalBytes > compatImportMaxBytes {
+				return http.StatusRequestEntityTooLarge, nil, jsonError(fmt.Sprintf("兼容导入内容总大小不能超过 %d MiB", compatImportMaxBytes>>20)), nil
 			}
 			files = append(files, authcompat.InputFile{Name: name, Content: content})
 		}
-		result, err := authcompat.Parse(files)
+		result, err := authcompat.Parse(authcompat.Format(raw.Format), files)
 		if err != nil {
 			return http.StatusBadRequest, nil, jsonError(err.Error()), nil
 		}
