@@ -12,10 +12,12 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 
+	"github.com/DevilGenius/airgate-openai/backend/internal/authcompat"
 	"github.com/DevilGenius/airgate-openai/backend/internal/model"
 )
 
@@ -31,6 +33,8 @@ type OpenAIGateway struct {
 	tasks              *TaskRegistry
 	runtimeHash        runtimeHash
 	longContextModelID string
+	authCompatOnce     sync.Once
+	authCompatRenamer  *authcompat.Renamer
 }
 
 const oauthUsageProbeModel = "gpt-5.4-mini"
@@ -71,6 +75,13 @@ func (g *OpenAIGateway) Init(ctx sdk.PluginContext) error {
 	}
 	g.logger.Info("OpenAI 网关插件初始化", "long_context_model", g.longContextModelID)
 	return nil
+}
+
+func (g *OpenAIGateway) compatRenamer() *authcompat.Renamer {
+	g.authCompatOnce.Do(func() {
+		g.authCompatRenamer = authcompat.NewRenamer()
+	})
+	return g.authCompatRenamer
 }
 
 func (g *OpenAIGateway) Start(_ context.Context) error {
@@ -742,6 +753,44 @@ func buildCodexUsageWindows(snapshot *CodexUsageSnapshot, limitName string, now 
 // HandleRequest 处理 Core 透传的自定义请求（实现 sdk.RequestHandler 接口）
 func (g *OpenAIGateway) HandleRequest(ctx context.Context, method, path, _ string, _ http.Header, body []byte) (int, http.Header, []byte, error) {
 	switch path {
+	case "accounts/import/compat":
+		if strings.ToUpper(strings.TrimSpace(method)) != http.MethodPost {
+			return http.StatusMethodNotAllowed, nil, jsonError("method not allowed"), nil
+		}
+		var raw struct {
+			Files []struct {
+				Name    string `json:"name"`
+				Content string `json:"content"`
+			} `json:"files"`
+		}
+		if err := json.Unmarshal(body, &raw); err != nil || len(raw.Files) == 0 {
+			return http.StatusBadRequest, nil, jsonError("缺少兼容导入文件"), nil
+		}
+		if len(raw.Files) > 512 {
+			return http.StatusBadRequest, nil, jsonError("单次最多导入 512 个文件"), nil
+		}
+		files := make([]authcompat.InputFile, 0, len(raw.Files))
+		totalBytes := 0
+		for index, file := range raw.Files {
+			name := strings.TrimSpace(file.Name)
+			if name == "" {
+				name = fmt.Sprintf("account-%d.json", index+1)
+			}
+			content := []byte(file.Content)
+			totalBytes += len(content)
+			if totalBytes > 16<<20 {
+				return http.StatusRequestEntityTooLarge, nil, jsonError("兼容导入文件总大小不能超过 16 MiB"), nil
+			}
+			files = append(files, authcompat.InputFile{Name: name, Content: content})
+		}
+		result, err := authcompat.Parse(files)
+		if err != nil {
+			return http.StatusBadRequest, nil, jsonError(err.Error()), nil
+		}
+		result.Accounts = g.compatRenamer().Rename(result.Accounts, time.Now())
+		result.Renamed = true
+		return http.StatusOK, nil, jsonMarshal(result), nil
+
 	case "runtime/hash":
 		switch strings.ToUpper(strings.TrimSpace(method)) {
 		case http.MethodGet:
