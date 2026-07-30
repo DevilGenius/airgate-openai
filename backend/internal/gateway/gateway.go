@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
@@ -24,17 +23,13 @@ import (
 // OpenAIGateway OpenAI 网关插件（SimpleGatewayPlugin 实现）
 // 核心处理鉴权、账号选择、计费、限流和并发控制，插件只负责协议适配与上游转发。
 type OpenAIGateway struct {
-	logger             *slog.Logger
-	ctx                sdk.PluginContext
-	host               sdk.Host
-	snapshotStore      *codexUsagePersistenceStore
-	transportPool      *TransportPool
-	agentIdentity      agentIdentityRuntime
-	tasks              *TaskRegistry
-	runtimeHash        runtimeHash
-	longContextModelID string
-	authCompatOnce     sync.Once
-	authCompatRenamer  *authcompat.Renamer
+	logger        *slog.Logger
+	ctx           sdk.PluginContext
+	host          sdk.Host
+	snapshotStore *codexUsagePersistenceStore
+	transportPool *TransportPool
+	tasks         *TaskRegistry
+	runtimeHash   runtimeHash
 }
 
 const oauthUsageProbeModel = "gpt-5.4-mini"
@@ -46,9 +41,7 @@ func (g *OpenAIGateway) Info() sdk.PluginInfo {
 func (g *OpenAIGateway) Init(ctx sdk.PluginContext) error {
 	g.ctx = ctx
 	g.runtimeHash.initialize()
-	g.longContextModelID = configuredLongContextModel()
 	g.transportPool = NewTransportPool()
-	g.agentIdentity.initialize()
 	g.tasks = NewTaskRegistry()
 	g.tasks.Register(imageGenerateHandler{})
 	g.tasks.Register(imageEditHandler{})
@@ -73,15 +66,8 @@ func (g *OpenAIGateway) Init(ctx sdk.PluginContext) error {
 			}
 		}
 	}
-	g.logger.Info("OpenAI 网关插件初始化", "long_context_model", g.longContextModelID)
+	g.logger.Info("OpenAI 网关插件初始化", "long_context_model", effectiveLongContextModel())
 	return nil
-}
-
-func (g *OpenAIGateway) compatRenamer() *authcompat.Renamer {
-	g.authCompatOnce.Do(func() {
-		g.authCompatRenamer = authcompat.NewRenamer()
-	})
-	return g.authCompatRenamer
 }
 
 func (g *OpenAIGateway) Start(_ context.Context) error {
@@ -154,7 +140,7 @@ func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (s
 		req,
 		method,
 		path,
-		g.effectiveLongContextModel(),
+		effectiveLongContextModel(),
 	)
 	ctx = hashBegin.Context
 	if hashBegin.Outcome != nil {
@@ -787,7 +773,7 @@ func (g *OpenAIGateway) HandleRequest(ctx context.Context, method, path, _ strin
 		if err != nil {
 			return http.StatusBadRequest, nil, jsonError(err.Error()), nil
 		}
-		result.Accounts = g.compatRenamer().Rename(result.Accounts, time.Now())
+		result.Accounts = authcompat.Rename(result.Accounts, time.Now())
 		result.Renamed = true
 		return http.StatusOK, nil, jsonMarshal(result), nil
 

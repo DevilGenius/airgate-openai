@@ -108,6 +108,13 @@ type agentIdentityRuntime struct {
 	locks          map[string]*sync.Mutex
 }
 
+var processAgentIdentityRuntime agentIdentityRuntime
+
+func currentAgentIdentityRuntime() *agentIdentityRuntime {
+	processAgentIdentityRuntime.initialize()
+	return &processAgentIdentityRuntime
+}
+
 func (r *agentIdentityRuntime) initialize() {
 	r.mu.Lock()
 	if r.taskID == nil {
@@ -501,31 +508,31 @@ func (g *OpenAIGateway) ensureAgentIdentityTask(ctx context.Context, account *sd
 	if g == nil {
 		return "", false, errors.New("OpenAI gateway 为空")
 	}
-	g.agentIdentity.initialize()
+	runtime := currentAgentIdentityRuntime()
 	cacheKey := agentIdentityCacheKey(account)
-	accountLock := g.agentIdentity.lockFor(cacheKey)
+	accountLock := runtime.lockFor(cacheKey)
 	accountLock.Lock()
 	defer accountLock.Unlock()
 	storedTaskID := strings.TrimSpace(account.Credentials["task_id"])
 	if storedTaskID == "" {
 		storedTaskID = strings.TrimSpace(account.Credentials["taskId"])
 	}
-	g.agentIdentity.mu.Lock()
-	cached := strings.TrimSpace(g.agentIdentity.taskID[cacheKey])
-	g.agentIdentity.mu.Unlock()
+	runtime.mu.Lock()
+	cached := strings.TrimSpace(runtime.taskID[cacheKey])
+	runtime.mu.Unlock()
 	if force && cached != "" && cached != storedTaskID {
 		// Another concurrent request may have completed recovery while this
 		// request was waiting for the per-account lock. Reuse its task instead
 		// of registering a second task.
 		updated := false
-		g.agentIdentity.mu.Lock()
-		shouldReport := g.agentIdentity.reportedTaskID[cacheKey] != cached
-		g.agentIdentity.mu.Unlock()
+		runtime.mu.Lock()
+		shouldReport := runtime.reportedTaskID[cacheKey] != cached
+		runtime.mu.Unlock()
 		if shouldReport {
 			if recordAgentIdentityUpdatedCredential(ctx, "task_id", cached) {
-				g.agentIdentity.mu.Lock()
-				g.agentIdentity.reportedTaskID[cacheKey] = cached
-				g.agentIdentity.mu.Unlock()
+				runtime.mu.Lock()
+				runtime.reportedTaskID[cacheKey] = cached
+				runtime.mu.Unlock()
 				updated = true
 			}
 		}
@@ -534,14 +541,14 @@ func (g *OpenAIGateway) ensureAgentIdentityTask(ctx context.Context, account *sd
 	if !force {
 		if cached != "" {
 			updated := false
-			g.agentIdentity.mu.Lock()
-			shouldReport := cached != storedTaskID && g.agentIdentity.reportedTaskID[cacheKey] != cached
-			g.agentIdentity.mu.Unlock()
+			runtime.mu.Lock()
+			shouldReport := cached != storedTaskID && runtime.reportedTaskID[cacheKey] != cached
+			runtime.mu.Unlock()
 			if shouldReport {
 				if recordAgentIdentityUpdatedCredential(ctx, "task_id", cached) {
-					g.agentIdentity.mu.Lock()
-					g.agentIdentity.reportedTaskID[cacheKey] = cached
-					g.agentIdentity.mu.Unlock()
+					runtime.mu.Lock()
+					runtime.reportedTaskID[cacheKey] = cached
+					runtime.mu.Unlock()
 					updated = true
 				}
 			}
@@ -552,9 +559,9 @@ func (g *OpenAIGateway) ensureAgentIdentityTask(ctx context.Context, account *sd
 			existing = strings.TrimSpace(account.Credentials["taskId"])
 		}
 		if existing != "" {
-			g.agentIdentity.mu.Lock()
-			g.agentIdentity.taskID[cacheKey] = existing
-			g.agentIdentity.mu.Unlock()
+			runtime.mu.Lock()
+			runtime.taskID[cacheKey] = existing
+			runtime.mu.Unlock()
 			return existing, false, nil
 		}
 	}
@@ -566,16 +573,16 @@ func (g *OpenAIGateway) ensureAgentIdentityTask(ctx context.Context, account *sd
 	if previous == "" {
 		previous = strings.TrimSpace(account.Credentials["taskId"])
 	}
-	g.agentIdentity.mu.Lock()
-	g.agentIdentity.taskID[cacheKey] = taskID
-	shouldReport := taskID != previous && g.agentIdentity.reportedTaskID[cacheKey] != taskID
-	g.agentIdentity.mu.Unlock()
+	runtime.mu.Lock()
+	runtime.taskID[cacheKey] = taskID
+	shouldReport := taskID != previous && runtime.reportedTaskID[cacheKey] != taskID
+	runtime.mu.Unlock()
 	updated := false
 	if shouldReport {
 		if recordAgentIdentityUpdatedCredential(ctx, "task_id", taskID) {
-			g.agentIdentity.mu.Lock()
-			g.agentIdentity.reportedTaskID[cacheKey] = taskID
-			g.agentIdentity.mu.Unlock()
+			runtime.mu.Lock()
+			runtime.reportedTaskID[cacheKey] = taskID
+			runtime.mu.Unlock()
 			updated = true
 		}
 	}
@@ -614,23 +621,23 @@ func (g *OpenAIGateway) invalidateAgentIdentityTask(account *sdk.Account, failed
 	if g == nil || account == nil {
 		return
 	}
-	g.agentIdentity.initialize()
+	runtime := currentAgentIdentityRuntime()
 	failedTaskID, err := agentIdentityTaskIDFromAuthHeaders(failedAuthHeaders)
 	if err != nil {
 		return
 	}
 	cacheKey := agentIdentityCacheKey(account)
-	accountLock := g.agentIdentity.lockFor(cacheKey)
+	accountLock := runtime.lockFor(cacheKey)
 	accountLock.Lock()
 	defer accountLock.Unlock()
-	g.agentIdentity.mu.Lock()
-	if strings.TrimSpace(g.agentIdentity.taskID[cacheKey]) == failedTaskID {
-		delete(g.agentIdentity.taskID, cacheKey)
-		if g.agentIdentity.reportedTaskID[cacheKey] == failedTaskID {
-			delete(g.agentIdentity.reportedTaskID, cacheKey)
+	runtime.mu.Lock()
+	if strings.TrimSpace(runtime.taskID[cacheKey]) == failedTaskID {
+		delete(runtime.taskID, cacheKey)
+		if runtime.reportedTaskID[cacheKey] == failedTaskID {
+			delete(runtime.reportedTaskID, cacheKey)
 		}
 	}
-	g.agentIdentity.mu.Unlock()
+	runtime.mu.Unlock()
 }
 
 func (g *OpenAIGateway) buildOpenAIAuthHeaders(ctx context.Context, account *sdk.Account, forceTaskRecovery bool) (http.Header, error) {

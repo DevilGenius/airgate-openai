@@ -249,10 +249,7 @@ func isAnthropicTextRequest(req *sdk.ForwardRequest, path string) bool {
 	}
 }
 
-func (g *OpenAIGateway) effectiveLongContextModel() string {
-	if g != nil && g.longContextModelID != "" {
-		return g.longContextModelID
-	}
+func effectiveLongContextModel() string {
 	return configuredLongContextModel()
 }
 

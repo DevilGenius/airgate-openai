@@ -83,7 +83,7 @@ func (g *OpenAIGateway) checkContextWindowReroute(
 	if state.dispatchClientModel == "" {
 		state.dispatchClientModel = strings.TrimSpace(req.Model)
 	}
-	state.longContextModel = strings.TrimSpace(g.effectiveLongContextModel())
+	state.longContextModel = strings.TrimSpace(effectiveLongContextModel())
 	if state.longContextModel == "" {
 		return state, nil
 	}

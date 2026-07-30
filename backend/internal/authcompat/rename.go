@@ -20,11 +20,18 @@ type Renamer struct {
 	emailAliases map[string]*aliasBucket
 }
 
+var processRenamer = NewRenamer()
+
 func NewRenamer() *Renamer {
 	return &Renamer{
 		cursors:      map[string]map[string]int{},
 		emailAliases: map[string]*aliasBucket{},
 	}
+}
+
+// Rename 使用工具模块自己的进程级内存游标执行重命名。
+func Rename(accounts []Account, now time.Time) []Account {
+	return processRenamer.Rename(accounts, now)
 }
 
 // Rename 按 auths 工具的规则重命名账号，并默认应用其导入调度参数。

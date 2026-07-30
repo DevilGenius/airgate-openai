@@ -16,7 +16,8 @@ import (
 )
 
 func TestContextWindowRerouteReusesTextRequestHash(t *testing.T) {
-	gateway := &OpenAIGateway{longContextModelID: "gpt-long"}
+	t.Setenv(longContextModelEnv, "gpt-long")
+	gateway := &OpenAIGateway{}
 	newRequest := func(model string) *sdk.ForwardRequest {
 		return &sdk.ForwardRequest{
 			Body:    []byte(`{"model":"gpt-short","stream":true,"input":"compress this conversation"}`),
@@ -152,7 +153,8 @@ func TestContextWindowRerouteModelMappingMatrix(t *testing.T) {
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			gateway := &OpenAIGateway{longContextModelID: normalizeModelID(testCase.configuredLongModel, defaultLongContextModel)}
+			t.Setenv(longContextModelEnv, testCase.configuredLongModel)
+			gateway := &OpenAIGateway{}
 			req := &sdk.ForwardRequest{
 				Body:    []byte(`{"model":"client-visible","input":"same request"}`),
 				Headers: http.Header{"Content-Type": []string{"application/json"}},
@@ -253,7 +255,8 @@ func TestContextWindowExceededCachesOnlyNonLongContextModels(t *testing.T) {
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			gateway := &OpenAIGateway{longContextModelID: normalizeModelID(testCase.configuredLongModel, defaultLongContextModel)}
+			t.Setenv(longContextModelEnv, testCase.configuredLongModel)
+			gateway := &OpenAIGateway{}
 			req := &sdk.ForwardRequest{
 				Body:    []byte(`{"model":"client-visible","input":"same request"}`),
 				Headers: http.Header{"Content-Type": []string{"application/json"}},
@@ -285,7 +288,8 @@ func TestContextWindowExceededCachesOnlyNonLongContextModels(t *testing.T) {
 }
 
 func TestContextWindowRerouteUsesAnthropicErrorShape(t *testing.T) {
-	gateway := &OpenAIGateway{longContextModelID: "gpt-long"}
+	t.Setenv(longContextModelEnv, "gpt-long")
+	gateway := &OpenAIGateway{}
 	newRequest := func() *sdk.ForwardRequest {
 		return &sdk.ForwardRequest{
 			Body: []byte(`{"model":"claude-sonnet","max_tokens":1024,"messages":[{"role":"user","content":"long conversation"}]}`),
@@ -371,10 +375,10 @@ func TestForwardStreamingContextWindowReroutesOnlyOnNextClientRequest(t *testing
 		}
 	}
 
+	t.Setenv(longContextModelEnv, "gpt-long")
 	gateway := &OpenAIGateway{
-		logger:             slog.Default(),
-		transportPool:      NewTransportPool(),
-		longContextModelID: "gpt-long",
+		logger:        slog.Default(),
+		transportPool: NewTransportPool(),
 	}
 	ctx := sdk.WithLogger(context.Background(), slog.Default())
 
@@ -455,10 +459,10 @@ func TestForwardDirectLongContextModelNeverEntersRerouteCache(t *testing.T) {
 		}
 	}
 
+	t.Setenv(longContextModelEnv, "gpt-long")
 	gateway := &OpenAIGateway{
-		logger:             slog.Default(),
-		transportPool:      NewTransportPool(),
-		longContextModelID: "gpt-long",
+		logger:        slog.Default(),
+		transportPool: NewTransportPool(),
 	}
 	ctx := sdk.WithLogger(context.Background(), slog.Default())
 	for attempt := 1; attempt <= 2; attempt++ {
