@@ -129,7 +129,10 @@ func TestGPT56CacheCreationPriceComposesServiceTierAndLongContext(t *testing.T) 
 func assertUsagePricesAndCosts(t *testing.T, usage *sdk.Usage, inputPrice, cachedPrice, cacheCreationPrice, outputPrice float64) {
 	t.Helper()
 
-	if usage.InputPrice != inputPrice || usage.CachedInputPrice != cachedPrice || usage.CacheCreationPrice != cacheCreationPrice || usage.OutputPrice != outputPrice {
+	if !almostEqual(usage.InputPrice, inputPrice, 1e-12) ||
+		!almostEqual(usage.CachedInputPrice, cachedPrice, 1e-12) ||
+		!almostEqual(usage.CacheCreationPrice, cacheCreationPrice, 1e-12) ||
+		!almostEqual(usage.OutputPrice, outputPrice, 1e-12) {
 		t.Fatalf("prices = (%v, %v, %v, %v), want (%v, %v, %v, %v)",
 			usage.InputPrice, usage.CachedInputPrice, usage.CacheCreationPrice, usage.OutputPrice,
 			inputPrice, cachedPrice, cacheCreationPrice, outputPrice,
