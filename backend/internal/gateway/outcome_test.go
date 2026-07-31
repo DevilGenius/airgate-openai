@@ -62,8 +62,8 @@ func TestFillUsageCostGPT56FullPricing(t *testing.T) {
 		longOutput         float64
 	}{
 		{"gpt-5.6-sol", 5, 0.5, 6.25, 30, 10, 1, 12.5, 45},
-		{"gpt-5.6-terra", 2.5, 0.25, 3.125, 15, 5, 0.5, 6.25, 22.5},
-		{"gpt-5.6-luna", 1, 0.1, 1.25, 6, 2, 0.2, 2.5, 9},
+		{"gpt-5.6-terra", 2, 0.2, 2.5, 12, 4, 0.4, 5, 18},
+		{"gpt-5.6-luna", 0.2, 0.02, 0.25, 1.2, 0.4, 0.04, 0.5, 1.8},
 	}
 
 	for _, tc := range cases {

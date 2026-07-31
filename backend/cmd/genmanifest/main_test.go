@@ -41,8 +41,8 @@ func TestConvertModelsIncludesGPT56FullPricing(t *testing.T) {
 		cacheCreation float64
 	}{
 		{"gpt-5.6-sol", 6.25},
-		{"gpt-5.6-terra", 3.125},
-		{"gpt-5.6-luna", 1.25},
+		{"gpt-5.6-terra", 2.5},
+		{"gpt-5.6-luna", 0.25},
 	}
 	for _, tc := range cases {
 		item, ok := byID[tc.model]
