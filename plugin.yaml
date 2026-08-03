@@ -173,18 +173,18 @@ gateway:
       capabilities:
         - chat
         - reasoning
-      input_price: 0.2
-      output_price: 1.2
-      cached_input_price: 0.02
-      cache_creation_price: 0.25
-      input_price_priority: 0.4
-      output_price_priority: 2.4
-      cached_input_price_priority: 0.04
-      cache_creation_price_priority: 0.5
-      input_price_flex: 0.1
-      output_price_flex: 0.6
-      cached_input_price_flex: 0.01
-      cache_creation_price_flex: 0.125
+      input_price: 1
+      output_price: 6
+      cached_input_price: 0.1
+      cache_creation_price: 1.25
+      input_price_priority: 2
+      output_price_priority: 12
+      cached_input_price_priority: 0.2
+      cache_creation_price_priority: 2.5
+      input_price_flex: 0.5
+      output_price_flex: 3
+      cached_input_price_flex: 0.05
+      cache_creation_price_flex: 0.625
       long_context_threshold: 272000
       long_context_input_multiplier: 2
       long_context_output_multiplier: 1.5
