@@ -107,6 +107,21 @@ func handleStreamResponse(resp *http.Response, w http.ResponseWriter, start time
 }
 
 func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w http.ResponseWriter, start time.Time, reqServiceTier string) (sdk.ForwardOutcome, error) {
+	return handleStreamResponseWithOptions(logger, resp, w, start, reqServiceTier, streamResponseOptions{})
+}
+
+type streamResponseOptions struct {
+	hideChatCompletionsUsage bool
+}
+
+func handleStreamResponseWithOptions(
+	logger *slog.Logger,
+	resp *http.Response,
+	w http.ResponseWriter,
+	start time.Time,
+	reqServiceTier string,
+	options streamResponseOptions,
+) (sdk.ForwardOutcome, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -134,8 +149,10 @@ func handleStreamResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 streamLoop:
 	for scanner.Scan() {
 		line := scanner.Text()
+		forwardLine := line
 		diagnostics.observeLine(line)
 		data, ok := extractSSEData(line)
+		suppressCurrentLine := false
 		if ok {
 			data = strings.TrimSpace(data)
 			diagnostics.observeData(data)
@@ -153,6 +170,13 @@ streamLoop:
 					responseID = id
 				}
 				parseSSEUsage(eventData, usage, &toolImageIn, &toolImageOut)
+				if options.hideChatCompletionsUsage {
+					filtered, suppress, changed := filterChatCompletionsUsageForClient(eventData)
+					suppressCurrentLine = suppress
+					if changed {
+						forwardLine = "data: " + string(filtered)
+					}
+				}
 				// 复用本来就需要的终止事件分发；正常 delta 不执行 safety 分类。
 				switch eventType {
 				case "response.failed", "error", "response.incomplete":
@@ -190,15 +214,18 @@ streamLoop:
 				}
 			}
 		}
+		if suppressCurrentLine {
+			continue
+		}
 
 		if !ok || data == "" || data == "[DONE]" {
-			if err := writeSSELine(w, resp.StatusCode, line, &streamStarted); err != nil {
+			if err := writeSSELine(w, resp.StatusCode, forwardLine, &streamStarted); err != nil {
 				streamErr = fmt.Errorf("写入客户端 SSE 失败: %w", err)
 				break
 			}
 			continue
 		}
-		if err := writeSSELine(w, resp.StatusCode, line, &streamStarted); err != nil {
+		if err := writeSSELine(w, resp.StatusCode, forwardLine, &streamStarted); err != nil {
 			streamErr = fmt.Errorf("写入客户端 SSE 失败: %w", err)
 			break
 		}

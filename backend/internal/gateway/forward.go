@@ -668,6 +668,8 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 		body = applyOpenAIWireReasoningEffort(body, req.Model)
 		body = normalizePromptCacheKeyForUpstream(body)
 	}
+	chatUsagePolicy := prepareChatCompletionsStreamUsage(reqPath, req.Stream, body)
+	body = chatUsagePolicy.upstreamBody
 
 	var bodyReader io.Reader
 	if methodAllowsBody(reqMethod) && len(body) > 0 {
@@ -908,7 +910,16 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 	}
 
 	if req.Stream && req.Writer != nil {
-		return handleStreamResponseWithLogger(logger, resp, req.Writer, start, reqServiceTier)
+		return handleStreamResponseWithOptions(
+			logger,
+			resp,
+			req.Writer,
+			start,
+			reqServiceTier,
+			streamResponseOptions{
+				hideChatCompletionsUsage: chatUsagePolicy.hideUsageFromClient,
+			},
+		)
 	}
 	return handleNonStreamResponse(resp, req.Writer, start, reqServiceTier)
 }
