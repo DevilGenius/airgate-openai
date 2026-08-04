@@ -20,9 +20,10 @@ type runtimeHashCacheStats struct {
 }
 
 type runtimeHashStats struct {
-	Text         runtimeHashCacheStats
-	Image        runtimeHashCacheStats
-	RequestRetry runtimeHashCacheStats
+	TextRejection    runtimeHashCacheStats
+	ImageRejection   runtimeHashCacheStats
+	EncryptedContent runtimeHashCacheStats
+	ContextWindow    runtimeHashCacheStats
 }
 
 type textHash interface {
@@ -36,9 +37,14 @@ type textHashRequest interface {
 
 type encryptedContentHashSession interface {
 	BeginRewrite()
+	Inspect(raw string)
 	ShouldRemove(raw string) bool
-	RetrySanitized() bool
-	CacheRejected() bool
+	Sanitized() bool
+	CacheViolation() bool
+}
+
+type encryptedContentViolation struct {
+	safety bool
 }
 
 type imageHash interface {
@@ -222,20 +228,26 @@ func (h *runtimeHash) Stats(now time.Time) runtimeHashStats {
 		return runtimeHashStats{}
 	}
 	h.initialize()
-	textSize, textCapacity, requestRetrySize, requestRetryCapacity := h.text.stats(now)
+	textSize, textCapacity,
+		encryptedContentSize, encryptedContentCapacity,
+		contextWindowSize, contextWindowCapacity := h.text.stats(now)
 	imageSize, imageCapacity := h.image.stats(now)
 	return runtimeHashStats{
-		Text: runtimeHashCacheStats{
+		TextRejection: runtimeHashCacheStats{
 			Size:     textSize,
 			Capacity: textCapacity,
 		},
-		Image: runtimeHashCacheStats{
+		ImageRejection: runtimeHashCacheStats{
 			Size:     imageSize,
 			Capacity: imageCapacity,
 		},
-		RequestRetry: runtimeHashCacheStats{
-			Size:     requestRetrySize,
-			Capacity: requestRetryCapacity,
+		EncryptedContent: runtimeHashCacheStats{
+			Size:     encryptedContentSize,
+			Capacity: encryptedContentCapacity,
+		},
+		ContextWindow: runtimeHashCacheStats{
+			Size:     contextWindowSize,
+			Capacity: contextWindowCapacity,
 		},
 	}
 }
@@ -327,9 +339,10 @@ func (disabledTextHashRequest) Finish(sdk.ForwardOutcome, error) textHashFinish 
 type disabledEncryptedContentHashSession struct{}
 
 func (disabledEncryptedContentHashSession) BeginRewrite()            {}
+func (disabledEncryptedContentHashSession) Inspect(string)           {}
 func (disabledEncryptedContentHashSession) ShouldRemove(string) bool { return false }
-func (disabledEncryptedContentHashSession) RetrySanitized() bool     { return false }
-func (disabledEncryptedContentHashSession) CacheRejected() bool      { return false }
+func (disabledEncryptedContentHashSession) Sanitized() bool          { return false }
+func (disabledEncryptedContentHashSession) CacheViolation() bool     { return false }
 
 type disabledImageHash struct{}
 

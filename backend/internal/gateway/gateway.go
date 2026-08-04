@@ -199,13 +199,13 @@ func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (s
 		)
 	}
 	if hashFinish.EncryptedContentSanitized {
-		logger.Info("invalid_encrypted_content_retry_sanitized",
+		logger.Info("encrypted_content_violation_retry_sanitized",
 			sdk.LogFieldModel, req.Model,
 			sdk.LogFieldPath, path,
 		)
 	}
 	if hashFinish.EncryptedContentCached {
-		logger.Info("invalid_encrypted_content_retry_cached",
+		logger.Info("encrypted_content_violation_cached",
 			sdk.LogFieldModel, req.Model,
 			sdk.LogFieldPath, path,
 		)
@@ -789,11 +789,12 @@ func (g *OpenAIGateway) HandleRequest(ctx context.Context, method, path, _ strin
 			state := g.runtimeHash.State()
 			stats := g.runtimeHash.Stats(time.Now())
 			return http.StatusOK, nil, jsonMarshal(map[string]any{
-				"text_enabled":  state.TextEnabled,
-				"image_enabled": state.ImageEnabled,
-				"text":          stats.Text,
-				"image":         stats.Image,
-				"request_retry": stats.RequestRetry,
+				"text_enabled":      state.TextEnabled,
+				"image_enabled":     state.ImageEnabled,
+				"text_rejection":    stats.TextRejection,
+				"image_rejection":   stats.ImageRejection,
+				"encrypted_content": stats.EncryptedContent,
+				"context_window":    stats.ContextWindow,
 			}), nil
 		case http.MethodPut:
 			var input struct {

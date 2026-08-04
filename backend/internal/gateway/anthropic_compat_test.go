@@ -740,7 +740,7 @@ func TestHandleAnthropicNonStreamRecordsDefaultPriority(t *testing.T) {
 
 func TestHandleAnthropicNonStreamMarksStructuredCybersecurityFailure(t *testing.T) {
 	sse := strings.Join([]string{
-		`data: {"type":"response.failed","response":{"id":"resp_safety","model":"gpt-5.4","error":{"type":"invalid_request_error","message":"` + cybersecurityRiskMessage + `"}}}`,
+		`data: {"type":"response.failed","response":{"id":"resp_safety","model":"gpt-5.4","error":{"type":"invalid_request","code":"cyber_policy","message":"` + cybersecurityRiskMessage + `"}}}`,
 		"",
 	}, "\n")
 	resp := &http.Response{

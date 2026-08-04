@@ -55,6 +55,11 @@ func requestRetryCacheForTest(g *OpenAIGateway) *safetyRequestCache {
 	return &g.runtimeHash.text.requestRetry
 }
 
+func encryptedContentCacheForTest(g *OpenAIGateway) *safetyRequestCache {
+	g.runtimeHash.initialize()
+	return &g.runtimeHash.text.encryptedContent
+}
+
 type contextWindowRerouteState struct {
 	hash                uint64
 	hashReady           bool
@@ -115,7 +120,7 @@ type encryptedContentRetryRequestState = enabledEncryptedContentHashSession
 func (g *OpenAIGateway) newEncryptedContentRetryRequestState() *encryptedContentRetryRequestState {
 	g.runtimeHash.initialize()
 	return &encryptedContentRetryRequestState{
-		cache:     &g.runtimeHash.text.requestRetry,
+		cache:     &g.runtimeHash.text.encryptedContent,
 		checkedAt: time.Now(),
 	}
 }
@@ -124,7 +129,7 @@ func (g *OpenAIGateway) cacheInvalidEncryptedContentRetry(
 	state *encryptedContentRetryRequestState,
 	path string,
 ) bool {
-	return state != nil && isResponsesRequestPath(path) && state.CacheRejected()
+	return state != nil && isResponsesRequestPath(path) && state.CacheViolation()
 }
 
 type imageSafetyRequestContextKey struct{}

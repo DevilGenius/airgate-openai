@@ -242,6 +242,7 @@ func applyOpenAIRateLimitReset(failure *responsesFailureError, errNode gjson.Res
 // classifyResponsesError 根据 type/code/message 关键词归类错误。
 // 是 classifyResponsesFailure / classifyWSErrorEvent 的共用实现。
 func classifyResponsesError(errType, errCode, msg string) *responsesFailureError {
+	errCode = normalizeResponsesErrorCode(errCode)
 	switch {
 	case containsAny(errType, errCode, msg, "previous_response_not_found", "previous response", "response not found"):
 		return &responsesFailureError{
@@ -292,13 +293,21 @@ func classifyResponsesError(errType, errCode, msg string) *responsesFailureError
 			Message:            msg,
 			FailoverScope:      sdk.FailoverScopeDispatchCandidate,
 		}
-	case isCybersecurityRiskRejectionText(errType, errCode, msg):
+	case isCybersecurityRiskRejectionError(errCode, msg):
 		return &responsesFailureError{
 			Kind:               responsesFailureKindClient,
 			StatusCode:         http.StatusBadRequest,
 			AnthropicErrorType: "invalid_request_error",
 			Code:               cybersecurityRiskErrorCode,
 			Message:            cybersecurityRiskMessage,
+		}
+	case isPromptUsagePolicyRejectionError(errCode, msg):
+		return &responsesFailureError{
+			Kind:               responsesFailureKindClient,
+			StatusCode:         http.StatusBadRequest,
+			AnthropicErrorType: "invalid_request_error",
+			Code:               promptUsagePolicyErrorCode,
+			Message:            msg,
 		}
 	case isSafetyRejectionText(errType, errCode, msg):
 		return &responsesFailureError{
@@ -339,6 +348,14 @@ func classifyResponsesError(errType, errCode, msg string) *responsesFailureError
 			Message:            msg,
 		}
 	}
+}
+
+func normalizeResponsesErrorCode(code string) string {
+	code = strings.ToLower(strings.TrimSpace(code))
+	if code == "cyber_policy" {
+		return cybersecurityRiskErrorCode
+	}
+	return code
 }
 
 func isInvalidImageInputText(parts ...string) bool {

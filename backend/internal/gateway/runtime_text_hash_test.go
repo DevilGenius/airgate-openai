@@ -112,7 +112,7 @@ func TestTextSafetyCacheHitOutcomeUsesAnthropicEnvelope(t *testing.T) {
 }
 
 func TestCybersecurityRiskClassificationSetsSafetyRejected(t *testing.T) {
-	failure := classifyResponsesError("invalid_request_error", "", cybersecurityRiskMessage)
+	failure := classifyResponsesError("invalid_request", "cyber_policy", cybersecurityRiskMessage)
 	if failure == nil || failure.Kind != responsesFailureKindClient || failure.Code != cybersecurityRiskErrorCode {
 		t.Fatalf("failure = %#v, want client safety rejection", failure)
 	}
@@ -187,7 +187,7 @@ func TestHandleStreamResponseDoesNotScanSuccessfulOutputDeltas(t *testing.T) {
 }
 
 func TestHandleStreamResponseMarksStructuredCybersecurityFailure(t *testing.T) {
-	sse := `data: {"type":"response.failed","response":{"error":{"type":"invalid_request_error","message":"` + cybersecurityRiskMessage + `"}}}` + "\n\n"
+	sse := `data: {"type":"response.failed","response":{"error":{"type":"invalid_request","code":"cyber_policy","message":"` + cybersecurityRiskMessage + `"}}}` + "\n\n"
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
@@ -206,7 +206,7 @@ func TestHandleStreamResponseMarksStructuredCybersecurityFailure(t *testing.T) {
 }
 
 func TestParseResponsesFailureEventMarksTopLevelCybersecurityError(t *testing.T) {
-	raw := []byte(`{"type":"error","code":"invalid_request_error","message":"` + cybersecurityRiskMessage + `"}`)
+	raw := []byte(`{"type":"error","error":{"type":"invalid_request","code":"cyber_policy","message":"` + cybersecurityRiskMessage + `"}}`)
 	err := parseResponsesFailureEvent("error", raw)
 	var failure *responsesFailureError
 	if !errors.As(err, &failure) {

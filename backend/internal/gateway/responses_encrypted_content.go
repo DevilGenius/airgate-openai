@@ -33,11 +33,14 @@ func sanitizeResponsesReasoningEncryptedContentKnownPresentWithState(body []byte
 		session = disabledEncryptedContent
 	}
 	session.BeginRewrite()
+	// Inspect every ciphertext once, then use the same cached decision during
+	// rewriting. All supported upstream violations share this removal path.
+	inspectResponsesReasoningEncryptedContentKnownPresent(body, session)
 	policy := reasoningEncryptedContentRewritePolicy{
 		removeInvalid:          true,
 		stripExistingOrphanIDs: stripOrphanReasoningIDs,
 		stripRemovedContentID:  stripOrphanReasoningIDs,
-		hashSession:            session,
+		removeValid:            session.ShouldRemove,
 	}
 	updated, _ := rewriteResponsesReasoningEncryptedContentKnownPresent(body, policy)
 	return updated
@@ -61,13 +64,9 @@ type reasoningEncryptedContentRewritePolicy struct {
 	stripExistingOrphanIDs bool
 	stripRemovedContentID  bool
 	removeValid            func(string) bool
-	hashSession            encryptedContentHashSession
 }
 
 func rewriteResponsesReasoningEncryptedContentKnownPresent(body []byte, policy reasoningEncryptedContentRewritePolicy) ([]byte, bool) {
-	if policy.hashSession == nil {
-		policy.hashSession = disabledEncryptedContent
-	}
 	input := gjson.Get(readOnlyBytesString(body), "input")
 	if !input.Exists() {
 		return body, false
@@ -89,6 +88,39 @@ func rewriteResponsesReasoningEncryptedContentKnownPresent(body []byte, policy r
 		return body, false
 	}
 	return updated, true
+}
+
+func inspectResponsesReasoningEncryptedContentKnownPresent(body []byte, session encryptedContentHashSession) {
+	if session == nil {
+		return
+	}
+	input := gjson.Get(readOnlyBytesString(body), "input")
+	if !input.Exists() {
+		return
+	}
+	if input.IsArray() {
+		for _, item := range input.Array() {
+			inspectResponsesReasoningEncryptedContentItem(item, session)
+		}
+		return
+	}
+	if input.IsObject() {
+		inspectResponsesReasoningEncryptedContentItem(input, session)
+	}
+}
+
+func inspectResponsesReasoningEncryptedContentItem(item gjson.Result, session encryptedContentHashSession) {
+	if strings.TrimSpace(item.Get("type").String()) != "reasoning" {
+		return
+	}
+	encryptedContent := item.Get("encrypted_content")
+	if encryptedContent.Type != gjson.String {
+		return
+	}
+	raw := encryptedContent.String()
+	if isStructurallyValidGPTReasoningEncryptedContent(raw) {
+		session.Inspect(raw)
+	}
 }
 
 func rewriteResponsesReasoningEncryptedContentArray(body []byte, input gjson.Result, policy reasoningEncryptedContentRewritePolicy) ([]byte, bool) {
@@ -159,12 +191,8 @@ func rewriteResponsesReasoningEncryptedContentItem(item gjson.Result, policy rea
 	valid := encryptedContent.Type == gjson.String &&
 		isStructurallyValidGPTReasoningEncryptedContent(raw)
 	remove := !valid && policy.removeInvalid
-	if valid {
-		if policy.hashSession.ShouldRemove(raw) {
-			remove = true
-		} else if policy.removeValid != nil {
-			remove = policy.removeValid(raw)
-		}
+	if valid && policy.removeValid != nil {
+		remove = policy.removeValid(raw)
 	}
 	if !remove {
 		return item.Raw, false

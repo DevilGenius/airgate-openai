@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -18,8 +19,9 @@ const (
 	requestRetryCacheTTL             = 24 * time.Hour
 	requestRetryCacheMaxEntries      = 100_000
 	textRequestHashDomain            = "airgate:text-request:xxh3-64:v1"
-	encryptedContentHashDomain       = "airgate:encrypted-content-retry:xxh3-64:v1"
 	cybersecurityRiskErrorCode       = "cybersecurity_risk"
+	promptUsagePolicyErrorCode       = "invalid_prompt"
+	promptUsagePolicyRejectionPhrase = "invalid prompt: your prompt was flagged as potentially violating our usage policy"
 	textSafetyCacheRetryAfter        = 10 * time.Minute
 	textSafetyRateLimitCode          = "rate_limit_exceeded"
 	textSafetyRateLimitMessage       = "Rate limit exceeded. Please retry later."
@@ -27,8 +29,9 @@ const (
 )
 
 type enabledTextHash struct {
-	textSafety   safetyRequestCache
-	requestRetry safetyRequestCache
+	textSafety       safetyRequestCache
+	requestRetry     safetyRequestCache
+	encryptedContent safetyRequestCache
 }
 
 type enabledTextHashRequest struct {
@@ -39,13 +42,6 @@ type enabledTextHashRequest struct {
 	dispatchClientModel string
 	longContextModel    string
 	encryptedContent    encryptedContentHashSession
-}
-
-type enabledEncryptedContentHashSession struct {
-	cache          *safetyRequestCache
-	checkedAt      time.Time
-	validHashes    []uint64
-	retrySanitized bool
 }
 
 func (h *enabledTextHash) Begin(
@@ -69,7 +65,6 @@ func (h *enabledTextHash) Begin(
 		begin.event = textHashBeginSafetyCacheHit
 		return begin
 	}
-
 	request.dispatchClientModel = strings.TrimSpace(req.DispatchPlan.ClientModel)
 	if request.dispatchClientModel == "" {
 		request.dispatchClientModel = strings.TrimSpace(req.Model)
@@ -91,10 +86,7 @@ func (h *enabledTextHash) Begin(
 	}
 
 	if isResponsesRequestPath(path) && bytes.Contains(req.Body, []byte(`"encrypted_content"`)) {
-		request.encryptedContent = &enabledEncryptedContentHashSession{
-			cache:     &h.requestRetry,
-			checkedAt: time.Now(),
-		}
+		request.encryptedContent = newEncryptedContentHashSession(&h.encryptedContent)
 	}
 	return begin
 }
@@ -122,11 +114,12 @@ func (r *enabledTextHashRequest) Finish(outcome sdk.ForwardOutcome, err error) t
 	}
 
 	encrypted := r.EncryptedContent()
-	result.encryptedContentSanitized = encrypted.RetrySanitized()
-	if isInvalidEncryptedContentOutcome(outcome, err) {
-		result.encryptedContentCached = encrypted.CacheRejected()
+	result.encryptedContentSanitized = encrypted.Sanitized()
+	violation, violated := encryptedContentViolationFromOutcome(outcome, err)
+	if violated {
+		result.encryptedContentCached = encrypted.CacheViolation()
 	}
-	if outcome.SafetyRejected && r.ready {
+	if (outcome.SafetyRejected || violation.safety) && r.ready {
 		r.hash.textSafety.add(r.value, time.Now())
 		result.textSafetyCached = true
 	}
@@ -147,52 +140,22 @@ func (r *enabledTextHashRequest) cacheContextWindowExceeded() bool {
 	return true
 }
 
-func (s *enabledEncryptedContentHashSession) BeginRewrite() {
-	if s == nil {
-		return
-	}
-	s.validHashes = s.validHashes[:0]
-	s.retrySanitized = false
-}
-
-func (s *enabledEncryptedContentHashSession) ShouldRemove(raw string) bool {
-	if s == nil {
-		return false
-	}
-	hash := encryptedContentRetryHash(raw)
-	if s.cache != nil && s.cache.contains(hash, s.checkedAt) {
-		s.retrySanitized = true
-		return true
-	}
-	s.validHashes = append(s.validHashes, hash)
-	return false
-}
-
-func (s *enabledEncryptedContentHashSession) RetrySanitized() bool {
-	return s != nil && s.retrySanitized
-}
-
-func (s *enabledEncryptedContentHashSession) CacheRejected() bool {
-	if s == nil || s.cache == nil || len(s.validHashes) == 0 {
-		return false
-	}
-	s.cache.addHashesWithLimits(
-		s.validHashes,
-		time.Now(),
-		requestRetryCacheTTL,
-		requestRetryCacheMaxEntries,
-	)
-	return true
-}
-
 func (h *enabledTextHash) stats(now time.Time) (
-	textSize, textCapacity, requestRetrySize, requestRetryCapacity int,
+	textSize, textCapacity,
+	encryptedContentSize, encryptedContentCapacity,
+	contextWindowSize, contextWindowCapacity int,
 ) {
 	if h == nil {
-		return 0, textSafetyRequestCacheMaxEntries, 0, requestRetryCacheMaxEntries
+		return 0, textSafetyRequestCacheMaxEntries,
+			0, encryptedContentCacheMaxEntries,
+			0, requestRetryCacheMaxEntries
 	}
 	textSize, textCapacity = h.textSafety.stats(now)
-	requestRetrySize, requestRetryCapacity = h.requestRetry.statsWithCapacity(
+	encryptedContentSize, encryptedContentCapacity = h.encryptedContent.statsWithCapacity(
+		now,
+		encryptedContentCacheMaxEntries,
+	)
+	contextWindowSize, contextWindowCapacity = h.requestRetry.statsWithCapacity(
 		now,
 		requestRetryCacheMaxEntries,
 	)
@@ -217,13 +180,6 @@ func textRequestHash(req *sdk.ForwardRequest, method, path string) (uint64, bool
 	writeXXH3HashUint64(&hasher, uint64(len(req.Body)))
 	writeXXH3HashUint64(&hasher, xxh3.Hash(req.Body))
 	return hasher.Sum64(), true
-}
-
-func encryptedContentRetryHash(raw string) uint64 {
-	var hasher xxh3.Hasher
-	writeXXH3HashStringPart(&hasher, encryptedContentHashDomain)
-	writeXXH3HashStringPart(&hasher, raw)
-	return hasher.Sum64()
 }
 
 func isTextGenerationRequestPath(path string) bool {
@@ -315,12 +271,82 @@ func isInvalidEncryptedContentOutcome(outcome sdk.ForwardOutcome, err error) boo
 	)
 }
 
-func isCybersecurityRiskRejectionText(values ...string) bool {
-	text := strings.ToLower(strings.Join(values, " "))
-	if !strings.Contains(text, "cybersecurity risk") {
+func isPromptUsagePolicyRejectionOutcome(outcome sdk.ForwardOutcome, err error) bool {
+	if outcome.Upstream.StatusCode != http.StatusBadRequest ||
+		outcomeErrorCode(outcome, err) != promptUsagePolicyErrorCode {
 		return false
 	}
-	return strings.Contains(text, "flagged") ||
-		strings.Contains(text, "trusted access for cyber") ||
-		strings.Contains(text, "chatgpt.com/cyber")
+	errText := ""
+	if err != nil {
+		errText = err.Error()
+	}
+	return isPromptUsagePolicyRejectionText(
+		outcome.Reason,
+		string(outcome.Upstream.Body),
+		errText,
+	)
+}
+
+func isCybersecurityRiskRejectionOutcome(outcome sdk.ForwardOutcome, err error) bool {
+	if outcome.Upstream.StatusCode != http.StatusBadRequest {
+		return false
+	}
+	if outcomeErrorCode(outcome, err) != cybersecurityRiskErrorCode {
+		return false
+	}
+	errText := ""
+	if err != nil {
+		errText = err.Error()
+	}
+	return isCybersecurityRiskRejectionText(
+		outcome.Reason,
+		string(outcome.Upstream.Body),
+		errText,
+	)
+}
+
+func outcomeErrorCode(outcome sdk.ForwardOutcome, err error) string {
+	var failure *responsesFailureError
+	if errors.As(err, &failure) {
+		return failure.Code
+	}
+	if failure := classifyOpenAIErrorBody(outcome.Upstream.Body); failure != nil {
+		return failure.Code
+	}
+	return ""
+}
+
+func isEncryptedContentSafetyRejectionOutcome(outcome sdk.ForwardOutcome, err error) bool {
+	return isPromptUsagePolicyRejectionOutcome(outcome, err) ||
+		isCybersecurityRiskRejectionOutcome(outcome, err)
+}
+
+func encryptedContentViolationFromOutcome(outcome sdk.ForwardOutcome, err error) (encryptedContentViolation, bool) {
+	if isInvalidEncryptedContentOutcome(outcome, err) {
+		return encryptedContentViolation{}, true
+	}
+	if isEncryptedContentSafetyRejectionOutcome(outcome, err) {
+		return encryptedContentViolation{safety: true}, true
+	}
+	return encryptedContentViolation{}, false
+}
+
+func isPromptUsagePolicyRejectionText(values ...string) bool {
+	text := strings.ToLower(strings.Join(values, " "))
+	return strings.Contains(text, promptUsagePolicyRejectionPhrase)
+}
+
+func isCybersecurityRiskRejectionText(values ...string) bool {
+	text := strings.ToLower(strings.Join(values, " "))
+	return strings.Contains(text, strings.ToLower(cybersecurityRiskMessage))
+}
+
+func isPromptUsagePolicyRejectionError(errCode, message string) bool {
+	return strings.EqualFold(strings.TrimSpace(errCode), promptUsagePolicyErrorCode) &&
+		isPromptUsagePolicyRejectionText(message)
+}
+
+func isCybersecurityRiskRejectionError(errCode, message string) bool {
+	return strings.EqualFold(strings.TrimSpace(errCode), cybersecurityRiskErrorCode) &&
+		isCybersecurityRiskRejectionText(message)
 }
