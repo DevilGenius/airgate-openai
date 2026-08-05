@@ -80,6 +80,7 @@ func (g *OpenAIGateway) handleCompatibleAccountImport(
 type compatibleRefreshTokenInput struct {
 	File         string
 	Index        int
+	Name         string
 	RefreshToken string
 	ProxyURL     string
 	ClientID     string
@@ -178,6 +179,7 @@ func compatibleRefreshTokenInputs(files []authcompat.InputFile) ([]compatibleRef
 		}
 		if strings.HasPrefix(content, "{") {
 			var item struct {
+				Name         string `json:"name"`
 				RefreshToken string `json:"refresh_token"`
 				ProxyURL     string `json:"proxy_url"`
 				ClientID     string `json:"client_id"`
@@ -187,7 +189,7 @@ func compatibleRefreshTokenInputs(files []authcompat.InputFile) ([]compatibleRef
 				continue
 			}
 			if err := appendInput(compatibleRefreshTokenInput{
-				File: file.Name, RefreshToken: strings.TrimSpace(item.RefreshToken),
+				File: file.Name, Name: strings.TrimSpace(item.Name), RefreshToken: strings.TrimSpace(item.RefreshToken),
 				ProxyURL: strings.TrimSpace(item.ProxyURL), ClientID: strings.TrimSpace(item.ClientID),
 			}); err != nil {
 				return nil, issues, err
@@ -211,7 +213,11 @@ func compatibleRefreshTokenAccount(input compatibleRefreshTokenInput, imported *
 	if accountType == "" {
 		accountType = "oauth"
 	}
-	name := strings.TrimSpace(imported.AccountName)
+	name := strings.TrimSpace(input.Name)
+	preserveName := name != ""
+	if name == "" {
+		name = strings.TrimSpace(imported.AccountName)
+	}
 	if name == "" {
 		name = strings.TrimSpace(imported.Credentials["email"])
 	}
@@ -220,7 +226,7 @@ func compatibleRefreshTokenAccount(input compatibleRefreshTokenInput, imported *
 	}
 	account := authcompat.Account{
 		Name: name, Type: accountType, Credentials: imported.Credentials,
-		Priority: 50, MaxConcurrency: 10, RateMultiplier: 1,
+		Priority: 50, MaxConcurrency: 10, RateMultiplier: 1, PreserveName: preserveName,
 	}
 	if email := strings.TrimSpace(imported.Credentials["email"]); email != "" {
 		account.Email = &email

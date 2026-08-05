@@ -50,20 +50,24 @@ func (r *Renamer) Rename(accounts []Account, now time.Time) []Account {
 		account := &accounts[index]
 		plan := accountPlan(*account)
 		r.assignEmailAlias(account, plan, index)
-		cursorType := plan
-		if cursorType == "" {
-			cursorType = "default"
-		}
-		day := r.cursors[dateKey]
-		if day == nil {
-			day = map[string]int{}
-			r.cursors[dateKey] = day
-		}
-		day[cursorType]++
-		if plan == "" {
-			account.Name = fmt.Sprintf("%s-%d", datePart, day[cursorType])
+		if account.PreserveName && strings.TrimSpace(account.Name) != "" {
+			account.Name = strings.TrimSpace(account.Name)
 		} else {
-			account.Name = fmt.Sprintf("%s-%s-%d", datePart, plan, day[cursorType])
+			cursorType := plan
+			if cursorType == "" {
+				cursorType = "default"
+			}
+			day := r.cursors[dateKey]
+			if day == nil {
+				day = map[string]int{}
+				r.cursors[dateKey] = day
+			}
+			day[cursorType]++
+			if plan == "" {
+				account.Name = fmt.Sprintf("%s-%d", datePart, day[cursorType])
+			} else {
+				account.Name = fmt.Sprintf("%s-%s-%d", datePart, plan, day[cursorType])
+			}
 		}
 		if account.Credentials == nil {
 			account.Credentials = map[string]string{}

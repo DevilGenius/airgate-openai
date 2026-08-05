@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DevilGenius/airgate-openai/backend/internal/authcompat"
 )
@@ -14,7 +15,7 @@ import (
 func TestCompatibleRefreshTokenInputsSupportsPlainTextAndJSON(t *testing.T) {
 	inputs, issues, err := compatibleRefreshTokenInputs([]authcompat.InputFile{
 		{Name: "plain.txt", Content: []byte("rt-one\nrt-two")},
-		{Name: "options.json", Content: []byte(`{"refresh_token":"rt-three","proxy_url":"http://proxy","client_id":"client"}`)},
+		{Name: "options.json", Content: []byte(`{"name":"Custom Account","refresh_token":"rt-three","proxy_url":"http://proxy","client_id":"client"}`)},
 		{Name: "empty.txt"},
 	})
 	if err != nil {
@@ -23,11 +24,29 @@ func TestCompatibleRefreshTokenInputsSupportsPlainTextAndJSON(t *testing.T) {
 	if len(inputs) != 3 || inputs[0].RefreshToken != "rt-one" || inputs[1].RefreshToken != "rt-two" {
 		t.Fatalf("plain inputs = %+v", inputs)
 	}
-	if inputs[2].RefreshToken != "rt-three" || inputs[2].ProxyURL != "http://proxy" || inputs[2].ClientID != "client" {
+	if inputs[2].Name != "Custom Account" || inputs[2].RefreshToken != "rt-three" || inputs[2].ProxyURL != "http://proxy" || inputs[2].ClientID != "client" {
 		t.Fatalf("JSON input = %+v", inputs[2])
 	}
 	if len(issues) != 1 || issues[0].File != "empty.txt" {
 		t.Fatalf("issues = %+v", issues)
+	}
+}
+
+func TestCompatibleRefreshTokenAccountPreservesClientName(t *testing.T) {
+	account := compatibleRefreshTokenAccount(compatibleRefreshTokenInput{
+		File: "account.json",
+		Name: " Client Name ",
+	}, &OAuthResult{
+		AccountType: "oauth",
+		AccountName: "upstream-name",
+		Credentials: map[string]string{"access_token": "access"},
+	})
+	renamed := authcompat.NewRenamer().Rename([]authcompat.Account{account}, time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC))
+	if len(renamed) != 1 || renamed[0].Name != "Client Name" {
+		t.Fatalf("renamed account = %+v", renamed)
+	}
+	if renamed[0].Credentials["account_name"] != "Client Name" || renamed[0].Priority != 1 || renamed[0].MaxConcurrency != 15 {
+		t.Fatalf("renamed defaults = %+v", renamed[0])
 	}
 }
 
