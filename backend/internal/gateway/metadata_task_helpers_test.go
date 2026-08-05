@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
@@ -51,6 +52,12 @@ func TestBuildPluginInfoAndRoutes(t *testing.T) {
 	}
 	if info.Metadata["account.oauth_plans"] == "" {
 		t.Fatal("expected oauth plan metadata")
+	}
+	if info.Metadata["account_import.v1"] == "" {
+		t.Fatal("expected account import capability metadata")
+	}
+	if !strings.Contains(info.Metadata["account_import.v1"], "refresh_token") {
+		t.Fatal("expected refresh_token account import format")
 	}
 	if len(info.DispatchDSL.Rules) == 0 {
 		t.Fatal("expected dispatch rules")

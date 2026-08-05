@@ -48,6 +48,9 @@ func BuildPluginInfo() sdk.PluginInfo {
 		},
 		DispatchDSL: openAIDispatchDSL(),
 		Metadata: map[string]string{
+			"account_import.v1": `{
+				"formats":["sub2api","cpa","codex","cockpit","agent_identity","account_json","refresh_token","rt"]
+			}`,
 			"account.oauth_plans": `[
 				{"key":"none","label":"None","credential_key":"plan_type","match":"empty"},
 				{"key":"free","label":"Free","credential_key":"plan_type","matches":["free"]},

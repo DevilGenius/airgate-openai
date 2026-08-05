@@ -16,7 +16,6 @@ import (
 
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 
-	"github.com/DevilGenius/airgate-openai/backend/internal/authcompat"
 	"github.com/DevilGenius/airgate-openai/backend/internal/model"
 )
 
@@ -33,11 +32,6 @@ type OpenAIGateway struct {
 }
 
 const oauthUsageProbeModel = "gpt-5.4-mini"
-
-const (
-	compatImportMaxInputs = 1024
-	compatImportMaxBytes  = 32 << 20
-)
 
 func (g *OpenAIGateway) Info() sdk.PluginInfo {
 	return BuildPluginInfo()
@@ -745,43 +739,7 @@ func buildCodexUsageWindows(snapshot *CodexUsageSnapshot, limitName string, now 
 func (g *OpenAIGateway) HandleRequest(ctx context.Context, method, path, _ string, _ http.Header, body []byte) (int, http.Header, []byte, error) {
 	switch path {
 	case "accounts/import/compat":
-		if strings.ToUpper(strings.TrimSpace(method)) != http.MethodPost {
-			return http.StatusMethodNotAllowed, nil, jsonError("method not allowed"), nil
-		}
-		var raw struct {
-			Format string `json:"format"`
-			Files  []struct {
-				Name    string `json:"name"`
-				Content string `json:"content"`
-			} `json:"files"`
-		}
-		if err := json.Unmarshal(body, &raw); err != nil || len(raw.Files) == 0 {
-			return http.StatusBadRequest, nil, jsonError("缺少兼容导入内容"), nil
-		}
-		if len(raw.Files) > compatImportMaxInputs {
-			return http.StatusBadRequest, nil, jsonError(fmt.Sprintf("单次最多导入 %d 项内容", compatImportMaxInputs)), nil
-		}
-		files := make([]authcompat.InputFile, 0, len(raw.Files))
-		totalBytes := 0
-		for index, file := range raw.Files {
-			name := strings.TrimSpace(file.Name)
-			if name == "" {
-				name = fmt.Sprintf("account-%d.json", index+1)
-			}
-			content := []byte(file.Content)
-			totalBytes += len(content)
-			if totalBytes > compatImportMaxBytes {
-				return http.StatusRequestEntityTooLarge, nil, jsonError(fmt.Sprintf("兼容导入内容总大小不能超过 %d MiB", compatImportMaxBytes>>20)), nil
-			}
-			files = append(files, authcompat.InputFile{Name: name, Content: content})
-		}
-		result, err := authcompat.Parse(authcompat.Format(raw.Format), files)
-		if err != nil {
-			return http.StatusBadRequest, nil, jsonError(err.Error()), nil
-		}
-		result.Accounts = authcompat.Rename(result.Accounts, time.Now())
-		result.Renamed = true
-		return http.StatusOK, nil, jsonMarshal(result), nil
+		return g.handleCompatibleAccountImport(ctx, method, body)
 
 	case "runtime/hash":
 		switch strings.ToUpper(strings.TrimSpace(method)) {
