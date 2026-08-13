@@ -208,15 +208,6 @@ func applyCodexFingerprintBody(body []byte, ids *codexFingerprintIDs) []byte {
 	return body
 }
 
-func (g *OpenAIGateway) applyCodexFingerprint(body []byte, headers http.Header, account *sdk.Account) ([]byte, *codexFingerprintIDs) {
-	ids := g.resolveCodexFingerprintIDs(account, headers)
-	if ids == nil {
-		return body, nil
-	}
-	applyCodexFingerprintHeaders(headers, ids)
-	return applyCodexFingerprintBody(body, ids), ids
-}
-
 func applyCodexFingerprintWebSocketMessage(body []byte, ids *codexFingerprintIDs) []byte {
 	if len(body) == 0 || ids == nil {
 		return body
