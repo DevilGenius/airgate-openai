@@ -87,6 +87,15 @@ func (g *OpenAIGateway) handleWSWithOAuth(ctx context.Context, clientConn sdk.We
 	if err != nil {
 		return nil, err
 	}
+	var clientHeaders http.Header
+	if clientConn != nil && clientConn.ConnectInfo() != nil {
+		clientHeaders = clientConn.ConnectInfo().Headers
+	}
+	fingerprintIDs := g.resolveCodexFingerprintIDs(account, clientHeaders)
+	if fingerprintIDs != nil {
+		passCodexFingerprintCarrierHeaders(clientHeaders, authHeaders)
+	}
+	applyCodexFingerprintHeaders(authHeaders, fingerprintIDs)
 	cfg := WSConfig{
 		AccountID:  account.Credentials["chatgpt_account_id"],
 		ProxyURL:   account.ProxyURL,
@@ -98,6 +107,7 @@ func (g *OpenAIGateway) handleWSWithOAuth(ctx context.Context, clientConn sdk.We
 		isAgentIdentityTaskInvalidWSError(wsResp.StatusCode, err) {
 		g.invalidateAgentIdentityTask(account, cfg.Headers)
 		if refreshedHeaders, refreshErr := g.buildOpenAIAuthHeaders(ctx, account, true); refreshErr == nil {
+			applyCodexFingerprintHeaders(refreshedHeaders, fingerprintIDs)
 			cfg.Headers = refreshedHeaders
 			upstreamConn, wsResp, err = DialWebSocket(ctx, cfg)
 		} else {
@@ -117,7 +127,7 @@ func (g *OpenAIGateway) handleWSWithOAuth(ctx context.Context, clientConn sdk.We
 
 	g.logger.Info("上游 WebSocket 连接已建立", "account_id", account.ID)
 
-	return nil, bridgeWebSocket(ctx, clientConn, upstreamConn)
+	return nil, bridgeWebSocket(ctx, clientConn, upstreamConn, fingerprintIDs)
 }
 
 // handleWSWithAPIKey API Key 模式下的 WS 桥接
@@ -140,11 +150,11 @@ func (g *OpenAIGateway) handleWSWithAPIKey(ctx context.Context, clientConn sdk.W
 
 	g.logger.Info("上游 WebSocket 连接已建立（API Key）", "account_id", account.ID)
 
-	return nil, bridgeWebSocket(ctx, clientConn, upstreamConn)
+	return nil, bridgeWebSocket(ctx, clientConn, upstreamConn, nil)
 }
 
 // bridgeWebSocket 双向桥接客户端和上游的 WebSocket 消息
-func bridgeWebSocket(ctx context.Context, clientConn sdk.WebSocketConn, upstreamConn *websocket.Conn) error {
+func bridgeWebSocket(ctx context.Context, clientConn sdk.WebSocketConn, upstreamConn *websocket.Conn, fingerprintIDs *codexFingerprintIDs) error {
 	errCh := make(chan error, 3)
 	var wg sync.WaitGroup
 	var closeOnce sync.Once
@@ -212,6 +222,7 @@ func bridgeWebSocket(ctx context.Context, clientConn sdk.WebSocketConn, upstream
 				wsType = websocket.BinaryMessage
 			} else {
 				data = sanitizeResponsesWebSocketClientMessage(data)
+				data = applyCodexFingerprintWebSocketMessage(data, fingerprintIDs)
 			}
 			if err := writeWebSocketMessage(upstreamConn, wsType, data); err != nil {
 				reportWebSocketBridgeError(errCh, &webSocketBridgeError{op: "写入上游消息", err: err})

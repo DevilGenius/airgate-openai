@@ -8,6 +8,22 @@ author: airgate
 type: gateway
 min_core_version: 1.0.0
 dependencies: []
+config:
+  - key: codex_fingerprint_mode
+    label: Codex 三标识收敛模式
+    type: select
+    default: "off"
+    description: off：不收敛；device：只收敛 installation_id；session：收敛 installation_id/session_id，并按客户端会话派生 thread_id；full：三个标识全部收敛。
+    required: false
+    options:
+      - value: "off"
+        label: 关闭（不修改）
+      - value: device
+        label: 设备（installation_id）
+      - value: session
+        label: 会话（installation + session）
+      - value: full
+        label: 完整（三标识全部收敛）
 frontend_widgets:
   - slot: account-identity
     entry_file: index.js

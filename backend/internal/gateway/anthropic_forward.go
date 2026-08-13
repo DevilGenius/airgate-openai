@@ -435,6 +435,8 @@ func (g *OpenAIGateway) buildAnthropicUpstreamRequest(
 		responsesBody,
 		gjson.GetBytes(responsesBody, "model").String(),
 	)
+	fingerprintIDs := g.resolveCodexFingerprintIDs(account, req.Headers)
+	responsesBody = applyCodexFingerprintBody(responsesBody, fingerprintIDs)
 
 	// 确定目标 URL
 	var targetURL string
@@ -464,6 +466,9 @@ func (g *OpenAIGateway) buildAnthropicUpstreamRequest(
 				upstreamReq.Header.Add(key, value)
 			}
 		}
+		if fingerprintIDs != nil {
+			passCodexFingerprintCarrierHeaders(req.Headers, upstreamReq.Header)
+		}
 		if aid := account.Credentials["chatgpt_account_id"]; aid != "" {
 			upstreamReq.Header.Set("ChatGPT-Account-ID", aid)
 		}
@@ -477,6 +482,7 @@ func (g *OpenAIGateway) buildAnthropicUpstreamRequest(
 			upstreamReq.Header.Set("x-codex-turn-state", session.LastTurnState)
 		}
 		upstreamReq.Header.Set("originator", resolveCodexOriginator(req.Headers.Get("originator")))
+		applyCodexFingerprintHeaders(upstreamReq.Header, fingerprintIDs)
 	} else {
 		// API Key 模式
 		setAuthHeaders(upstreamReq, account)

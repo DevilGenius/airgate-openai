@@ -36,6 +36,21 @@ func BuildPluginInfo() sdk.PluginInfo {
 		Description: PluginDescription,
 		Author:      PluginAuthor,
 		Type:        sdk.PluginTypeGateway,
+		ConfigSchema: []sdk.ConfigField{
+			{
+				Key:         codexFingerprintModeConfigKey,
+				Label:       "Codex 三标识收敛模式",
+				Type:        "select",
+				Default:     string(codexFingerprintOff),
+				Description: "off：不收敛；device：只收敛 installation_id；session：收敛 installation_id/session_id，并按客户端会话派生 thread_id；full：三个标识全部收敛。",
+				Options: []sdk.ConfigOption{
+					{Value: string(codexFingerprintOff), Label: "关闭（不修改）"},
+					{Value: string(codexFingerprintDevice), Label: "设备（installation_id）"},
+					{Value: string(codexFingerprintSession), Label: "会话（installation + session）"},
+					{Value: string(codexFingerprintFull), Label: "完整（三标识全部收敛）"},
+				},
+			},
+		},
 		Capabilities: []sdk.Capability{
 			sdk.CapabilityHostInvoke,
 			sdk.CapabilityForHostMethod(hostMethodTasksCreate),

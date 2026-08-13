@@ -185,6 +185,10 @@ func (g *OpenAIGateway) forwardOAuthCompact(ctx context.Context, req *sdk.Forwar
 	session := resolveOpenAISession(req.Headers, req.Body, account.ID)
 	updateSessionStateFromRequest(session, account.ID)
 	upstreamBody := normalizePromptCacheKeyForUpstream(applyOpenAIWireReasoningEffort(req.Body, req.Model))
+	fingerprintIDs := g.resolveCodexFingerprintIDs(account, req.Headers)
+	if fingerprintIDs != nil {
+		upstreamBody = applyCodexFingerprintBody(upstreamBody, fingerprintIDs)
+	}
 
 	targetURL := strings.TrimRight(ChatGPTSSEURL, "/") + "/compact"
 	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(upstreamBody))
@@ -227,6 +231,10 @@ func (g *OpenAIGateway) forwardOAuthCompact(ctx context.Context, req *sdk.Forwar
 	if ua := req.Headers.Get("User-Agent"); ua != "" {
 		upstreamReq.Header.Set("User-Agent", ua)
 	}
+	if fingerprintIDs != nil {
+		passCodexFingerprintCarrierHeaders(req.Headers, upstreamReq.Header)
+	}
+	applyCodexFingerprintHeaders(upstreamReq.Header, fingerprintIDs)
 
 	logger.Debug("upstream_request_start",
 		sdk.LogFieldAccountID, account.ID,
@@ -299,6 +307,7 @@ func (g *OpenAIGateway) forwardOAuthCompact(ctx context.Context, req *sdk.Forwar
 			if ua := req.Headers.Get("User-Agent"); ua != "" {
 				retryReq.Header.Set("User-Agent", ua)
 			}
+			applyCodexFingerprintHeaders(retryReq.Header, fingerprintIDs)
 			retryResp, retryErr := g.buildForwardHTTPClient(ctx, req, account).Do(retryReq)
 			if retryErr != nil {
 				reason := fmt.Sprintf("Agent Identity 重试请求失败: %v", retryErr)
@@ -1002,6 +1011,15 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		reason := fmt.Sprintf("构建 OAuth WebSocket 认证头失败: %v", authErr)
 		return accountDeadOutcome(reason), fmt.Errorf("%s", reason)
 	}
+	fingerprintIDs := g.resolveCodexFingerprintIDs(account, req.Headers)
+	if fingerprintIDs != nil {
+		passCodexFingerprintCarrierHeaders(req.Headers, authHeaders)
+	}
+	applyCodexFingerprintHeaders(authHeaders, fingerprintIDs)
+	upstreamReq := *req
+	upstreamReq.Headers = req.Headers.Clone()
+	upstreamReq.Body = applyCodexFingerprintBody(req.Body, fingerprintIDs)
+	applyCodexFingerprintHeaders(upstreamReq.Headers, fingerprintIDs)
 	cfg := WSConfig{
 		AccountID:      account.Credentials["chatgpt_account_id"],
 		ProxyURL:       account.ProxyURL,
@@ -1027,6 +1045,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		isAgentIdentityTaskInvalidWSError(wsResp.StatusCode, err) {
 		g.invalidateAgentIdentityTask(account, cfg.Headers)
 		if refreshedHeaders, refreshErr := g.buildOpenAIAuthHeaders(ctx, account, true); refreshErr == nil {
+			applyCodexFingerprintHeaders(refreshedHeaders, fingerprintIDs)
 			cfg.Headers = refreshedHeaders
 			conn, wsResp, err = DialWebSocket(ctx, cfg)
 		} else {
@@ -1069,7 +1088,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 	if airgateContinuationRecoveryRequested(req.Headers) {
 		session.PreviousRespID = ""
 	}
-	createMsg, err := g.buildWSRequest(req, session)
+	createMsg, err := g.buildWSRequest(&upstreamReq, session)
 	if err != nil {
 		reason := fmt.Sprintf("构建 WebSocket 请求失败: %v", err)
 		logger.Warn("ws_build_request_failed",
@@ -1199,6 +1218,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		_ = conn.Close()
 		g.invalidateAgentIdentityTask(account, cfg.Headers)
 		if refreshedHeaders, refreshErr := g.buildOpenAIAuthHeaders(ctx, account, true); refreshErr == nil {
+			applyCodexFingerprintHeaders(refreshedHeaders, fingerprintIDs)
 			cfg.Headers = refreshedHeaders
 			if refreshedConn, _, dialErr := DialWebSocket(ctx, cfg); dialErr == nil {
 				conn = refreshedConn

@@ -97,11 +97,19 @@ type credentialField struct {
 }
 
 type configField struct {
-	Key         string `yaml:"key"`
-	Type        string `yaml:"type"`
-	Default     string `yaml:"default,omitempty"`
-	Description string `yaml:"description,omitempty"`
-	Required    bool   `yaml:"required"`
+	Key         string         `yaml:"key"`
+	Label       string         `yaml:"label,omitempty"`
+	Type        string         `yaml:"type"`
+	Default     string         `yaml:"default,omitempty"`
+	Description string         `yaml:"description,omitempty"`
+	Placeholder string         `yaml:"placeholder,omitempty"`
+	Required    bool           `yaml:"required"`
+	Options     []configOption `yaml:"options,omitempty"`
+}
+
+type configOption struct {
+	Value string `yaml:"value"`
+	Label string `yaml:"label"`
 }
 
 type frontendWidget struct {
@@ -144,6 +152,7 @@ func renderManifest() ([]byte, error) {
 		Type:            string(info.Type),
 		MinCoreVersion:  gateway.PluginMinCoreVersion,
 		Dependencies:    gateway.PluginDependencies(),
+		Config:          convertConfigFields(info.ConfigSchema),
 		FrontendWidgets: convertFrontendWidgets(info.FrontendWidgets),
 		Gateway: &gatewayManifest{
 			Platform:     plugin.Platform(),
@@ -166,6 +175,31 @@ func renderManifest() ([]byte, error) {
 
 	content := append([]byte(generatedComment), body.Bytes()...)
 	return content, nil
+}
+
+func convertConfigFields(fields []sdk.ConfigField) []configField {
+	items := make([]configField, 0, len(fields))
+	for _, field := range fields {
+		items = append(items, configField{
+			Key:         field.Key,
+			Label:       field.Label,
+			Type:        field.Type,
+			Default:     field.Default,
+			Description: field.Description,
+			Placeholder: field.Placeholder,
+			Required:    field.Required,
+			Options:     convertConfigOptions(field.Options),
+		})
+	}
+	return items
+}
+
+func convertConfigOptions(options []sdk.ConfigOption) []configOption {
+	items := make([]configOption, 0, len(options))
+	for _, option := range options {
+		items = append(items, configOption{Value: option.Value, Label: option.Label})
+	}
+	return items
 }
 
 func manifestFilePath() (string, error) {

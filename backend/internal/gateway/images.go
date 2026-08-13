@@ -1861,6 +1861,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 	attempts := imageSizeAttemptsForRequest(imgReq.Size)
 	baseBody := append([]byte(nil), req.Body...)
 	baseContentType := contentType
+	fingerprintIDs := g.resolveCodexFingerprintIDs(account, req.Headers)
 	for idx, attempt := range attempts {
 		attemptBody, attemptContentType, err := imagesRequestBodyForAttempt(baseBody, baseContentType, isEdit, attempt)
 		if err != nil {
@@ -1907,12 +1908,17 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 				Duration: time.Since(start),
 			}, nil
 		}
+		createMsg = applyCodexFingerprintBody(createMsg, fingerprintIDs)
 
 		authHeaders, authHeaderErr := g.buildOpenAIAuthHeaders(ctx, account, false)
 		if authHeaderErr != nil {
 			reason := fmt.Sprintf("构建 Images OAuth 认证头失败: %v", authHeaderErr)
 			return accountDeadOutcome(reason), fmt.Errorf("%s", reason)
 		}
+		if fingerprintIDs != nil {
+			passCodexFingerprintCarrierHeaders(req.Headers, authHeaders)
+		}
+		applyCodexFingerprintHeaders(authHeaders, fingerprintIDs)
 		cfg := WSConfig{
 			URL:            targetURL,
 			AccountID:      account.Credentials["chatgpt_account_id"],
@@ -1929,6 +1935,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 			isAgentIdentityTaskInvalidWSError(wsResp.StatusCode, err) {
 			g.invalidateAgentIdentityTask(account, cfg.Headers)
 			if refreshedHeaders, refreshErr := g.buildOpenAIAuthHeaders(ctx, account, true); refreshErr == nil {
+				applyCodexFingerprintHeaders(refreshedHeaders, fingerprintIDs)
 				cfg.Headers = refreshedHeaders
 				conn, wsResp, err = DialWebSocket(ctx, cfg)
 			} else {

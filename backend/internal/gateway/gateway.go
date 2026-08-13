@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
@@ -29,6 +30,8 @@ type OpenAIGateway struct {
 	transportPool *TransportPool
 	tasks         *TaskRegistry
 	runtimeHash   runtimeHash
+	configMu      sync.RWMutex
+	config        sdk.PluginConfig
 }
 
 const oauthUsageProbeModel = "gpt-5.4-mini"
@@ -39,6 +42,13 @@ func (g *OpenAIGateway) Info() sdk.PluginInfo {
 
 func (g *OpenAIGateway) Init(ctx sdk.PluginContext) error {
 	g.ctx = ctx
+	var config sdk.PluginConfig
+	if ctx != nil {
+		config = ctx.Config()
+	}
+	g.configMu.Lock()
+	g.config = config
+	g.configMu.Unlock()
 	g.runtimeHash.initialize()
 	g.transportPool = NewTransportPool()
 	g.tasks = NewTaskRegistry()
@@ -66,6 +76,31 @@ func (g *OpenAIGateway) Init(ctx sdk.PluginContext) error {
 		}
 	}
 	g.logger.Info("OpenAI 网关插件初始化", "long_context_model", effectiveLongContextModel())
+	return nil
+}
+
+// OnConfigUpdate applies plugin configuration without restarting the process.
+func (g *OpenAIGateway) OnConfigUpdate(config sdk.PluginConfig) error {
+	g.configMu.Lock()
+	g.config = config
+	g.configMu.Unlock()
+	if g.logger == nil {
+		g.logger = slog.Default()
+	}
+	g.logger.Info("OpenAI 网关插件配置已热更新")
+	return nil
+}
+
+func (g *OpenAIGateway) pluginConfig() sdk.PluginConfig {
+	g.configMu.RLock()
+	config := g.config
+	g.configMu.RUnlock()
+	if config != nil {
+		return config
+	}
+	if g.ctx != nil {
+		return g.ctx.Config()
+	}
 	return nil
 }
 
@@ -542,6 +577,8 @@ func (g *OpenAIGateway) probeOAuthUsage(ctx context.Context, accountID int64, cr
 
 	probeBody := buildOAuthUsageProbeBody()
 	account := &sdk.Account{ID: accountID, Credentials: credentials, ProxyURL: credentials["proxy_url"]}
+	probeFingerprintIDs := g.resolveCodexFingerprintIDs(account, nil)
+	probeBody = applyCodexFingerprintBody(probeBody, probeFingerprintIDs)
 	client := g.buildHTTPClient(account)
 	for recovered := false; ; {
 		// 构建 HTTP POST 请求到 SSE 端点（与 buildAnthropicUpstreamRequest OAuth 模式一致）。
@@ -571,6 +608,7 @@ func (g *OpenAIGateway) probeOAuthUsage(ctx context.Context, accountID int64, cr
 		if aid := credentials["chatgpt_account_id"]; aid != "" {
 			req.Header.Set("ChatGPT-Account-ID", aid)
 		}
+		applyCodexFingerprintHeaders(req.Header, probeFingerprintIDs)
 
 		resp, err := client.Do(req)
 		if err != nil {
