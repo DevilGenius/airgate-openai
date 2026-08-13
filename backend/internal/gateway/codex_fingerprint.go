@@ -9,8 +9,9 @@ import (
 	"strings"
 	"time"
 
-	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 	"github.com/google/uuid"
+
+	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
 const (
