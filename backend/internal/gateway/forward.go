@@ -1336,8 +1336,8 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 	}
 
 	if result.Err != nil {
-		// 只检查结构化失败帧；成功输出和 completed 事件不参与安全缓存判定。
-		safetyRejected := isCybersecurityRiskRejectionText(string(result.FailedEventRaw))
+		// 只检查结构化失败帧的明确 error.code；成功输出和 completed 事件不参与安全缓存判定。
+		safetyRejected := isExplicitSafetyRejectedPayload(result.FailedEventRaw)
 		var failure *responsesFailureError
 		kind := sdk.OutcomeUpstreamTransient
 		statusCode := http.StatusBadGateway
@@ -1354,7 +1354,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 			retryAfter = failure.RetryAfter
 			code = failure.codeOrKind()
 			failoverScope = failure.failoverScopeForKind(kind)
-			safetyRejected = safetyRejected || failure.isCybersecurityRisk()
+			safetyRejected = safetyRejected || failure.isSafetyRejected()
 		}
 		// 流已经提交后不能再由 Core 改写 HTTP 状态或切换 dispatch 候选。
 		// 原生 Responses 流如果还没有转发过上游错误事件，则在流内补一个终止错误事件。

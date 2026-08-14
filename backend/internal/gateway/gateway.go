@@ -185,6 +185,18 @@ func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (s
 				sdk.LogFieldPath, path,
 				"retry_after_ms", hashBegin.Outcome.RetryAfter.Milliseconds(),
 			)
+		case textHashBeginCyberSafetyCacheHit:
+			logger.Info("cyber_safety_cache_hit",
+				sdk.LogFieldModel, req.Model,
+				sdk.LogFieldPath, path,
+				"retry_after_ms", hashBegin.Outcome.RetryAfter.Milliseconds(),
+			)
+		case textHashBeginPromptSafetyCacheHit:
+			logger.Info("prompt_safety_cache_hit",
+				sdk.LogFieldModel, req.Model,
+				sdk.LogFieldPath, path,
+				"retry_after_ms", hashBegin.Outcome.RetryAfter.Milliseconds(),
+			)
 		case textHashBeginContextWindowReroute:
 			logger.Info("context_window_reroute_requested",
 				sdk.LogFieldModel, hashBegin.DispatchClientModel,
@@ -241,6 +253,18 @@ func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (s
 	}
 	if hashFinish.TextSafetyCached {
 		logger.Info("text_safety_request_cached",
+			sdk.LogFieldModel, req.Model,
+			sdk.LogFieldPath, path,
+		)
+	}
+	if hashFinish.CyberSafetyCached {
+		logger.Info("cyber_safety_cached",
+			sdk.LogFieldModel, req.Model,
+			sdk.LogFieldPath, path,
+		)
+	}
+	if hashFinish.PromptSafetyCached {
+		logger.Info("prompt_safety_cached",
 			sdk.LogFieldModel, req.Model,
 			sdk.LogFieldPath, path,
 		)
@@ -788,6 +812,8 @@ func (g *OpenAIGateway) HandleRequest(ctx context.Context, method, path, _ strin
 				"text_enabled":      state.TextEnabled,
 				"image_enabled":     state.ImageEnabled,
 				"text_rejection":    stats.TextRejection,
+				"cyber_rejection":   stats.CyberRejection,
+				"prompt_rejection":  stats.PromptRejection,
 				"image_rejection":   stats.ImageRejection,
 				"encrypted_content": stats.EncryptedContent,
 				"context_window":    stats.ContextWindow,

@@ -15,12 +15,16 @@ type runtimeHashState struct {
 }
 
 type runtimeHashCacheStats struct {
-	Size     int `json:"size"`
-	Capacity int `json:"capacity"`
+	Size              int `json:"size"`
+	Capacity          int `json:"capacity"`
+	CybersecurityRisk int `json:"cybersecurity_risk,omitempty"`
+	InvalidPrompt     int `json:"invalid_prompt,omitempty"`
 }
 
 type runtimeHashStats struct {
 	TextRejection    runtimeHashCacheStats
+	CyberRejection   runtimeHashCacheStats
+	PromptRejection  runtimeHashCacheStats
 	ImageRejection   runtimeHashCacheStats
 	EncryptedContent runtimeHashCacheStats
 	ContextWindow    runtimeHashCacheStats
@@ -37,14 +41,10 @@ type textHashRequest interface {
 
 type encryptedContentHashSession interface {
 	BeginRewrite()
-	Inspect(raw string)
+	Inspect(raw, path string)
 	ShouldRemove(raw string) bool
 	Sanitized() bool
-	CacheViolation() bool
-}
-
-type encryptedContentViolation struct {
-	safety bool
+	CacheViolation(rejection explicitUpstreamError) bool
 }
 
 type imageHash interface {
@@ -63,6 +63,8 @@ type textHashBeginEvent uint8
 const (
 	textHashBeginContinue textHashBeginEvent = iota
 	textHashBeginSafetyCacheHit
+	textHashBeginCyberSafetyCacheHit
+	textHashBeginPromptSafetyCacheHit
 	textHashBeginContextWindowReroute
 )
 
@@ -80,6 +82,8 @@ type textHashFinish struct {
 	encryptedContentSanitized    bool
 	encryptedContentCached       bool
 	textSafetyCached             bool
+	cyberSafetyCached            bool
+	promptSafetyCached           bool
 	dispatchClientModel          string
 	longContextModel             string
 }
@@ -98,6 +102,8 @@ type runtimeHashFinish struct {
 	EncryptedContentSanitized    bool
 	EncryptedContentCached       bool
 	TextSafetyCached             bool
+	CyberSafetyCached            bool
+	PromptSafetyCached           bool
 	ImageSafetyCached            bool
 	DispatchClientModel          string
 	LongContextModel             string
@@ -229,13 +235,26 @@ func (h *runtimeHash) Stats(now time.Time) runtimeHashStats {
 	}
 	h.initialize()
 	textSize, textCapacity,
+		textCybersecurityRisk, textInvalidPrompt,
+		cyberSize, cyberCapacity,
+		promptSize, promptCapacity,
 		encryptedContentSize, encryptedContentCapacity,
 		contextWindowSize, contextWindowCapacity := h.text.stats(now)
 	imageSize, imageCapacity := h.image.stats(now)
 	return runtimeHashStats{
 		TextRejection: runtimeHashCacheStats{
-			Size:     textSize,
-			Capacity: textCapacity,
+			Size:              textSize,
+			Capacity:          textCapacity,
+			CybersecurityRisk: textCybersecurityRisk,
+			InvalidPrompt:     textInvalidPrompt,
+		},
+		CyberRejection: runtimeHashCacheStats{
+			Size:     cyberSize,
+			Capacity: cyberCapacity,
+		},
+		PromptRejection: runtimeHashCacheStats{
+			Size:     promptSize,
+			Capacity: promptCapacity,
 		},
 		ImageRejection: runtimeHashCacheStats{
 			Size:     imageSize,
@@ -314,6 +333,8 @@ func (r *runtimeHashRequest) Finish(outcome sdk.ForwardOutcome, err error) runti
 		EncryptedContentSanitized:    textFinish.encryptedContentSanitized,
 		EncryptedContentCached:       textFinish.encryptedContentCached,
 		TextSafetyCached:             textFinish.textSafetyCached,
+		CyberSafetyCached:            textFinish.cyberSafetyCached,
+		PromptSafetyCached:           textFinish.promptSafetyCached,
 		ImageSafetyCached:            imageCached,
 		DispatchClientModel:          textFinish.dispatchClientModel,
 		LongContextModel:             textFinish.longContextModel,
@@ -339,10 +360,12 @@ func (disabledTextHashRequest) Finish(sdk.ForwardOutcome, error) textHashFinish 
 type disabledEncryptedContentHashSession struct{}
 
 func (disabledEncryptedContentHashSession) BeginRewrite()            {}
-func (disabledEncryptedContentHashSession) Inspect(string)           {}
+func (disabledEncryptedContentHashSession) Inspect(string, string)   {}
 func (disabledEncryptedContentHashSession) ShouldRemove(string) bool { return false }
 func (disabledEncryptedContentHashSession) Sanitized() bool          { return false }
-func (disabledEncryptedContentHashSession) CacheViolation() bool     { return false }
+func (disabledEncryptedContentHashSession) CacheViolation(explicitUpstreamError) bool {
+	return false
+}
 
 type disabledImageHash struct{}
 

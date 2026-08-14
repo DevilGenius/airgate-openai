@@ -520,12 +520,12 @@ func (g *OpenAIGateway) handleAnthropicNonStreamFromResponses(
 				Reason:         failure.upstreamReason(),
 				RetryAfter:     failure.RetryAfter,
 				Duration:       time.Since(start),
-				SafetyRejected: failure.isCybersecurityRisk(),
+				SafetyRejected: failure.isSafetyRejected(),
 			}, nil
 		}
 		// 非 *responsesFailureError 的 err（典型：SSE EOF 提前断流）→ UpstreamTransient，可 failover。
 		outcome := transientOutcome(wsResult.Err.Error())
-		outcome.SafetyRejected = isCybersecurityRiskRejectionText(string(wsResult.FailedEventRaw), wsResult.Err.Error())
+		outcome.SafetyRejected = isExplicitSafetyRejectedPayload(wsResult.FailedEventRaw)
 		return outcome, wsResult.Err
 	}
 	if len(wsResult.CompletedEventRaw) == 0 {
@@ -616,6 +616,10 @@ func (g *OpenAIGateway) writeAnthropicUpstreamError(
 	}
 
 	errBody := anthropicErrorJSON(anthropicErrorType(statusCode), errMsg)
+	rejection, explicitRejection := parseExplicitUpstreamError(body)
+	if explicitRejection {
+		errBody = anthropicErrorJSONWithCode(anthropicErrorType(statusCode), rejection.UpstreamCode, errMsg)
+	}
 
 	outcome := sdk.ForwardOutcome{
 		Kind:           kind,
@@ -623,7 +627,7 @@ func (g *OpenAIGateway) writeAnthropicUpstreamError(
 		Reason:         errMsg,
 		RetryAfter:     retryAfter,
 		Duration:       time.Since(start),
-		SafetyRejected: isCybersecurityRiskRejectionText(errMsg, string(body)),
+		SafetyRejected: explicitRejection && isExplicitSafetyRejectedCode(rejection.Code),
 	}
 	return outcome, forwardErrForOutcome(outcome, fmt.Errorf("上游返回 %d: %s", statusCode, errMsg))
 }

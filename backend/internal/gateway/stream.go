@@ -276,7 +276,7 @@ streamLoop:
 				RetryAfter:     failure.RetryAfter,
 				Duration:       elapsed,
 				Usage:          failureUsage(),
-				SafetyRejected: failure.isCybersecurityRisk(),
+				SafetyRejected: failure.isSafetyRejected(),
 			}, nil
 		}
 		kind := sdk.OutcomeStreamAborted
@@ -291,7 +291,7 @@ streamLoop:
 			Reason:         streamErr.Error(),
 			Duration:       elapsed,
 			Usage:          failureUsage(),
-			SafetyRejected: isCybersecurityRiskRejectionText(streamErr.Error()),
+			SafetyRejected: false,
 		}, streamErr
 	}
 

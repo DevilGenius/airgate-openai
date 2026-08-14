@@ -121,8 +121,8 @@ func (e *responsesFailureError) codeOrKind() string {
 	return string(e.Kind)
 }
 
-func (e *responsesFailureError) isCybersecurityRisk() bool {
-	return e != nil && e.Code == cybersecurityRiskErrorCode
+func (e *responsesFailureError) isSafetyRejected() bool {
+	return e != nil && isExplicitSafetyRejectedCode(e.Code)
 }
 
 func classifyResponsesFailure(data []byte) *responsesFailureError {
@@ -242,7 +242,7 @@ func applyOpenAIRateLimitReset(failure *responsesFailureError, errNode gjson.Res
 // classifyResponsesError 根据 type/code/message 关键词归类错误。
 // 是 classifyResponsesFailure / classifyWSErrorEvent 的共用实现。
 func classifyResponsesError(errType, errCode, msg string) *responsesFailureError {
-	errCode = normalizeResponsesErrorCode(errCode)
+	errCode = normalizeExplicitUpstreamErrorCode(errCode)
 	switch {
 	case containsAny(errType, errCode, msg, "previous_response_not_found", "previous response", "response not found"):
 		return &responsesFailureError{
@@ -260,12 +260,19 @@ func classifyResponsesError(errType, errCode, msg string) *responsesFailureError
 			Code:               "function_call_output_without_call",
 			Message:            msg,
 		}
-	case isEncryptedContentVerificationError(errType, errCode, msg):
+	case errCode == "invalid_encrypted_content":
 		return &responsesFailureError{
 			Kind:               responsesFailureKindContinuationAnchor,
 			StatusCode:         http.StatusBadRequest,
 			AnthropicErrorType: "invalid_request_error",
 			Code:               "invalid_encrypted_content",
+			Message:            msg,
+		}
+	case isEncryptedContentVerificationError(errType, errCode, msg):
+		return &responsesFailureError{
+			Kind:               responsesFailureKindContinuationAnchor,
+			StatusCode:         http.StatusBadRequest,
+			AnthropicErrorType: "invalid_request_error",
 			Message:            msg,
 		}
 	case isContextTooLargeError(errType, errCode, msg):
@@ -293,7 +300,7 @@ func classifyResponsesError(errType, errCode, msg string) *responsesFailureError
 			Message:            msg,
 			FailoverScope:      sdk.FailoverScopeDispatchCandidate,
 		}
-	case isCybersecurityRiskRejectionError(errCode, msg):
+	case errCode == cybersecurityRiskErrorCode:
 		return &responsesFailureError{
 			Kind:               responsesFailureKindClient,
 			StatusCode:         http.StatusBadRequest,
@@ -301,7 +308,7 @@ func classifyResponsesError(errType, errCode, msg string) *responsesFailureError
 			Code:               cybersecurityRiskErrorCode,
 			Message:            cybersecurityRiskMessage,
 		}
-	case isPromptUsagePolicyRejectionError(errCode, msg):
+	case errCode == promptUsagePolicyErrorCode:
 		return &responsesFailureError{
 			Kind:               responsesFailureKindClient,
 			StatusCode:         http.StatusBadRequest,
@@ -309,7 +316,7 @@ func classifyResponsesError(errType, errCode, msg string) *responsesFailureError
 			Code:               promptUsagePolicyErrorCode,
 			Message:            msg,
 		}
-	case isSafetyRejectionText(errType, errCode, msg):
+	case isExplicitSafetyRejectedCode(errCode):
 		return &responsesFailureError{
 			Kind:               responsesFailureKindClient,
 			StatusCode:         http.StatusBadRequest,
@@ -348,14 +355,6 @@ func classifyResponsesError(errType, errCode, msg string) *responsesFailureError
 			Message:            msg,
 		}
 	}
-}
-
-func normalizeResponsesErrorCode(code string) string {
-	code = strings.ToLower(strings.TrimSpace(code))
-	if code == "cyber_policy" {
-		return cybersecurityRiskErrorCode
-	}
-	return code
 }
 
 func isInvalidImageInputText(parts ...string) bool {

@@ -15,6 +15,7 @@ const (
 type safetyRequestCacheEntry struct {
 	expiresAt time.Time
 	reason    string
+	category  string
 	hash      uint64
 	older     *safetyRequestCacheEntry
 	newer     *safetyRequestCacheEntry
@@ -23,6 +24,7 @@ type safetyRequestCacheEntry struct {
 type safetyRequestCache struct {
 	mu         sync.Mutex
 	entries    map[uint64]*safetyRequestCacheEntry
+	categories map[string]int
 	oldest     *safetyRequestCacheEntry
 	newest     *safetyRequestCacheEntry
 	ttl        time.Duration
@@ -69,6 +71,31 @@ func (c *safetyRequestCache) statsWithCapacity(now time.Time, defaultCapacity in
 	return len(c.entries), capacity
 }
 
+func (c *safetyRequestCache) statsWithCategoryCounts(
+	now time.Time,
+	defaultCapacity int,
+	categories ...string,
+) (size, capacity int, counts []int) {
+	counts = make([]int, len(categories))
+	capacity = defaultCapacity
+	if capacity <= 0 {
+		capacity = defaultSafetyRequestCacheMaxEntries
+	}
+	if c == nil {
+		return 0, capacity, counts
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.maxEntries > 0 {
+		capacity = c.maxEntries
+	}
+	c.purgeExpiredLocked(now)
+	for index, category := range categories {
+		counts[index] = c.categories[normalizeSafetyCacheCategory(category)]
+	}
+	return len(c.entries), capacity, counts
+}
+
 func (c *safetyRequestCache) add(hash uint64, now time.Time) {
 	c.addWithReason(hash, now, "")
 }
@@ -83,6 +110,17 @@ func (c *safetyRequestCache) addWithReason(hash uint64, now time.Time, reason st
 	)
 }
 
+func (c *safetyRequestCache) addWithCategory(hash uint64, now time.Time, category string) {
+	c.addHashesWithReasonCategoryAndLimits(
+		[]uint64{hash},
+		now,
+		"",
+		category,
+		defaultSafetyRequestCacheTTL,
+		defaultSafetyRequestCacheMaxEntries,
+	)
+}
+
 func (c *safetyRequestCache) addHashesWithLimits(hashes []uint64, now time.Time, defaultTTL time.Duration, defaultMaxEntries int) {
 	c.addHashesWithReasonAndLimits(hashes, now, "", defaultTTL, defaultMaxEntries)
 }
@@ -91,6 +129,24 @@ func (c *safetyRequestCache) addHashesWithReasonAndLimits(
 	hashes []uint64,
 	now time.Time,
 	reason string,
+	defaultTTL time.Duration,
+	defaultMaxEntries int,
+) {
+	c.addHashesWithReasonCategoryAndLimits(
+		hashes,
+		now,
+		reason,
+		"",
+		defaultTTL,
+		defaultMaxEntries,
+	)
+}
+
+func (c *safetyRequestCache) addHashesWithReasonCategoryAndLimits(
+	hashes []uint64,
+	now time.Time,
+	reason string,
+	category string,
 	defaultTTL time.Duration,
 	defaultMaxEntries int,
 ) {
@@ -118,6 +174,7 @@ func (c *safetyRequestCache) addHashesWithReasonAndLimits(
 	}
 	c.purgeExpiredLocked(now)
 	reason = normalizeSafetyCachedReason(reason)
+	category = normalizeSafetyCacheCategory(category)
 	expiresAt := now.Add(ttl)
 	// All entries in one cache use the same TTL, so refresh order is also
 	// expiration order. Calls normally carry monotonic time.Now values; clamp a
@@ -131,6 +188,11 @@ func (c *safetyRequestCache) addHashesWithReasonAndLimits(
 			if reason != "" {
 				entry.reason = reason
 			}
+			if category != "" && entry.category != category {
+				c.decrementCategoryLocked(entry.category)
+				entry.category = category
+				c.incrementCategoryLocked(entry.category)
+			}
 			c.moveToNewestLocked(entry)
 			continue
 		}
@@ -140,9 +202,11 @@ func (c *safetyRequestCache) addHashesWithReasonAndLimits(
 		entry := &safetyRequestCacheEntry{
 			expiresAt: expiresAt,
 			reason:    reason,
+			category:  category,
 			hash:      hash,
 		}
 		c.entries[hash] = entry
+		c.incrementCategoryLocked(entry.category)
 		c.appendNewestLocked(entry)
 	}
 }
@@ -160,6 +224,28 @@ func (c *safetyRequestCache) evictOldestLocked() {
 	entry := c.oldest
 	c.detachLocked(entry)
 	delete(c.entries, entry.hash)
+	c.decrementCategoryLocked(entry.category)
+}
+
+func (c *safetyRequestCache) incrementCategoryLocked(category string) {
+	if category == "" {
+		return
+	}
+	if c.categories == nil {
+		c.categories = make(map[string]int)
+	}
+	c.categories[category]++
+}
+
+func (c *safetyRequestCache) decrementCategoryLocked(category string) {
+	if category == "" || c.categories == nil {
+		return
+	}
+	if count := c.categories[category]; count > 1 {
+		c.categories[category] = count - 1
+	} else {
+		delete(c.categories, category)
+	}
 }
 
 func (c *safetyRequestCache) moveToNewestLocked(entry *safetyRequestCacheEntry) {
@@ -206,4 +292,8 @@ func normalizeSafetyCachedReason(reason string) string {
 		return string(runes[:maxSafetyCachedReasonRunes]) + "..."
 	}
 	return reason
+}
+
+func normalizeSafetyCacheCategory(category string) string {
+	return strings.ToLower(strings.TrimSpace(category))
 }

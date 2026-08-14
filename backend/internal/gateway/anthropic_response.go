@@ -1104,7 +1104,7 @@ done:
 				RetryAfter:     failure.RetryAfter,
 				Duration:       elapsed,
 				Usage:          abortUsage(),
-				SafetyRejected: failure.isCybersecurityRisk(),
+				SafetyRejected: failure.isSafetyRejected(),
 			}, continuationAnchorReplayErr(failure, outputWritten)
 		}
 		errBody := anthropicErrorJSON("api_error", streamErr.Error())
@@ -1114,7 +1114,7 @@ done:
 			Reason:         streamErr.Error(),
 			Duration:       elapsed,
 			Usage:          abortUsage(),
-			SafetyRejected: isCybersecurityRiskRejectionText(streamErr.Error()),
+			SafetyRejected: false,
 		}, streamErr
 	}
 

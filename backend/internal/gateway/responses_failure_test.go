@@ -127,6 +127,9 @@ func TestClassifyResponsesFailureSafetyRejected(t *testing.T) {
 	if failure.Code != "safety_rejected" {
 		t.Fatalf("unexpected code %q", failure.Code)
 	}
+	if !failure.isSafetyRejected() {
+		t.Fatal("structured content policy rejection should set SafetyRejected")
+	}
 }
 
 // TestIsSafetyRejectionTextNearMisses 守住关键词收紧后的边界：
@@ -206,8 +209,8 @@ func TestClassifyResponsesFailureEncryptedContentVerifyFailed(t *testing.T) {
 	if failure.StatusCode != http.StatusBadRequest {
 		t.Fatalf("unexpected status %d", failure.StatusCode)
 	}
-	if failure.Code != "invalid_encrypted_content" {
-		t.Fatalf("unexpected code %q", failure.Code)
+	if failure.Code != "" {
+		t.Fatalf("message-only failure code = %q, want empty", failure.Code)
 	}
 	if kind := failure.outcomeKind(); kind != sdk.OutcomeClientError {
 		t.Fatalf("expected OutcomeClientError, got %v", kind)
@@ -235,8 +238,8 @@ func TestClassifyResponsesFailureInvalidEncryptedContentVariants(t *testing.T) {
 	if wsFailure.Kind != responsesFailureKindContinuationAnchor {
 		t.Fatalf("unexpected websocket kind %q", wsFailure.Kind)
 	}
-	if wsFailure.Code != "invalid_encrypted_content" {
-		t.Fatalf("unexpected websocket code %q", wsFailure.Code)
+	if wsFailure.Code != "" {
+		t.Fatalf("message-only websocket code = %q, want empty", wsFailure.Code)
 	}
 }
 

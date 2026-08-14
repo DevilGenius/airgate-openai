@@ -33,9 +33,6 @@ const maxErrorResponseBodyBytes = 1 << 20
 //	5xx → UpstreamTransient
 //	其它 4xx → ClientError（客户端请求自己的问题，账号无辜）
 func classifyHTTPFailure(statusCode int, message string) sdk.OutcomeKind {
-	if statusCode >= 400 && isCybersecurityRiskRejectionText(message) {
-		return sdk.OutcomeClientError
-	}
 	if statusCode >= 400 && isOverloadedText(message) {
 		return sdk.OutcomeFamilyTransient
 	}
@@ -77,6 +74,11 @@ func classifyAnthropicBody(statusCode int, body []byte) sdk.OutcomeKind {
 // classifyHTTPFailureResponse 在通用 HTTP 分类基础上读取结构化错误体。
 // 传输层只提交完整上游响应，不感知具体账号处置策略。
 func classifyHTTPFailureResponse(statusCode int, body []byte, message string) sdk.OutcomeKind {
+	if statusCode >= 400 {
+		if rejection, ok := parseExplicitUpstreamError(body); ok && isExplicitTextHashRejectionCode(rejection.Code) {
+			return sdk.OutcomeClientError
+		}
+	}
 	if (statusCode == http.StatusPaymentRequired || statusCode == http.StatusForbidden) && hasQuotaExhaustionCode(body) {
 		return sdk.OutcomeAccountQuotaExhausted
 	}

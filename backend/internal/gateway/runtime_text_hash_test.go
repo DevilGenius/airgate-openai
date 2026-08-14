@@ -56,6 +56,36 @@ func TestTextRequestHashSeparatesRequests(t *testing.T) {
 	}
 }
 
+func TestTextPromptHashIgnoresTransportAndEncryptedContent(t *testing.T) {
+	firstCiphertext := validGPTReasoningEncryptedContentForTestMarker(0x11)
+	secondCiphertext := validGPTReasoningEncryptedContentForTestMarker(0x22)
+	first := &sdk.ForwardRequest{
+		Body: []byte(`{"model":"gpt-5.4","stream":true,"input":[` +
+			`{"id":"rs_first","type":"reasoning","encrypted_content":"` + firstCiphertext + `","summary":[]},` +
+			`{"type":"message","role":"user","content":[{"type":"input_text","text":"same prompt"}]}` +
+			`]}`),
+		Model:  "gpt-5.4",
+		Stream: true,
+	}
+	second := &sdk.ForwardRequest{
+		Body: []byte(`{"model":"gpt-5.4","stream":false,"input":[` +
+			`{"id":"rs_second","type":"reasoning","encrypted_content":"` + secondCiphertext + `","summary":[]},` +
+			`{"type":"message","role":"user","content":[{"type":"input_text","text":"same prompt"}]}` +
+			`]}`),
+		Model: "gpt-5.4",
+	}
+	firstHash, firstOK := textPromptHash(first, http.MethodPost, "/v1/responses")
+	secondHash, secondOK := textPromptHash(second, http.MethodPost, "/v1/responses")
+	if !firstOK || !secondOK || firstHash != secondHash {
+		t.Fatalf("prompt hashes = %d/%d ok=%v/%v, want equal", firstHash, secondHash, firstOK, secondOK)
+	}
+	second.Body = []byte(`{"model":"gpt-5.4","input":"different prompt"}`)
+	differentHash, ok := textPromptHash(second, http.MethodPost, "/v1/responses")
+	if !ok || differentHash == firstHash {
+		t.Fatal("different prompt must produce a different prompt hash")
+	}
+}
+
 func TestTextSafetyRequestCacheReturns429Immediately(t *testing.T) {
 	gateway := &OpenAIGateway{}
 	req := &sdk.ForwardRequest{
@@ -116,18 +146,31 @@ func TestCybersecurityRiskClassificationSetsSafetyRejected(t *testing.T) {
 	if failure == nil || failure.Kind != responsesFailureKindClient || failure.Code != cybersecurityRiskErrorCode {
 		t.Fatalf("failure = %#v, want client safety rejection", failure)
 	}
-	if got := classifyHTTPFailure(http.StatusInternalServerError, cybersecurityRiskMessage); got != sdk.OutcomeClientError {
-		t.Fatalf("HTTP classification = %v, want client error", got)
+	if !failure.isSafetyRejected() {
+		t.Fatal("explicit cyber_policy failure should be classified as SafetyRejected")
+	}
+	if got := classifyHTTPFailure(http.StatusInternalServerError, cybersecurityRiskMessage); got != sdk.OutcomeUpstreamTransient {
+		t.Fatalf("message-only HTTP classification = %v, want upstream transient", got)
 	}
 	rejected := failureOutcome(
 		http.StatusInternalServerError,
-		[]byte(cybersecurityRiskMessage),
+		[]byte(`{"error":{"type":"invalid_request","code":"cyber_policy","message":"`+cybersecurityRiskMessage+`"}}`),
 		nil,
 		"generic upstream failure",
 		0,
 	)
 	if !rejected.SafetyRejected {
-		t.Fatal("failure outcome should preserve the response handler safety flag")
+		t.Fatal("explicit cyber_policy error should set the safety flag")
+	}
+	messageOnly := failureOutcome(
+		http.StatusBadRequest,
+		[]byte(cybersecurityRiskMessage),
+		nil,
+		cybersecurityRiskMessage,
+		0,
+	)
+	if messageOnly.SafetyRejected {
+		t.Fatal("cybersecurity wording without an explicit error code must not set the safety flag")
 	}
 	ordinary := failureOutcome(
 		http.StatusInternalServerError,
@@ -138,6 +181,53 @@ func TestCybersecurityRiskClassificationSetsSafetyRejected(t *testing.T) {
 	)
 	if ordinary.SafetyRejected {
 		t.Fatal("ordinary upstream failure must not set the safety flag")
+	}
+}
+
+func TestInvalidPromptClassificationSetsSafetyRejected(t *testing.T) {
+	failure := classifyResponsesError("invalid_request", promptUsagePolicyErrorCode, "prompt rejected")
+	if failure == nil || failure.Kind != responsesFailureKindClient || failure.Code != promptUsagePolicyErrorCode {
+		t.Fatalf("failure = %#v, want invalid_prompt safety rejection", failure)
+	}
+	if !failure.isSafetyRejected() {
+		t.Fatal("explicit invalid_prompt failure should be classified as SafetyRejected")
+	}
+
+	rejected := failureOutcome(
+		http.StatusBadRequest,
+		[]byte(`{"error":{"type":"invalid_request","code":"invalid_prompt","message":"prompt rejected"}}`),
+		nil,
+		"prompt rejected",
+		0,
+	)
+	if !rejected.SafetyRejected {
+		t.Fatal("explicit invalid_prompt error should set the safety flag")
+	}
+
+	invalidEncryptedContent := failureOutcome(
+		http.StatusBadRequest,
+		[]byte(`{"error":{"type":"invalid_request","code":"invalid_encrypted_content","message":"bad ciphertext"}}`),
+		nil,
+		"bad ciphertext",
+		0,
+	)
+	if invalidEncryptedContent.SafetyRejected {
+		t.Fatal("invalid_encrypted_content is a continuation error, not a safety rejection")
+	}
+}
+
+func TestParseExplicitUpstreamErrorRequiresStructuredCode(t *testing.T) {
+	rejection, ok := parseExplicitUpstreamError([]byte(`{"type":"response.failed","response":{"error":{"code":"cyber_policy","message":"blocked"}}}`))
+	if !ok || rejection.UpstreamCode != "cyber_policy" || rejection.Code != cybersecurityRiskErrorCode {
+		t.Fatalf("explicit rejection = %+v ok=%v", rejection, ok)
+	}
+	if _, ok := parseExplicitUpstreamError([]byte(`{"error":{"message":"cyber_policy blocked"}}`)); ok {
+		t.Fatal("message-only error must not be treated as an explicit rejection")
+	}
+	wrapped := []byte(`{"error":{"message":"{\"error\":{\"code\":\"invalid_encrypted_content\",\"message\":\"bad ciphertext\"}}"}}`)
+	rejection, ok = parseExplicitUpstreamError(wrapped)
+	if !ok || rejection.Code != "invalid_encrypted_content" {
+		t.Fatalf("wrapped explicit rejection = %+v ok=%v", rejection, ok)
 	}
 }
 
@@ -212,7 +302,7 @@ func TestParseResponsesFailureEventMarksTopLevelCybersecurityError(t *testing.T)
 	if !errors.As(err, &failure) {
 		t.Fatalf("error = %v, want responsesFailureError", err)
 	}
-	if !failure.isCybersecurityRisk() {
-		t.Fatalf("failure = %#v, want cybersecurity risk", failure)
+	if !failure.isSafetyRejected() {
+		t.Fatalf("failure = %#v, want safety rejection", failure)
 	}
 }

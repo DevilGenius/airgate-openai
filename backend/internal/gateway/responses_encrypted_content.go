@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"strconv"
 	"strings"
 
 	"github.com/tidwall/gjson"
@@ -99,17 +100,17 @@ func inspectResponsesReasoningEncryptedContentKnownPresent(body []byte, session 
 		return
 	}
 	if input.IsArray() {
-		for _, item := range input.Array() {
-			inspectResponsesReasoningEncryptedContentItem(item, session)
+		for index, item := range input.Array() {
+			inspectResponsesReasoningEncryptedContentItem(item, "input."+strconv.Itoa(index)+".encrypted_content", session)
 		}
 		return
 	}
 	if input.IsObject() {
-		inspectResponsesReasoningEncryptedContentItem(input, session)
+		inspectResponsesReasoningEncryptedContentItem(input, "input.encrypted_content", session)
 	}
 }
 
-func inspectResponsesReasoningEncryptedContentItem(item gjson.Result, session encryptedContentHashSession) {
+func inspectResponsesReasoningEncryptedContentItem(item gjson.Result, path string, session encryptedContentHashSession) {
 	if strings.TrimSpace(item.Get("type").String()) != "reasoning" {
 		return
 	}
@@ -119,7 +120,7 @@ func inspectResponsesReasoningEncryptedContentItem(item gjson.Result, session en
 	}
 	raw := encryptedContent.String()
 	if isStructurallyValidGPTReasoningEncryptedContent(raw) {
-		session.Inspect(raw)
+		session.Inspect(raw, path)
 	}
 }
 

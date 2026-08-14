@@ -13,9 +13,14 @@ import (
 // only uses the runtime hash lifecycle.
 
 type textRequestHashContextKey struct{}
+type textSafetyHashContextKey struct{}
 
 func withTextRequestHash(ctx context.Context, hash uint64) context.Context {
 	return context.WithValue(ctx, textRequestHashContextKey{}, hash)
+}
+
+func withTextSafetyHash(ctx context.Context, hash uint64) context.Context {
+	return context.WithValue(ctx, textSafetyHashContextKey{}, hash)
 }
 
 func textRequestHashFromContext(ctx context.Context) (uint64, bool) {
@@ -23,6 +28,14 @@ func textRequestHashFromContext(ctx context.Context) (uint64, bool) {
 		return 0, false
 	}
 	hash, ok := ctx.Value(textRequestHashContextKey{}).(uint64)
+	return hash, ok
+}
+
+func textSafetyHashFromContext(ctx context.Context) (uint64, bool) {
+	if ctx == nil {
+		return 0, false
+	}
+	hash, ok := ctx.Value(textSafetyHashContextKey{}).(uint64)
 	return hash, ok
 }
 
@@ -36,16 +49,18 @@ func (g *OpenAIGateway) checkTextSafetyRequest(
 	if !ok {
 		return ctx, nil
 	}
-	if g.runtimeHash.text.textSafety.contains(hash, time.Now()) {
+	safetyHash := textSafetyRequestHash(req, hash)
+	if g.runtimeHash.text.textSafety.contains(safetyHash, time.Now()) {
 		outcome := textSafetyCacheHitOutcome(isAnthropicTextRequest(req, path))
 		return ctx, &outcome
 	}
-	return withTextRequestHash(ctx, hash), nil
+	ctx = withTextRequestHash(ctx, hash)
+	return withTextSafetyHash(ctx, safetyHash), nil
 }
 
 func (g *OpenAIGateway) cacheTextSafetyRejection(ctx context.Context) {
 	g.runtimeHash.initialize()
-	if hash, ok := textRequestHashFromContext(ctx); ok {
+	if hash, ok := textSafetyHashFromContext(ctx); ok {
 		g.runtimeHash.text.textSafety.add(hash, time.Now())
 	}
 }
@@ -129,7 +144,9 @@ func (g *OpenAIGateway) cacheInvalidEncryptedContentRetry(
 	state *encryptedContentRetryRequestState,
 	path string,
 ) bool {
-	return state != nil && isResponsesRequestPath(path) && state.CacheViolation()
+	return state != nil && isResponsesRequestPath(path) && state.CacheViolation(explicitUpstreamError{
+		Code: "invalid_encrypted_content",
+	})
 }
 
 type imageSafetyRequestContextKey struct{}
