@@ -172,10 +172,6 @@ func encryptedContentMessageMatchesCandidate(message string, candidate encrypted
 	return strings.Contains(message[prefixIndex+len(candidate.prefix):], candidate.suffix)
 }
 
-func encryptedContentHash(raw string) uint64 {
-	return encryptedContentHashWithScope(0, raw)
-}
-
 func encryptedContentHashWithScope(scope uint64, raw string) uint64 {
 	var hasher xxh3.Hasher
 	writeXXH3HashStringPart(&hasher, encryptedContentHashDomain)

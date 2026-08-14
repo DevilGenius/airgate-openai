@@ -484,11 +484,3 @@ func isCybersecurityRiskRejectionText(values ...string) bool {
 	text := strings.ToLower(strings.Join(values, " "))
 	return strings.Contains(text, strings.ToLower(cybersecurityRiskMessage))
 }
-
-func isPromptUsagePolicyRejectionError(errCode, message string) bool {
-	return strings.EqualFold(strings.TrimSpace(errCode), promptUsagePolicyErrorCode)
-}
-
-func isCybersecurityRiskRejectionError(errCode, message string) bool {
-	return strings.EqualFold(strings.TrimSpace(errCode), cybersecurityRiskErrorCode)
-}
