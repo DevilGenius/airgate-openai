@@ -84,18 +84,19 @@ func TestLookup_KnownModelUnchanged(t *testing.T) {
 			cached        float64
 			cacheCreation float64
 			output        float64
+			contextWindow int
 		}{
-			{model: "gpt-5.6-sol", input: 5.0, cached: 0.5, cacheCreation: 6.25, output: 30.0},
-			{model: "gpt-5.6-terra", input: 2.0, cached: 0.2, cacheCreation: 2.5, output: 12.0},
-			{model: "gpt-5.6-luna", input: 1.0, cached: 0.1, cacheCreation: 1.25, output: 6.0},
+			{model: "gpt-5.6-sol", input: 5.0, cached: 0.5, cacheCreation: 6.25, output: 30.0, contextWindow: 1050000},
+			{model: "gpt-5.6-terra", input: 2.5, cached: 0.25, cacheCreation: 3.125, output: 15.0, contextWindow: 372000},
+			{model: "gpt-5.6-luna", input: 1.0, cached: 0.1, cacheCreation: 1.25, output: 6.0, contextWindow: 372000},
 		}
 		for _, tc := range cases {
 			spec := Lookup(tc.model)
 			if spec.InputPrice != tc.input || spec.CachedPrice != tc.cached || spec.CacheCreationPrice != tc.cacheCreation || spec.OutputPrice != tc.output {
 				t.Errorf("%s 定价变化: In=%v Cached=%v CacheCreation=%v Out=%v", tc.model, spec.InputPrice, spec.CachedPrice, spec.CacheCreationPrice, spec.OutputPrice)
 			}
-			if spec.ContextWindow != 372000 {
-				t.Errorf("%s ContextWindow = %v, want 372000", tc.model, spec.ContextWindow)
+			if spec.ContextWindow != tc.contextWindow {
+				t.Errorf("%s ContextWindow = %v, want %v", tc.model, spec.ContextWindow, tc.contextWindow)
 			}
 			if spec.MaxOutputTokens != 128000 {
 				t.Errorf("%s MaxOutputTokens = %v, want 128000", tc.model, spec.MaxOutputTokens)
