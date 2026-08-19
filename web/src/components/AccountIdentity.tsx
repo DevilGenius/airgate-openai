@@ -6,10 +6,21 @@ type AccountLike = {
   credentials?: Record<string, string>;
 };
 
+type DisplayOverrides = {
+  plan_type?: unknown;
+};
+
 function readAccount(context: AccountSurfaceProps['context']): AccountLike {
   const account = context?.account;
   if (account && typeof account === 'object') return account as AccountLike;
   return {};
+}
+
+function readDisplayPlan(context: AccountSurfaceProps['context']) {
+  const overrides = context?.display_overrides;
+  if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) return '';
+  const planType = (overrides as DisplayOverrides).plan_type;
+  return typeof planType === 'string' ? planType.trim() : '';
 }
 
 function typeLabel(type?: string) {
@@ -74,13 +85,14 @@ export function AccountIdentity({ accountType, context }: AccountSurfaceProps) {
   const type = account.type || accountType;
   const displayType = type === 'oauth' && isAgentIdentity(credentials) ? 'Identity' : typeLabel(type);
   const planType = credentials.plan_type;
+  const forcedDisplayPlan = readDisplayPlan(context);
   const subscriptionUntil = credentials.subscription_active_until;
   const subscriptionExpired = subscriptionUntil ? new Date(subscriptionUntil) < new Date() : false;
   const hasQuotaMetadata = type === 'oauth' && (
     planType !== undefined || credentials.email !== undefined || subscriptionUntil !== undefined
   );
-  const rawDisplayPlan = planType || (hasQuotaMetadata ? 'free' : '');
-  const displayPlan = rawDisplayPlan && subscriptionExpired && rawDisplayPlan.toLowerCase() !== 'free'
+  const rawDisplayPlan = forcedDisplayPlan || planType || (hasQuotaMetadata ? 'free' : '');
+  const displayPlan = !forcedDisplayPlan && rawDisplayPlan && subscriptionExpired && rawDisplayPlan.toLowerCase() !== 'free'
     ? 'free'
     : rawDisplayPlan;
   const isPaid = displayPlan && displayPlan.toLowerCase() !== 'free';

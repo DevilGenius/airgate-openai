@@ -47,6 +47,16 @@ func TestBuildPluginInfoAndRoutes(t *testing.T) {
 	if len(info.FrontendWidgets) == 0 {
 		t.Fatal("expected frontend widgets")
 	}
+	var adjustmentConfig *sdk.ConfigField
+	for i := range info.ConfigSchema {
+		if info.ConfigSchema[i].Key == accountPoolAdjustmentPlansConfigKey {
+			adjustmentConfig = &info.ConfigSchema[i]
+			break
+		}
+	}
+	if adjustmentConfig == nil || adjustmentConfig.Type != "multiselect" || len(adjustmentConfig.Options) != 4 {
+		t.Fatalf("unexpected account pool adjustment config: %#v", adjustmentConfig)
+	}
 	if !reflect.DeepEqual(info.InstructionPresets, []string{"default", "simple", "nsfw", "cc"}) {
 		t.Fatalf("InstructionPresets = %#v", info.InstructionPresets)
 	}

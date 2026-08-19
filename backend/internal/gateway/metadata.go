@@ -12,6 +12,8 @@ const (
 	PluginPlatform       = "openai"
 	PluginMode           = "simple"
 	PluginMinCoreVersion = "1.0.0"
+
+	accountPoolAdjustmentPlansConfigKey = "account_pool_adjustment_plans"
 )
 
 // PluginVersion 插件版本号。
@@ -37,6 +39,17 @@ func BuildPluginInfo() sdk.PluginInfo {
 		Author:      PluginAuthor,
 		Type:        sdk.PluginTypeGateway,
 		ConfigSchema: []sdk.ConfigField{
+			{
+				Key:   accountPoolAdjustmentPlansConfigKey,
+				Label: "号池调整",
+				Type:  "multiselect",
+				Options: []sdk.ConfigOption{
+					{Value: "plus", Label: "Plus"},
+					{Value: "team", Label: "Team"},
+					{Value: "k12", Label: "K12"},
+					{Value: "free", Label: "Free"},
+				},
+			},
 			{
 				Key:         codexFingerprintModeConfigKey,
 				Label:       "Codex 三标识收敛模式",

@@ -9,6 +9,19 @@ type: gateway
 min_core_version: 1.0.0
 dependencies: []
 config:
+  - key: account_pool_adjustment_plans
+    label: 号池调整
+    type: multiselect
+    required: false
+    options:
+      - value: plus
+        label: Plus
+      - value: team
+        label: Team
+      - value: k12
+        label: K12
+      - value: free
+        label: Free
   - key: codex_fingerprint_mode
     label: Codex 三标识收敛模式
     type: select

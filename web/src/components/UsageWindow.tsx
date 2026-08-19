@@ -121,6 +121,11 @@ function shortLabel(label: string) {
   return `${timePart} ${segments[segments.length - 1] ?? modelPart}`;
 }
 
+function isSparkGroup(group: string) {
+  const model = group.replace(/^model:/, '').trim().toLowerCase();
+  return model === 'spark' || model === 'gpt-5.3-codex-spark';
+}
+
 const rootStyle: CSSProperties = {
   display: 'flex',
   minWidth: 0,
@@ -203,7 +208,10 @@ function renderWindowRow(w: UsageWindowItem, index: number, now: number) {
 
   // core normalizer 会下发 display_label（如 "5h" / "7d"）；插件 devserver
   // 直读上游响应时该字段可能缺失，回退到 slot 或本地 shortLabel 截断。
-  const displayLabel = w.display_label?.trim() || w.slot?.trim() || shortLabel(w.label);
+  const { group, slot } = getWindowSlot(w, index);
+  const displayLabel = isSparkGroup(group) && (slot === '5h' || slot === '7d')
+    ? `${slot}S`
+    : w.display_label?.trim() || w.slot?.trim() || shortLabel(w.label);
 
   return (
     <div key={w.key || `${w.label}:${index}`} style={rowStyle}>
