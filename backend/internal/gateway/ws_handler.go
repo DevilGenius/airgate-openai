@@ -127,7 +127,7 @@ func (g *OpenAIGateway) handleWSWithOAuth(ctx context.Context, clientConn sdk.We
 
 	g.logger.Info("上游 WebSocket 连接已建立", "account_id", account.ID)
 
-	return nil, bridgeWebSocket(ctx, clientConn, upstreamConn, fingerprintIDs)
+	return nil, bridgeWebSocket(ctx, clientConn, upstreamConn, fingerprintIDs, true)
 }
 
 // handleWSWithAPIKey API Key 模式下的 WS 桥接
@@ -150,11 +150,11 @@ func (g *OpenAIGateway) handleWSWithAPIKey(ctx context.Context, clientConn sdk.W
 
 	g.logger.Info("上游 WebSocket 连接已建立（API Key）", "account_id", account.ID)
 
-	return nil, bridgeWebSocket(ctx, clientConn, upstreamConn, nil)
+	return nil, bridgeWebSocket(ctx, clientConn, upstreamConn, nil, false)
 }
 
 // bridgeWebSocket 双向桥接客户端和上游的 WebSocket 消息
-func bridgeWebSocket(ctx context.Context, clientConn sdk.WebSocketConn, upstreamConn *websocket.Conn, fingerprintIDs *codexFingerprintIDs) error {
+func bridgeWebSocket(ctx context.Context, clientConn sdk.WebSocketConn, upstreamConn *websocket.Conn, fingerprintIDs *codexFingerprintIDs, strictCodex bool) error {
 	errCh := make(chan error, 3)
 	var wg sync.WaitGroup
 	var closeOnce sync.Once
@@ -221,7 +221,7 @@ func bridgeWebSocket(ctx context.Context, clientConn sdk.WebSocketConn, upstream
 			if msgType == sdk.WSMessageBinary {
 				wsType = websocket.BinaryMessage
 			} else {
-				data = sanitizeResponsesWebSocketClientMessage(data)
+				data = sanitizeResponsesWebSocketClientMessage(data, responsesNormalizeOptions{strictCodex: strictCodex})
 				data = applyCodexFingerprintWebSocketMessage(data, fingerprintIDs)
 			}
 			if err := writeWebSocketMessage(upstreamConn, wsType, data); err != nil {

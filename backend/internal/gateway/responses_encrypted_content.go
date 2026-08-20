@@ -268,12 +268,20 @@ func isStructurallyValidGPTReasoningEncryptedContent(raw string) bool {
 	return ciphertextLen > 0 && ciphertextLen%16 == 0
 }
 
-func sanitizeResponsesWebSocketClientMessage(message []byte) []byte {
-	if len(message) == 0 || !bytes.Contains(message, []byte(`"encrypted_content"`)) {
+func sanitizeResponsesWebSocketClientMessage(message []byte, opts responsesNormalizeOptions) []byte {
+	if len(message) == 0 {
 		return message
 	}
 	if strings.TrimSpace(gjson.GetBytes(message, "type").String()) != "response.create" {
 		return message
 	}
-	return sanitizeResponsesReasoningEncryptedContentKnownPresent(message)
+	if strings.TrimSpace(opts.model) == "" {
+		opts.model = gjson.GetBytes(message, "model").String()
+	}
+	opts.finalize = true
+	result := normalizeResponsesInputWithOptions(message, "/v1/responses", opts)
+	if bytes.Contains(result, []byte(`"encrypted_content"`)) {
+		result = sanitizeResponsesReasoningEncryptedContentKnownPresent(result)
+	}
+	return result
 }

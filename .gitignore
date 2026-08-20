@@ -5,6 +5,7 @@
 /backend/airgate-openai
 /backend/devserver
 /backend/chat
+/backend/.gocache/
 
 # 运行时数据
 /backend/devdata/

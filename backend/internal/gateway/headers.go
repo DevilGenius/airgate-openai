@@ -81,11 +81,12 @@ var openaiAllowedHeaders = map[string]bool{
 	"openai-organization": true,
 	"x-request-id":        true,
 	// Codex 特定头
-	"x-codex-turn-state":    true,
-	"x-codex-turn-metadata": true,
-	"conversation_id":       true,
-	"session_id":            true,
-	"originator":            true,
+	"x-codex-turn-state":                     true,
+	"x-codex-turn-metadata":                  true,
+	"x-openai-internal-codex-responses-lite": true,
+	"conversation_id":                        true,
+	"session_id":                             true,
+	"originator":                             true,
 	// Stainless 超时头（Codex CLI 使用）
 	"x-stainless-timeout":         true,
 	"x-stainless-read-timeout":    true,

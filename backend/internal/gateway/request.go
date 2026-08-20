@@ -331,176 +331,65 @@ func preserveOpenAIConversationImages(body []byte) []byte {
 // msg_*/fc_*/ctc_* id；其他前缀直接移除，避免 Codex 返回
 // invalid_id_prefix。call_id 是独立的调用配对字段，不在这里改写。
 func normalizeResponsesInput(body []byte, reqPath string) []byte {
+	return normalizeResponsesInputWithOptions(body, reqPath, responsesNormalizeOptions{})
+}
+
+func normalizeResponsesInputWithOptions(body []byte, reqPath string, opts responsesNormalizeOptions) []byte {
 	if !isResponsesRequestPath(reqPath) {
 		return body
 	}
 
-	inputNode := gjson.Get(readOnlyBytesString(body), "input")
+	var reqData map[string]any
+	if err := json.Unmarshal(body, &reqData); err != nil || reqData == nil {
+		return body
+	}
 
-	// 情况 1：input 是 string → 包装成单条 user message item 列表
-	if inputNode.Exists() && inputNode.Type == gjson.String {
-		text := inputNode.String()
-		item := []map[string]any{
-			{
+	changed := false
+	if rawInput, exists := reqData["input"]; exists {
+		switch input := rawInput.(type) {
+		case string:
+			reqData["input"] = []any{map[string]any{
 				"type": "message",
 				"role": "user",
-				"content": []map[string]string{
-					{"type": "input_text", "text": text},
-				},
-			},
+				"content": []any{map[string]any{
+					"type": "input_text",
+					"text": input,
+				}},
+			}}
+			changed = true
+		case map[string]any:
+			// A single item is accepted by the public schema. Keep it as an
+			// object and let the shared policy normalize its fields.
+			_ = input
 		}
-		encoded, err := json.Marshal(item)
+	} else if msgs, ok := reqData["messages"].([]any); ok {
+		encodedMessages, err := json.Marshal(msgs)
 		if err != nil {
 			return body
 		}
-		if modified, err := sjson.SetRawBytes(body, "input", encoded); err == nil {
-			return modified
+		input, instructions := convertChatMessagesToResponsesInput(gjson.ParseBytes(encodedMessages).Array())
+		if input == nil {
+			input = []any{}
 		}
-		return body
-	}
-
-	// 情况 2：input 已是完整列表 → system message 提升到 instructions
-	if inputNode.Exists() && inputNode.IsArray() {
-		return normalizeResponsesInputItems(body, inputNode)
-	}
-
-	if inputNode.Exists() && isJSONObject(inputNode.Raw) {
-		return normalizeResponsesInputObject(body, inputNode)
-	}
-
-	// 情况 3：没有 input 但有 Chat Completions 风格的 messages → 翻译
-	if !inputNode.Exists() {
-		if msgs := gjson.GetBytes(body, "messages"); msgs.Exists() && msgs.IsArray() {
-			input, instructions := convertChatMessagesToResponsesInput(msgs.Array())
-			if input == nil {
-				input = []any{}
-			}
-			encoded, err := json.Marshal(input)
-			if err != nil {
-				return body
-			}
-			result := body
-			if modified, err := sjson.SetRawBytes(result, "input", encoded); err == nil {
-				result = modified
-			}
-			if modified, err := sjson.DeleteBytes(result, "messages"); err == nil {
-				result = modified
-			}
-			if instructions != "" && !gjson.GetBytes(result, "instructions").Exists() {
-				if modified, err := sjson.SetBytes(result, "instructions", instructions); err == nil {
-					result = modified
-				}
-			}
-			return result
+		reqData["input"] = input
+		delete(reqData, "messages")
+		if instructions != "" && strings.TrimSpace(jsonString(reqData["instructions"])) == "" {
+			reqData["instructions"] = instructions
 		}
+		changed = true
 	}
 
-	return body
-}
-
-func normalizeResponsesInputItems(body []byte, inputNode gjson.Result) []byte {
-	items := inputNode.Array()
-	needsChange := false
-	for _, item := range items {
-		if id := item.Get("id"); id.Exists() {
-			normalizedID := strings.TrimSpace(id.String())
-			if id.Type != gjson.String || normalizedID != id.String() ||
-				!isValidResponsesInputItemIDForType(item.Get("type").String(), normalizedID) {
-				needsChange = true
-				break
-			}
-		}
-		role := strings.ToLower(strings.TrimSpace(item.Get("role").String()))
-		if role == "system" {
-			needsChange = true
-			break
-		}
-		if strings.TrimSpace(item.Get("type").String()) == "reasoning" {
-			id := strings.TrimSpace(item.Get("id").String())
-			if strings.HasPrefix(id, "rs_") || !item.Get("summary").Exists() {
-				needsChange = true
-				break
-			}
-		}
-	}
-	if !needsChange {
-		return body
-	}
-
-	kept := make([]any, 0, len(items))
-	var instructionsParts []string
-	changed := false
-
-	for _, item := range items {
-		var itemMap map[string]any
-		if err := json.Unmarshal([]byte(item.Raw), &itemMap); err != nil || itemMap == nil {
-			kept = append(kept, json.RawMessage(item.Raw))
-			continue
-		}
-
-		role := strings.ToLower(strings.TrimSpace(jsonString(itemMap["role"])))
-		if role == "system" {
-			if text := extractResponsesInputMessageText(item); text != "" {
-				instructionsParts = append(instructionsParts, text)
-			}
-			changed = true
-			continue
-		}
-		if normalizeResponsesInputItemID(itemMap) {
-			changed = true
-		}
-		if normalizeResponsesReasoningInputItem(itemMap) {
-			changed = true
-		}
-		kept = append(kept, itemMap)
-	}
-
-	if !changed {
-		return body
-	}
-
-	encoded, err := json.Marshal(kept)
-	if err != nil {
-		return body
-	}
-	result, err := sjson.SetRawBytes(body, "input", encoded)
-	if err != nil {
-		return body
-	}
-
-	if len(instructionsParts) == 0 {
-		return result
-	}
-	instructions := strings.Join(instructionsParts, "\n\n")
-	if existing := strings.TrimSpace(gjson.GetBytes(result, "instructions").String()); existing != "" {
-		instructions = instructions + "\n\n" + existing
-	}
-	if modified, err := sjson.SetBytes(result, "instructions", instructions); err == nil {
-		return modified
-	}
-	return result
-}
-
-func normalizeResponsesInputObject(body []byte, inputNode gjson.Result) []byte {
-	var item map[string]any
-	if err := json.Unmarshal([]byte(inputNode.Raw), &item); err != nil || item == nil {
-		return body
-	}
-	changed := normalizeResponsesInputItemID(item)
-	if normalizeResponsesReasoningInputItem(item) {
+	if normalizeResponsesRequestMap(reqData, opts) {
 		changed = true
 	}
 	if !changed {
 		return body
 	}
-	encoded, err := json.Marshal(item)
+	encoded, err := json.Marshal(reqData)
 	if err != nil {
 		return body
 	}
-	if modified, err := sjson.SetRawBytes(body, "input", encoded); err == nil {
-		return modified
-	}
-	return body
+	return encoded
 }
 
 func normalizeResponsesInputItemID(item map[string]any) bool {
@@ -577,34 +466,6 @@ func normalizeResponsesReasoningInputItem(item map[string]any) bool {
 	return changed
 }
 
-func isJSONObject(raw string) bool {
-	return strings.HasPrefix(strings.TrimSpace(raw), "{")
-}
-
-func extractResponsesInputMessageText(msg gjson.Result) string {
-	content := msg.Get("content")
-	if !content.Exists() {
-		return ""
-	}
-	if content.Type == gjson.String {
-		return content.String()
-	}
-	if !content.IsArray() {
-		return ""
-	}
-
-	var parts []string
-	for _, part := range content.Array() {
-		switch part.Get("type").String() {
-		case "input_text", "text", "output_text":
-			if text := part.Get("text").String(); text != "" {
-				parts = append(parts, text)
-			}
-		}
-	}
-	return strings.Join(parts, "\n\n")
-}
-
 func isResponsesRequestPath(reqPath string) bool {
 	path := normalizeGatewayRequestPath(reqPath)
 	return path == "/v1/responses" || path == "/responses"
@@ -678,7 +539,7 @@ func getModelMetadataByID(modelID string) map[string]any {
 
 // buildWSRequest 构建 WebSocket response.create 消息
 func (g *OpenAIGateway) buildWSRequest(req *sdk.ForwardRequest, session openAISessionResolution) ([]byte, error) {
-	body, err := buildResponseCreateWSRequest(req.Body, req.Model, session)
+	body, err := buildResponseCreateWSRequestWithHeaders(req.Body, req.Model, session, req.Headers)
 	if err != nil {
 		return nil, err
 	}
@@ -706,11 +567,15 @@ func applyForceInstructions(body []byte, headers http.Header) []byte {
 
 // buildCodexWSRequest Codex CLI 透传模式
 func buildCodexWSRequest(body []byte, model string, session openAISessionResolution) ([]byte, error) {
-	return buildResponseCreateWSRequest(body, model, session)
+	return buildResponseCreateWSRequestWithHeaders(body, model, session, nil)
 }
 
 func buildResponseCreateWSRequest(body []byte, model string, session openAISessionResolution) ([]byte, error) {
-	normalizedBody, err := normalizeWSRequestBody(body, model)
+	return buildResponseCreateWSRequestWithHeaders(body, model, session, nil)
+}
+
+func buildResponseCreateWSRequestWithHeaders(body []byte, model string, session openAISessionResolution, headers http.Header) ([]byte, error) {
+	normalizedBody, err := normalizeWSRequestBody(body, model, headers)
 	if err != nil {
 		return nil, err
 	}
@@ -732,21 +597,32 @@ func buildResponseCreateWSRequest(body []byte, model string, session openAISessi
 	return wrapResponseCreate(reqData, model, session)
 }
 
-func normalizeWSRequestBody(body []byte, model string) ([]byte, error) {
+func normalizeWSRequestBody(body []byte, model string, headers http.Header) ([]byte, error) {
 	if len(body) == 0 {
 		return body, nil
 	}
 
 	if gjson.GetBytes(body, "type").String() == "response.create" {
-		result := normalizeResponsesInput(body, "/v1/responses")
-		return ensureResponsesDefaultsWithTier(result, ""), nil
+		opts := responsesNormalizeOptions{
+			strictCodex: true,
+			model:       model,
+			headers:     headers,
+		}
+		result := normalizeResponsesInputWithOptions(body, "/v1/responses", opts)
+		result = ensureResponsesDefaultsWithTier(result, "")
+		result = normalizeResponsesInputWithOptions(result, "/v1/responses", opts)
+		return result, nil
 	}
 
 	wrapped, err := wrapAsResponsesAPI(body, model)
 	if err != nil {
 		return nil, err
 	}
-	return wrapped, nil
+	return normalizeResponsesInputWithOptions(wrapped, "/v1/responses", responsesNormalizeOptions{
+		strictCodex: true,
+		model:       model,
+		headers:     headers,
+	}), nil
 }
 
 // resolveEffectiveModel 决定最终送到上游的 model 字段。
@@ -766,7 +642,7 @@ func resolveEffectiveModel(reqModel string, existing any) string {
 
 // buildSimulatedWSRequest 模拟客户端模式
 func buildSimulatedWSRequest(body []byte, model string, session openAISessionResolution) ([]byte, error) {
-	return buildResponseCreateWSRequest(body, model, session)
+	return buildResponseCreateWSRequestWithHeaders(body, model, session, nil)
 }
 
 // wrapResponseCreate 将请求数据包装为 response.create WS 消息
@@ -804,7 +680,7 @@ func applyContinuationState(reqData map[string]any, session openAISessionResolut
 	if previous, ok := reqData["previous_response_id"].(string); ok {
 		if strings.TrimSpace(previous) != "" {
 			sanitizeAnchoredEncryptedReplayItems(reqData)
-			normalizeResponsesToolCompatibilityFromMap(reqData)
+			normalizeResponsesRequestMap(reqData, responsesNormalizeOptions{strictCodex: true, finalize: true, model: jsonString(reqData["model"])})
 			return reqData
 		}
 		delete(reqData, "previous_response_id")
@@ -813,6 +689,6 @@ func applyContinuationState(reqData map[string]any, session openAISessionResolut
 		reqData["previous_response_id"] = strings.TrimSpace(session.PreviousRespID)
 	}
 	sanitizeAnchoredEncryptedReplayItems(reqData)
-	normalizeResponsesToolCompatibilityFromMap(reqData)
+	normalizeResponsesRequestMap(reqData, responsesNormalizeOptions{strictCodex: true, finalize: true, model: jsonString(reqData["model"])})
 	return reqData
 }

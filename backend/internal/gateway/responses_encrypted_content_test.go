@@ -206,7 +206,7 @@ func TestSanitizeResponsesReasoningEncryptedContentSupportsInputObject(t *testin
 func TestSanitizeResponsesWebSocketClientMessageOnlyTouchesResponseCreate(t *testing.T) {
 	invalid := `{"type":"reasoning","id":"rs_bad","encrypted_content":"bad"}`
 	responseCreate := []byte(`{"type":"response.create","store":false,"input":[` + invalid + `]}`)
-	got := sanitizeResponsesWebSocketClientMessage(responseCreate)
+	got := sanitizeResponsesWebSocketClientMessage(responseCreate, responsesNormalizeOptions{strictCodex: true})
 	if gjson.GetBytes(got, "input.0.encrypted_content").Exists() {
 		t.Fatalf("response.create invalid encrypted_content still exists: %s", got)
 	}
@@ -215,7 +215,7 @@ func TestSanitizeResponsesWebSocketClientMessageOnlyTouchesResponseCreate(t *tes
 	}
 
 	other := []byte(`{"type":"session.update","input":[` + invalid + `]}`)
-	if gotOther := sanitizeResponsesWebSocketClientMessage(other); string(gotOther) != string(other) {
+	if gotOther := sanitizeResponsesWebSocketClientMessage(other, responsesNormalizeOptions{strictCodex: true}); string(gotOther) != string(other) {
 		t.Fatalf("non-response.create message was changed: %s", gotOther)
 	}
 }

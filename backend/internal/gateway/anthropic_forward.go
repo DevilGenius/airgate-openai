@@ -206,7 +206,7 @@ func finalizeAnthropicResponsesBody(responsesBody []byte, originalBody []byte, s
 		result, _ = sjson.DeleteBytes(result, "tool_choice")
 		result, _ = sjson.DeleteBytes(result, "parallel_tool_calls")
 	}
-	return normalizeResponsesToolCompatibility(result)
+	return normalizeResponsesInputWithOptions(result, "/v1/responses", responsesNormalizeOptions{finalize: true})
 }
 
 func explicitAnthropicRequestServiceTier(req *sdk.ForwardRequest) string {

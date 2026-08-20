@@ -88,7 +88,7 @@ func functionCallOutputRecoveryBody(body []byte) ([]byte, bool) {
 		delete(reqData, "previous_response_id")
 		changed = true
 	}
-	if normalizeResponsesToolCompatibilityFromMap(reqData) {
+	if normalizeResponsesRequestMap(reqData, responsesNormalizeOptions{finalize: true}) {
 		changed = true
 	}
 	if sanitizeEncryptedReasoningItems(reqData) {

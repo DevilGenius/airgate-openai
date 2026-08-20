@@ -86,7 +86,11 @@ func (g *OpenAIGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest
 		)
 		req.Body = applyForceInstructions(req.Body, req.Headers)
 		if req.Account.Credentials["api_key"] != "" && isResponsesRequestPath(reqPath) {
-			req.Body = normalizeResponsesToolCompatibility(req.Body)
+			req.Body = normalizeResponsesInputWithOptions(req.Body, reqPath, responsesNormalizeOptions{
+				finalize: true,
+				model:    req.Model,
+				headers:  req.Headers,
+			})
 		}
 		reqServiceTier = normalizeOpenAIServiceTier(gjson.GetBytes(req.Body, "service_tier").String())
 		if req.Account.Credentials["api_key"] != "" && !isOpenAIOAuthCredentials(req.Account.Credentials) {

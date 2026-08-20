@@ -12,18 +12,14 @@ var (
 	responsesCompatMapChangedSink bool
 )
 
-func TestNormalizeResponsesToolCompatibilityFastPath(t *testing.T) {
+func TestResponsesPolicyLeavesTextOnlyRequestUnchanged(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.4","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"` + strings.Repeat("hello ", 256) + `"}]}]}`)
-	got := normalizeResponsesToolCompatibility(body)
-	if len(got) == 0 || &got[0] != &body[0] {
-		t.Fatalf("text-only request should return the original slice")
+	got := normalizeResponsesInputWithOptions(body, "/v1/responses", responsesNormalizeOptions{finalize: true})
+	if model := gjson.GetBytes(got, "model").String(); model != "gpt-5.4" {
+		t.Fatalf("model = %q, want gpt-5.4; body=%s", model, got)
 	}
-
-	allocs := testing.AllocsPerRun(1000, func() {
-		responsesCompatBodySink = normalizeResponsesToolCompatibility(body)
-	})
-	if allocs != 0 {
-		t.Fatalf("text-only fast path allocations = %v, want 0", allocs)
+	if text := gjson.GetBytes(got, "input.0.content.0.text").String(); text != strings.Repeat("hello ", 256) {
+		t.Fatalf("text-only request changed: %s", got)
 	}
 
 	reqData := map[string]any{
@@ -37,11 +33,8 @@ func TestNormalizeResponsesToolCompatibilityFastPath(t *testing.T) {
 			},
 		},
 	}
-	allocs = testing.AllocsPerRun(1000, func() {
-		responsesCompatMapChangedSink = normalizeResponsesToolCompatibilityFromMap(reqData)
-	})
-	if allocs != 0 {
-		t.Fatalf("decoded-map fast path allocations = %v, want 0", allocs)
+	if normalizeResponsesRequestMap(reqData, responsesNormalizeOptions{}) {
+		t.Fatalf("decoded text-only request should not change: %#v", reqData)
 	}
 }
 
@@ -67,7 +60,7 @@ func TestNormalizeResponsesToolCompatibilityRepairsToolDefinitions(t *testing.T)
 		}]
 	}`)
 
-	got := normalizeResponsesToolCompatibility(body)
+	got := normalizeResponsesInputWithOptions(body, "/v1/responses", responsesNormalizeOptions{finalize: true})
 	if count := gjson.GetBytes(got, "tools.#").Int(); count != 3 {
 		t.Fatalf("top-level tools count = %d, want 3; body=%s", count, got)
 	}
@@ -110,7 +103,7 @@ func TestNormalizeResponsesToolCompatibilityDropsInvalidReplayPairs(t *testing.T
 		]
 	}`)
 
-	got := normalizeResponsesToolCompatibility(body)
+	got := normalizeResponsesInputWithOptions(body, "/v1/responses", responsesNormalizeOptions{finalize: true})
 	if count := gjson.GetBytes(got, "input.#").Int(); count != 3 {
 		t.Fatalf("input count = %d, want message plus valid call/output; body=%s", count, got)
 	}
@@ -133,7 +126,7 @@ func TestNormalizeResponsesToolCompatibilityPreservesAnchoredOutput(t *testing.T
 		]
 	}`)
 
-	got := normalizeResponsesToolCompatibility(body)
+	got := normalizeResponsesInputWithOptions(body, "/v1/responses", responsesNormalizeOptions{finalize: true})
 	if count := gjson.GetBytes(got, "input.#").Int(); count != 1 {
 		t.Fatalf("input count = %d, want anchored output only; body=%s", count, got)
 	}
@@ -182,7 +175,7 @@ func TestNormalizeResponsesToolCompatibilityRepairsServerToolSearchOutput(t *tes
 		}]
 	}`)
 
-	got := normalizeResponsesToolCompatibility(body)
+	got := normalizeResponsesInputWithOptions(body, "/v1/responses", responsesNormalizeOptions{finalize: true})
 	if count := gjson.GetBytes(got, "input.#").Int(); count != 1 {
 		t.Fatalf("server tool_search_output was removed: %s", got)
 	}
@@ -200,8 +193,7 @@ func TestNormalizeResponsesToolCompatibilityDropsChatToolCallWithEmptyName(t *te
 		]
 	}`)
 
-	normalized := normalizeResponsesInput(body, "/v1/responses")
-	got := normalizeResponsesToolCompatibility(normalized)
+	got := normalizeResponsesInputWithOptions(body, "/v1/responses", responsesNormalizeOptions{finalize: true})
 	if count := gjson.GetBytes(got, "input.#").Int(); count != 0 {
 		t.Fatalf("invalid Chat tool replay was not removed: %s", got)
 	}
@@ -232,7 +224,7 @@ func BenchmarkNormalizeResponsesToolCompatibilityTextOnly(b *testing.B) {
 	b.SetBytes(int64(len(body)))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		responsesCompatBodySink = normalizeResponsesToolCompatibility(body)
+		responsesCompatBodySink = normalizeResponsesInputWithOptions(body, "/v1/responses", responsesNormalizeOptions{finalize: true})
 	}
 }
 
@@ -242,7 +234,7 @@ func BenchmarkNormalizeResponsesToolCompatibilityMalformedTools(b *testing.B) {
 	b.SetBytes(int64(len(body)))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		responsesCompatBodySink = normalizeResponsesToolCompatibility(body)
+		responsesCompatBodySink = normalizeResponsesInputWithOptions(body, "/v1/responses", responsesNormalizeOptions{finalize: true})
 	}
 }
 

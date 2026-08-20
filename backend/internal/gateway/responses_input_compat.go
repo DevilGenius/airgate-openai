@@ -1,14 +1,7 @@
 package gateway
 
 import (
-	"bytes"
-	"encoding/json"
 	"strings"
-)
-
-var (
-	responsesToolsMarker = []byte(`"tools"`)
-	responsesCallMarker  = []byte(`_call`)
 )
 
 type responsesToolCallKey struct {
@@ -16,37 +9,9 @@ type responsesToolCallKey struct {
 	callID   string
 }
 
-// normalizeResponsesToolCompatibility repairs a narrow set of malformed
-// Responses tool definitions and replay items emitted by compatible clients.
-// Requests with no tool-related marker return the original slice without JSON
-// decoding, keeping the common text-only path allocation-free.
-func normalizeResponsesToolCompatibility(body []byte) []byte {
-	if len(body) == 0 || !responsesToolCompatibilityCandidate(body) {
-		return body
-	}
-
-	var reqData map[string]any
-	if err := json.Unmarshal(body, &reqData); err != nil {
-		return body
-	}
-	if !normalizeResponsesToolCompatibilityFromMap(reqData) {
-		return body
-	}
-
-	patched, err := json.Marshal(reqData)
-	if err != nil {
-		return body
-	}
-	return patched
-}
-
-func responsesToolCompatibilityCandidate(body []byte) bool {
-	return bytes.Contains(body, responsesToolsMarker) ||
-		bytes.Contains(body, responsesCallMarker)
-}
-
-// normalizeResponsesToolCompatibilityFromMap is the zero-reparse variant used
-// by the Responses WebSocket path, which already has a decoded request map.
+// normalizeResponsesToolCompatibilityFromMap is the tool-specific phase of the
+// shared Responses request policy. Callers must enter through
+// normalizeResponsesRequestMap instead of invoking this phase independently.
 func normalizeResponsesToolCompatibilityFromMap(reqData map[string]any) bool {
 	if reqData == nil {
 		return false
