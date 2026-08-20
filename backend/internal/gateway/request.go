@@ -570,10 +570,6 @@ func buildCodexWSRequest(body []byte, model string, session openAISessionResolut
 	return buildResponseCreateWSRequestWithHeaders(body, model, session, nil)
 }
 
-func buildResponseCreateWSRequest(body []byte, model string, session openAISessionResolution) ([]byte, error) {
-	return buildResponseCreateWSRequestWithHeaders(body, model, session, nil)
-}
-
 func buildResponseCreateWSRequestWithHeaders(body []byte, model string, session openAISessionResolution, headers http.Header) ([]byte, error) {
 	normalizedBody, err := normalizeWSRequestBody(body, model, headers)
 	if err != nil {

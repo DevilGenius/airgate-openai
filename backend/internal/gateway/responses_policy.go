@@ -277,9 +277,7 @@ func responsesLiteModelSupported(modelID string) bool {
 	if slash := strings.LastIndexByte(id, '/'); slash >= 0 {
 		id = id[slash+1:]
 	}
-	if strings.HasSuffix(id, "-openai-compact") {
-		id = strings.TrimSuffix(id, "-openai-compact")
-	}
+	id = strings.TrimSuffix(id, "-openai-compact")
 	switch id {
 	case "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "codex-auto-review":
 		return true
