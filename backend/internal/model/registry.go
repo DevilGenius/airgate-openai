@@ -125,7 +125,7 @@ var registry = map[string]Spec{
 
 	// ── GPT-5.6 ──
 	"gpt-5.6-sol":   withLongCtx(withCacheCreationPrice(std("GPT-5.6-Sol", 1050000, 128000, 5.0, 0.5, 30.0), 6.25)),
-	"gpt-5.6-terra": withLongCtx(withCacheCreationPrice(std("GPT-5.6-Terra", 372000, 128000, 2.5, 0.25, 15.0), 3.125)),
+	"gpt-5.6-terra": withLongCtx(withCacheCreationPrice(std("GPT-5.6-Terra", 372000, 128000, 2.0, 0.2, 12.0), 2.5)),
 	"gpt-5.6-luna":  withLongCtx(withCacheCreationPrice(std("GPT-5.6-Luna", 372000, 128000, 1.0, 0.1, 6.0), 1.25)),
 
 	// ── GPT-5.4 ──

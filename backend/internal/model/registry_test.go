@@ -87,7 +87,7 @@ func TestLookup_KnownModelUnchanged(t *testing.T) {
 			contextWindow int
 		}{
 			{model: "gpt-5.6-sol", input: 5.0, cached: 0.5, cacheCreation: 6.25, output: 30.0, contextWindow: 1050000},
-			{model: "gpt-5.6-terra", input: 2.5, cached: 0.25, cacheCreation: 3.125, output: 15.0, contextWindow: 372000},
+			{model: "gpt-5.6-terra", input: 2.0, cached: 0.2, cacheCreation: 2.5, output: 12.0, contextWindow: 372000},
 			{model: "gpt-5.6-luna", input: 1.0, cached: 0.1, cacheCreation: 1.25, output: 6.0, contextWindow: 372000},
 		}
 		for _, tc := range cases {
