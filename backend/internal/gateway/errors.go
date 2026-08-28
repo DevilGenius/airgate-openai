@@ -27,6 +27,7 @@ const maxErrorResponseBodyBytes = 1 << 20
 //	401 → AccountDead
 //	403 → AccountUnavailable（明确账号禁用 / workspace 失活仍升级为 AccountDead）
 //	402 + deactivated_workspace → AccountDead
+//	402 + WebSocket 握手 Payment Required → AccountDead
 //	400 + 消息含限流关键词 → AccountRateLimited（部分上游用 400 返回 usage_limit_reached）
 //	400 + 消息含 disabled/deactivated → AccountDead
 //	overloaded 语义 → FamilyTransient（走 Core 的 family 级短退避）
@@ -39,7 +40,8 @@ func classifyHTTPFailure(statusCode int, message string) sdk.OutcomeKind {
 	if (statusCode == 400 || statusCode == 403 || statusCode == 429) && isTemporaryRateLimitText(message) {
 		return sdk.OutcomeAccountRateLimited
 	}
-	if statusCode == http.StatusPaymentRequired && isDeactivatedWorkspaceText(message) {
+	if statusCode == 402 &&
+		(isDeactivatedWorkspaceText(message) || isWebSocketPaymentRequiredText(message)) {
 		return sdk.OutcomeAccountDead
 	}
 	if (statusCode == 400 || statusCode == 403) && isDisabledAccountText(message) {
@@ -157,6 +159,11 @@ func isDeactivatedWorkspaceText(parts ...string) bool {
 		return false
 	}
 	return strings.Contains(combined, "deactivated_workspace")
+}
+
+func isWebSocketPaymentRequiredText(parts ...string) bool {
+	combined := strings.ToLower(strings.Join(parts, " "))
+	return strings.Contains(combined, "websocket 握手失败: payment required (http 402)")
 }
 
 func isModelUnsupportedText(parts ...string) bool {
