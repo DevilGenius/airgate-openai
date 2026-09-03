@@ -7,6 +7,7 @@ import type {
   PluginOAuthBridge,
   PluginOAuthExchangeResult,
 } from '@devilgenius/airgate-theme/plugin';
+import { normalizeAccountPlan } from './accountPlan';
 
 type BatchExchangeResult = PluginOAuthBatchExchangeResult;
 type BatchAccountInput = PluginBatchAccountInput;
@@ -26,7 +27,6 @@ const planDisplayMap: Record<string, { label: string; color: string; bg: string 
   team: { label: 'Team', color: '#2563eb', bg: '#dbeafe' },
   k12: { label: 'K12', color: '#2563eb', bg: '#dbeafe' },
   prolite: { label: 'ProLite', color: '#2563eb', bg: '#dbeafe' },
-  self_serve_business_prolite: { label: 'ProLite', color: '#2563eb', bg: '#dbeafe' },
 };
 
 const inputStyle: React.CSSProperties = {
@@ -780,7 +780,7 @@ export function AccountForm({
                 订阅
               </div>
               {planType && (() => {
-                const normalizedPlan = planType.trim().toLowerCase();
+                const normalizedPlan = normalizeAccountPlan(planType);
                 const plan = planDisplayMap[normalizedPlan] || { label: planType, color: cssVar('text'), bg: cssVar('surfaceSecondary') };
                 return (
                   <span style={{

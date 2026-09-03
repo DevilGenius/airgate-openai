@@ -94,7 +94,11 @@ func accountPlan(account Account) string {
 			labels = append(labels, strings.ToUpper(part[:1])+part[1:])
 		}
 	}
-	return strings.Join(labels, "")
+	label := strings.Join(labels, "")
+	if strings.HasSuffix(strings.ToLower(label), "prolite") {
+		return "ProLite"
+	}
+	return label
 }
 
 func (r *Renamer) assignEmailAlias(account *Account, plan string, index int) {
@@ -133,11 +137,12 @@ func (r *Renamer) assignEmailAlias(account *Account, plan string, index int) {
 }
 
 func aliasPlanEligible(plan string) bool {
-	switch strings.ToLower(strings.TrimSpace(plan)) {
+	normalized := strings.ToLower(strings.TrimSpace(plan))
+	switch normalized {
 	case "", "k12", "team":
 		return true
 	default:
-		return false
+		return strings.HasSuffix(normalized, "prolite")
 	}
 }
 

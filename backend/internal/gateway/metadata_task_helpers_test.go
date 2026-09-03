@@ -69,10 +69,26 @@ func TestBuildPluginInfoAndRoutes(t *testing.T) {
 	if info.Metadata["account.oauth_plans"] == "" {
 		t.Fatal("expected oauth plan metadata")
 	}
-	for _, plan := range []string{"self_serve_business_prolite", "Self_serve_business_prolite"} {
-		if !strings.Contains(info.Metadata["account.oauth_plans"], `"`+plan+`"`) {
-			t.Fatalf("expected Team oauth plan metadata to include %q", plan)
+	var planFilters []struct {
+		Key     string   `json:"key"`
+		Match   string   `json:"match"`
+		Matches []string `json:"matches"`
+	}
+	if err := json.Unmarshal([]byte(info.Metadata["account.oauth_plans"]), &planFilters); err != nil {
+		t.Fatalf("decode oauth plan metadata: %v", err)
+	}
+	teamFilterFound := false
+	for _, filter := range planFilters {
+		if filter.Key == "team" {
+			teamFilterFound = true
+			if filter.Match != "normalized_contains" || !reflect.DeepEqual(filter.Matches, []string{"team", "k12", "prolite"}) {
+				t.Fatalf("unexpected Team oauth plan filter: %+v", filter)
+			}
+			break
 		}
+	}
+	if !teamFilterFound {
+		t.Fatal("Team oauth plan filter is missing")
 	}
 	if info.Metadata["account_import.v1"] == "" {
 		t.Fatal("expected account import capability metadata")
