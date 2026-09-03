@@ -26,4 +26,15 @@ describe('OpenAI AccountIdentity', () => {
     expect(screen.getByText('Pro')).toBeInTheDocument();
     expect(screen.queryByText('Plus')).not.toBeInTheDocument();
   });
+
+  it('displays the self-serve business prolite plan as ProLite', () => {
+    render(<AccountIdentity
+      accountType="oauth"
+      context={{ credentials: { plan_type: 'Self_serve_business_prolite' } }}
+    />);
+
+    expect(screen.getByText('OAuth')).toBeInTheDocument();
+    expect(screen.getByText('ProLite')).toBeInTheDocument();
+    expect(screen.queryByText('Self_serve_business_prolite')).not.toBeInTheDocument();
+  });
 });

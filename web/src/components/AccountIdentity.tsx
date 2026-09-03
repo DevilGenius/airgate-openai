@@ -42,6 +42,11 @@ function titleCase(value: string) {
   return value ? value.charAt(0).toUpperCase() + value.slice(1) : value;
 }
 
+function planLabel(value: string) {
+  if (value.trim().toLowerCase() === 'self_serve_business_prolite') return 'ProLite';
+  return titleCase(value);
+}
+
 const rowStyle: CSSProperties = {
   display: 'flex',
   maxWidth: '100%',
@@ -105,7 +110,7 @@ export function AccountIdentity({ accountType, context }: AccountSurfaceProps) {
       {type && <span style={typeBadgeStyle}>{displayType}</span>}
       {displayPlan && (
         <span style={planBadgeStyle} title={planTitle}>
-          {titleCase(displayPlan)}
+          {planLabel(displayPlan)}
         </span>
       )}
     </div>

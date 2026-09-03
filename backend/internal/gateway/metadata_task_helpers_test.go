@@ -63,6 +63,11 @@ func TestBuildPluginInfoAndRoutes(t *testing.T) {
 	if info.Metadata["account.oauth_plans"] == "" {
 		t.Fatal("expected oauth plan metadata")
 	}
+	for _, plan := range []string{"self_serve_business_prolite", "Self_serve_business_prolite"} {
+		if !strings.Contains(info.Metadata["account.oauth_plans"], `"`+plan+`"`) {
+			t.Fatalf("expected Team oauth plan metadata to include %q", plan)
+		}
+	}
 	if info.Metadata["account_import.v1"] == "" {
 		t.Fatal("expected account import capability metadata")
 	}
