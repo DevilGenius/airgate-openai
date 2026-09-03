@@ -100,16 +100,18 @@ func TestParseSessionJSONAndCredentials(t *testing.T) {
 		t.Fatalf("account name fallback = %q", name)
 	}
 	for key, want := range map[string]string{
-		"access_token":              "at_1",
-		"session_token":             "st_1",
-		"chatgpt_account_id":        "acct_1",
-		"email":                     "user@example.com",
-		"plan_type":                 "plus",
-		"subscription_active_until": "2026-07-01T00:00:00Z",
+		"access_token":       "at_1",
+		"session_token":      "st_1",
+		"chatgpt_account_id": "acct_1",
+		"email":              "user@example.com",
+		"plan_type":          "plus",
 	} {
 		if got := creds[key]; got != want {
 			t.Fatalf("creds[%s] = %q, want %q", key, got, want)
 		}
+	}
+	if _, exists := creds["subscription_active_until"]; exists {
+		t.Fatal("session expiry must not be stored as subscription_active_until")
 	}
 }
 

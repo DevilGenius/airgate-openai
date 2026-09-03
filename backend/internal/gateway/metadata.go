@@ -47,6 +47,7 @@ func BuildPluginInfo() sdk.PluginInfo {
 					{Value: "plus", Label: "Plus"},
 					{Value: "team", Label: "Team"},
 					{Value: "k12", Label: "K12"},
+					{Value: "prolite", Label: "ProLite"},
 					{Value: "free", Label: "Free"},
 				},
 			},

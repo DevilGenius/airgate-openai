@@ -24,6 +24,9 @@ const planDisplayMap: Record<string, { label: string; color: string; bg: string 
   plus: { label: 'Plus', color: '#059669', bg: '#d1fae5' },
   pro: { label: 'Pro', color: '#7c3aed', bg: '#ede9fe' },
   team: { label: 'Team', color: '#2563eb', bg: '#dbeafe' },
+  k12: { label: 'K12', color: '#2563eb', bg: '#dbeafe' },
+  prolite: { label: 'ProLite', color: '#2563eb', bg: '#dbeafe' },
+  self_serve_business_prolite: { label: 'ProLite', color: '#2563eb', bg: '#dbeafe' },
 };
 
 const inputStyle: React.CSSProperties = {
@@ -777,7 +780,8 @@ export function AccountForm({
                 订阅
               </div>
               {planType && (() => {
-                const plan = planDisplayMap[planType] || { label: planType, color: cssVar('text'), bg: cssVar('surfaceSecondary') };
+                const normalizedPlan = planType.trim().toLowerCase();
+                const plan = planDisplayMap[normalizedPlan] || { label: planType, color: cssVar('text'), bg: cssVar('surfaceSecondary') };
                 return (
                   <span style={{
                     display: 'inline-block',

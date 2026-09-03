@@ -327,7 +327,7 @@ func (g *OpenAIGateway) refreshViaSession(ctx context.Context, sessionToken, pro
 }
 
 // credentialsFromSession 把 sessionResponse 转成与 OAuth 浏览器/RT 导入一致的 credentials map。
-// 不写入 refresh_token —— session 路径下用户可能就是没 RT。
+// 不写入 refresh_token；session.expires 是登录会话过期时间，也不能写成订阅到期时间。
 func credentialsFromSession(sess *sessionResponse) (map[string]string, string) {
 	creds := map[string]string{
 		"access_token":  sess.AccessToken,
@@ -341,9 +341,6 @@ func credentialsFromSession(sess *sessionResponse) (map[string]string, string) {
 	}
 	if sess.Account.PlanType != "" {
 		creds["plan_type"] = sess.Account.PlanType
-	}
-	if sess.Expires != "" {
-		creds["subscription_active_until"] = sess.Expires
 	}
 	name := sess.User.Name
 	if name == "" {

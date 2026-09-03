@@ -54,7 +54,13 @@ func TestBuildPluginInfoAndRoutes(t *testing.T) {
 			break
 		}
 	}
-	if adjustmentConfig == nil || adjustmentConfig.Type != "multiselect" || len(adjustmentConfig.Options) != 4 {
+	if adjustmentConfig == nil || adjustmentConfig.Type != "multiselect" || !reflect.DeepEqual(adjustmentConfig.Options, []sdk.ConfigOption{
+		{Value: "plus", Label: "Plus"},
+		{Value: "team", Label: "Team"},
+		{Value: "k12", Label: "K12"},
+		{Value: "prolite", Label: "ProLite"},
+		{Value: "free", Label: "Free"},
+	}) {
 		t.Fatalf("unexpected account pool adjustment config: %#v", adjustmentConfig)
 	}
 	if !reflect.DeepEqual(info.InstructionPresets, []string{"default", "simple", "nsfw", "cc"}) {

@@ -20,6 +20,8 @@ config:
         label: Team
       - value: k12
         label: K12
+      - value: prolite
+        label: ProLite
       - value: free
         label: Free
   - key: codex_fingerprint_mode

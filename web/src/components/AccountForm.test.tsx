@@ -68,6 +68,20 @@ describe('OpenAI AccountForm', () => {
     vi.clearAllMocks();
   });
 
+  it('shows ProLite and keeps its supplied expiry visible', () => {
+    render(<Harness
+      accountType="oauth"
+      mode="edit"
+      credentials={{
+        plan_type: 'Self_serve_business_prolite',
+        subscription_active_until: '2020-01-01T00:00:00Z',
+      }}
+    />);
+
+    expect(screen.getByText('ProLite')).toBeInTheDocument();
+    expect(screen.getByText('有效期至 2020-01-01T00:00:00Z')).toBeInTheDocument();
+  });
+
   it('switches to API key mode and updates key/base URL credentials', async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

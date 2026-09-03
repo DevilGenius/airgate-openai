@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react';
 import type { AccountSurfaceProps } from '@devilgenius/airgate-theme/plugin';
+import { accountPlanLabel, planUsesSubscriptionExpiry } from './accountPlan';
 
 type AccountLike = {
   type?: string;
@@ -36,15 +37,6 @@ function isAgentIdentity(credentials: Record<string, string>) {
     .toLowerCase()
     .replace(/_/g, '');
   return mode === 'agentidentity' || Boolean(credentials.agent_private_key || credentials.agent_runtime_id);
-}
-
-function titleCase(value: string) {
-  return value ? value.charAt(0).toUpperCase() + value.slice(1) : value;
-}
-
-function planLabel(value: string) {
-  if (value.trim().toLowerCase() === 'self_serve_business_prolite') return 'ProLite';
-  return titleCase(value);
 }
 
 const rowStyle: CSSProperties = {
@@ -92,7 +84,10 @@ export function AccountIdentity({ accountType, context }: AccountSurfaceProps) {
   const planType = credentials.plan_type;
   const forcedDisplayPlan = readDisplayPlan(context);
   const subscriptionUntil = credentials.subscription_active_until;
-  const subscriptionExpired = subscriptionUntil ? new Date(subscriptionUntil) < new Date() : false;
+  const subscriptionExpiryApplies = planUsesSubscriptionExpiry(planType);
+  const subscriptionExpired = subscriptionUntil && subscriptionExpiryApplies
+    ? new Date(subscriptionUntil) < new Date()
+    : false;
   const hasQuotaMetadata = type === 'oauth' && (
     planType !== undefined || credentials.email !== undefined || subscriptionUntil !== undefined
   );
@@ -101,7 +96,7 @@ export function AccountIdentity({ accountType, context }: AccountSurfaceProps) {
     ? 'free'
     : rawDisplayPlan;
   const isPaid = displayPlan && displayPlan.toLowerCase() !== 'free';
-  const planTitle = isPaid && subscriptionUntil && !subscriptionExpired
+  const planTitle = isPaid && subscriptionUntil
     ? `过期时间：${new Date(subscriptionUntil).toLocaleDateString()}`
     : undefined;
 
@@ -110,7 +105,7 @@ export function AccountIdentity({ accountType, context }: AccountSurfaceProps) {
       {type && <span style={typeBadgeStyle}>{displayType}</span>}
       {displayPlan && (
         <span style={planBadgeStyle} title={planTitle}>
-          {planLabel(displayPlan)}
+          {accountPlanLabel(displayPlan)}
         </span>
       )}
     </div>
