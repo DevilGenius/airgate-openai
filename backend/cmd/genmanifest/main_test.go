@@ -61,3 +61,27 @@ func TestConvertModelsIncludesGPT56FullPricing(t *testing.T) {
 		}
 	}
 }
+
+func TestConvertModelsIncludesGPT6AstraPricing(t *testing.T) {
+	models := convertModels(model.AllPricingSpecs())
+	byID := make(map[string]modelInfo, len(models))
+	for _, item := range models {
+		byID[item.ID] = item
+	}
+
+	item, ok := byID["gpt-6-astra"]
+	if !ok {
+		t.Fatal("generated models missing gpt-6-astra")
+	}
+	if item.ContextWindow != 1050000 || item.MaxOutputTokens != 128000 {
+		t.Errorf("gpt-6-astra token limits = (%d, %d), want (1050000, 128000)", item.ContextWindow, item.MaxOutputTokens)
+	}
+	if item.InputPrice != 10 || item.CachedInputPrice != 1 || item.CacheCreationPrice != 12.5 || item.OutputPrice != 50 {
+		t.Errorf("gpt-6-astra standard pricing = (%v, %v, %v, %v), want (10, 1, 12.5, 50)",
+			item.InputPrice, item.CachedInputPrice, item.CacheCreationPrice, item.OutputPrice,
+		)
+	}
+	if item.LongContextThreshold != 272000 || item.LongContextInputMultiplier != 2 || item.LongContextCachedMultiplier != 2 || item.LongContextCacheCreationMultiplier != 2 || item.LongContextOutputMultiplier != 1.5 {
+		t.Errorf("gpt-6-astra long context pricing incomplete: %+v", item)
+	}
+}

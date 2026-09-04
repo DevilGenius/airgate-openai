@@ -17,6 +17,11 @@ func TestModelPredicates(t *testing.T) {
 	if IsKnown(" ") {
 		t.Fatal("blank model should not be known")
 	}
+	for _, removed := range []string{"gpt-image-1", "gpt-image-1.5"} {
+		if IsKnown(removed) {
+			t.Fatalf("removed model %q should not be known", removed)
+		}
+	}
 
 	if !IsImageOnly("gpt-image-2") {
 		t.Fatal("gpt-image-2 should be image-only")
@@ -92,11 +97,11 @@ func TestAllModelsAndPricingSpecs(t *testing.T) {
 }
 
 func TestModelInfoMapping(t *testing.T) {
-	image := toModelInfo("gpt-image-1.5", registry["gpt-image-1.5"])
+	image := toModelInfo("gpt-image-2", registry["gpt-image-2"])
 	if image.Name == "" || image.ContextWindow == 0 {
 		t.Fatalf("image model info missing fields: %#v", image)
 	}
-	if got := modelCapabilities(registry["gpt-image-1.5"]); len(got) != 1 || got[0] != sdk.ModelCapImageGeneration {
+	if got := modelCapabilities(registry["gpt-image-2"]); len(got) != 1 || got[0] != sdk.ModelCapImageGeneration {
 		t.Fatalf("image capabilities = %#v", got)
 	}
 	if got := modelCapabilities(registry["gpt-5.4"]); len(got) != 2 || got[0] != sdk.ModelCapChat || got[1] != sdk.ModelCapReasoning {

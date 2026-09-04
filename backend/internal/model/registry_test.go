@@ -19,7 +19,7 @@ func TestLookup_ByKeyword(t *testing.T) {
 		wantMatch string // 期望命中的注册键（按 InputPrice 识别）
 	}{
 		{"未知 codex 系列 → gpt-5.3-codex-spark", "gpt-5.9-codex-preview", "gpt-5.3-codex-spark"},
-		{"未知 image 系列 → gpt-image-1.5", "gpt-image-3", "gpt-image-1.5"},
+		{"未知 image 系列 → gpt-image-2", "gpt-image-3", "gpt-image-2"},
 		{"未知 mini 系列 → gpt-5.4-mini", "gpt-5.9-mini", "gpt-5.4-mini"},
 		{"未知 nano 系列 → gpt-5.4-mini", "gpt-5.9-nano", "gpt-5.4-mini"},
 		{"未知 gpt-5 系列 → gpt-5.4", "gpt-5.9", "gpt-5.4"},
@@ -42,6 +42,25 @@ func TestLookup_ByKeyword(t *testing.T) {
 
 // TestLookup_KnownModelUnchanged 已注册模型不受关键词兜底影响。
 func TestLookup_KnownModelUnchanged(t *testing.T) {
+	t.Run("gpt-6-astra", func(t *testing.T) {
+		spec := Lookup("gpt-6-astra")
+		if spec.InputPrice != 10.0 || spec.CachedPrice != 1.0 || spec.CacheCreationPrice != 12.5 || spec.OutputPrice != 50.0 {
+			t.Errorf("gpt-6-astra 定价变化: In=%v Cached=%v CacheCreation=%v Out=%v", spec.InputPrice, spec.CachedPrice, spec.CacheCreationPrice, spec.OutputPrice)
+		}
+		if spec.ContextWindow != 1050000 {
+			t.Errorf("gpt-6-astra ContextWindow = %v, want 1050000", spec.ContextWindow)
+		}
+		if spec.MaxOutputTokens != 128000 {
+			t.Errorf("gpt-6-astra MaxOutputTokens = %v, want 128000", spec.MaxOutputTokens)
+		}
+		if spec.LongContextThreshold != 272000 {
+			t.Errorf("gpt-6-astra LongContextThreshold = %v, want 272000", spec.LongContextThreshold)
+		}
+		if spec.LongContextInputMultiplier != 2 || spec.LongContextCachedMultiplier != 2 || spec.LongContextCacheCreationMultiplier != 2 || spec.LongContextOutputMultiplier != 1.5 {
+			t.Errorf("gpt-6-astra 长上下文倍率变化: In=%v Cached=%v CacheCreation=%v Out=%v", spec.LongContextInputMultiplier, spec.LongContextCachedMultiplier, spec.LongContextCacheCreationMultiplier, spec.LongContextOutputMultiplier)
+		}
+	})
+
 	t.Run("gpt-5.5", func(t *testing.T) {
 		spec := Lookup("gpt-5.5")
 		if spec.InputPrice != 5.0 || spec.OutputPrice != 30.0 || spec.CachedPrice != 0.5 {

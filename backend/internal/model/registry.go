@@ -121,6 +121,9 @@ func withLongCtx(s Spec) Spec {
 // registry 全局模型注册表（按模型 ID 索引）
 // ─── 新增模型只需在此处加一行 ───
 var registry = map[string]Spec{
+	// ── GPT-6 ──
+	"gpt-6-astra": withLongCtx(withCacheCreationPrice(std("GPT-6-Astra", 1050000, 128000, 10.0, 1.0, 50.0), 12.5)),
+
 	"gpt-5.5": withPriorityMultiplier(std("GPT 5.5", 272000, 128000, 5.0, 0.5, 30.0), 2.5),
 
 	// ── GPT-5.6 ──
@@ -142,9 +145,7 @@ var registry = map[string]Spec{
 	// "gpt-5.2": std("GPT 5.2", 272000, 128000, 1.75, 0.175, 14.0),
 
 	// ── 图像生成：标准成本按 token 计，分组图片固定单价由 Core 替代最终计费 ──
-	"gpt-image-1":   imgSpec("GPT Image 1", 5.0, 0.5, 30.0, 0.20),
-	"gpt-image-1.5": imgSpec("GPT Image 1.5", 5.0, 0.5, 30.0, 0.20),
-	"gpt-image-2":   imgSpec("GPT Image 2", 5.0, 0.5, 30.0, 0.20),
+	"gpt-image-2": imgSpec("GPT Image 2", 5.0, 0.5, 30.0, 0.20),
 }
 
 // DefaultSpec 未注册模型的最终兜底值。按 gpt-5.4 标准档计价——宁可略高也不能 0。
@@ -176,7 +177,7 @@ func fallbackByKeyword(id string) (Spec, bool) {
 	case strings.Contains(id, "codex"):
 		return registry["gpt-5.3-codex-spark"], true
 	case strings.Contains(id, "image"):
-		return registry["gpt-image-1.5"], true
+		return registry["gpt-image-2"], true
 	case strings.Contains(id, "mini") || strings.Contains(id, "nano"):
 		return registry["gpt-5.4-mini"], true
 	case strings.Contains(id, "gpt-5") || strings.HasPrefix(id, "gpt5") ||

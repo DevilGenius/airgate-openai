@@ -49,7 +49,7 @@ func TestShouldRetryImageFallbackSkipsRateLimit(t *testing.T) {
 	}
 }
 
-func TestFillUsageCostGPT56FullPricing(t *testing.T) {
+func TestFillUsageCostLongContextPricing(t *testing.T) {
 	cases := []struct {
 		model              string
 		shortInput         float64
@@ -61,6 +61,7 @@ func TestFillUsageCostGPT56FullPricing(t *testing.T) {
 		longCacheCreation  float64
 		longOutput         float64
 	}{
+		{"gpt-6-astra", 10, 1, 12.5, 50, 20, 2, 25, 75},
 		{"gpt-5.6-sol", 5, 0.5, 6.25, 30, 10, 1, 12.5, 45},
 		{"gpt-5.6-terra", 2, 0.2, 2.5, 12, 4, 0.4, 5, 18},
 		{"gpt-5.6-luna", 1, 0.1, 1.25, 6, 2, 0.2, 2.5, 9},
