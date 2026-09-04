@@ -9,6 +9,9 @@ func TestLookup_UnknownModelFallsBackToBillablePrice(t *testing.T) {
 	if spec.InputPrice <= 0 || spec.OutputPrice <= 0 {
 		t.Fatalf("未知模型必须有兜底价格；InputPrice=%v OutputPrice=%v", spec.InputPrice, spec.OutputPrice)
 	}
+	if spec != Lookup("gpt-5.5") {
+		t.Fatalf("unknown model pricing = %+v, want GPT-5.5 pricing", spec)
+	}
 }
 
 // TestLookup_ByKeyword 按关键词推断到对应系列。
@@ -22,10 +25,11 @@ func TestLookup_ByKeyword(t *testing.T) {
 		{"未知 image 系列 → gpt-image-2", "gpt-image-3", "gpt-image-2"},
 		{"未知 mini 系列 → gpt-5.4-mini", "gpt-5.9-mini", "gpt-5.4-mini"},
 		{"未知 nano 系列 → gpt-5.4-mini", "gpt-5.9-nano", "gpt-5.4-mini"},
-		{"未知 gpt-5 系列 → gpt-5.4", "gpt-5.9", "gpt-5.4"},
-		{"o1 推理模型 → gpt-5.4", "o1-preview", "gpt-5.4"},
-		{"o3 推理模型 → gpt-5.4", "o3-mini", "gpt-5.4-mini"}, // "mini" 优先
-		{"gpt-4 系列 → gpt-5.4（偏保守）", "gpt-4o", "gpt-5.4"},
+		{"未知 gpt-5 系列 → gpt-5.5", "gpt-5.9", "gpt-5.5"},
+		{"移除的 gpt-5.4 → gpt-5.5", "gpt-5.4", "gpt-5.5"},
+		{"o1 推理模型 → gpt-5.5", "o1-preview", "gpt-5.5"},
+		{"o3 mini 推理模型 → gpt-5.4-mini", "o3-mini", "gpt-5.4-mini"}, // "mini" 优先
+		{"gpt-4 系列 → gpt-5.5（偏保守）", "gpt-4o", "gpt-5.5"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -74,25 +78,6 @@ func TestLookup_KnownModelUnchanged(t *testing.T) {
 		}
 		if spec.InputPriceFast != 0 || spec.OutputPriceFast != 0 || spec.CachedPriceFast != 0 {
 			t.Errorf("gpt-5.5 不应配置 fast 定价: In=%v Out=%v Cached=%v", spec.InputPriceFast, spec.OutputPriceFast, spec.CachedPriceFast)
-		}
-	})
-
-	t.Run("gpt-5.4", func(t *testing.T) {
-		spec := Lookup("gpt-5.4")
-		if spec.InputPrice != 2.5 || spec.OutputPrice != 15.0 {
-			t.Errorf("gpt-5.4 定价变化: In=%v Out=%v", spec.InputPrice, spec.OutputPrice)
-		}
-		if spec.ContextWindow != 1050000 {
-			t.Errorf("gpt-5.4 ContextWindow = %v, want 1050000", spec.ContextWindow)
-		}
-		if spec.LongContextThreshold != 272000 {
-			t.Errorf("gpt-5.4 LongContextThreshold = %v, want 272000", spec.LongContextThreshold)
-		}
-		if spec.CacheCreationPrice != 0 {
-			t.Errorf("gpt-5.4 CacheCreationPrice = %v, want 0", spec.CacheCreationPrice)
-		}
-		if spec.LongContextCacheCreationMultiplier != 0 {
-			t.Errorf("gpt-5.4 LongContextCacheCreationMultiplier = %v, want 0", spec.LongContextCacheCreationMultiplier)
 		}
 	})
 

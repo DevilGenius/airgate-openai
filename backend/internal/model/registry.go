@@ -131,9 +131,6 @@ var registry = map[string]Spec{
 	"gpt-5.6-terra": withLongCtx(withCacheCreationPrice(std("GPT-5.6-Terra", 372000, 128000, 2.0, 0.2, 12.0), 2.5)),
 	"gpt-5.6-luna":  withLongCtx(withCacheCreationPrice(std("GPT-5.6-Luna", 372000, 128000, 1.0, 0.1, 6.0), 1.25)),
 
-	// ── GPT-5.4 ──
-	"gpt-5.4": withLongCtx(std("GPT 5.4", 1050000, 128000, 2.5, 0.25, 15.0)),
-
 	// ── Codex 5.x ──
 	// gpt-5.3-codex 已失效，保留历史配置但不再注册。
 	// "gpt-5.3-codex": std("GPT 5.3 Codex", 272000, 128000, 1.75, 0.175, 14.0),
@@ -148,14 +145,14 @@ var registry = map[string]Spec{
 	"gpt-image-2": imgSpec("GPT Image 2", 5.0, 0.5, 30.0, 0.20),
 }
 
-// DefaultSpec 未注册模型的最终兜底值。按 gpt-5.4 标准档计价——宁可略高也不能 0。
+// DefaultSpec 未注册模型的最终兜底值。按 gpt-5.5 标准档计价——宁可略高也不能 0。
 // （0 价格会导致免费流量，之前一个 bug 来源。）
-var DefaultSpec = withLongCtx(std("Unknown (billed as gpt-5.4)", 272000, 128000, 2.5, 0.25, 15.0))
+var DefaultSpec = registry["gpt-5.5"]
 
 // Lookup 查询模型元数据。未命中注册表时按关键字推断到最接近的系列，仍无法匹配再落 DefaultSpec。
 //
 // 这避免了"客户端请求未知模型 → Spec 全 0 → cost=0 免费使用"的坑：只要能看出系列
-// （mini / codex / image / gpt-5 等），就按对应系列定价；彻底不认识的兜底到 GPT-5.4 标准价。
+// （mini / codex / image / gpt-5 等），就按对应系列定价；彻底不认识的兜底到 GPT-5.5 标准价。
 func Lookup(modelID string) Spec {
 	id := strings.ToLower(strings.TrimSpace(modelID))
 	if spec, ok := registry[id]; ok {
@@ -182,10 +179,10 @@ func fallbackByKeyword(id string) (Spec, bool) {
 		return registry["gpt-5.4-mini"], true
 	case strings.Contains(id, "gpt-5") || strings.HasPrefix(id, "gpt5") ||
 		strings.Contains(id, "o1") || strings.Contains(id, "o3") || strings.Contains(id, "o4"):
-		return registry["gpt-5.4"], true
+		return registry["gpt-5.5"], true
 	case strings.Contains(id, "gpt-4") || strings.HasPrefix(id, "gpt4"):
-		// gpt-4 系列未显式注册，按 gpt-5.4 标准价计（偏保守）
-		return registry["gpt-5.4"], true
+		// gpt-4 系列未显式注册，按 gpt-5.5 标准价计（偏保守）
+		return registry["gpt-5.5"], true
 	}
 	return Spec{}, false
 }

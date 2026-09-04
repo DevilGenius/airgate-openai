@@ -45,6 +45,12 @@ func TestOAuthModelRerouteOutcome(t *testing.T) {
 			path: "/v1/responses",
 		},
 		{
+			name:       "removed GPT-5.4 reroutes to GPT-5.5",
+			req:        oauthModelRerouteTestRequest("gpt-5.4", "gpt-5.4", "gpt-5.4"),
+			path:       "/v1/responses",
+			wantTarget: "gpt-5.5",
+		},
+		{
 			name: "api key forwarding preserves unknown model",
 			req: func() *sdk.ForwardRequest {
 				req := oauthModelRerouteTestRequest("codex-auto-review", "codex-auto-review", "codex-auto-review")

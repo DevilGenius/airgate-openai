@@ -8,7 +8,7 @@ import (
 )
 
 func TestModelPredicates(t *testing.T) {
-	if !IsKnown(" GPT-5.4 ") {
+	if !IsKnown(" GPT-5.5 ") {
 		t.Fatal("IsKnown should trim and normalize registered IDs")
 	}
 	if IsKnown("gpt-5.9") {
@@ -17,7 +17,7 @@ func TestModelPredicates(t *testing.T) {
 	if IsKnown(" ") {
 		t.Fatal("blank model should not be known")
 	}
-	for _, removed := range []string{"gpt-image-1", "gpt-image-1.5"} {
+	for _, removed := range []string{"gpt-5.4", "gpt-image-1", "gpt-image-1.5"} {
 		if IsKnown(removed) {
 			t.Fatalf("removed model %q should not be known", removed)
 		}
@@ -29,7 +29,7 @@ func TestModelPredicates(t *testing.T) {
 	if !IsImageOnly("future-image-model") {
 		t.Fatal("image keyword fallback should be image-only")
 	}
-	if IsImageOnly("gpt-5.4") {
+	if IsImageOnly("gpt-5.5") {
 		t.Fatal("chat model should not be image-only")
 	}
 }
@@ -56,6 +56,9 @@ func TestAllSpecsFilteringAndSorting(t *testing.T) {
 	assertSortedModelInfos(t, withImages)
 	foundImage := false
 	for _, m := range withImages {
+		if m.ID == "gpt-5.4" {
+			t.Fatal("AllSpecs(true) must not include removed GPT-5.4")
+		}
 		if m.ID == "gpt-image-2" {
 			foundImage = true
 			if !(&m).HasCapability(sdk.ModelCapImageGeneration) {
@@ -104,7 +107,7 @@ func TestModelInfoMapping(t *testing.T) {
 	if got := modelCapabilities(registry["gpt-image-2"]); len(got) != 1 || got[0] != sdk.ModelCapImageGeneration {
 		t.Fatalf("image capabilities = %#v", got)
 	}
-	if got := modelCapabilities(registry["gpt-5.4"]); len(got) != 2 || got[0] != sdk.ModelCapChat || got[1] != sdk.ModelCapReasoning {
+	if got := modelCapabilities(registry["gpt-5.5"]); len(got) != 2 || got[0] != sdk.ModelCapChat || got[1] != sdk.ModelCapReasoning {
 		t.Fatalf("chat capabilities = %#v", got)
 	}
 }

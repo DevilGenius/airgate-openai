@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	defaultLongContextModel = "gpt-5.4"
+	defaultLongContextModel = "gpt-5.6-sol"
 	longContextModelEnv     = "AIRGATE_MODEL_LONG_CONTEXT"
 )
 

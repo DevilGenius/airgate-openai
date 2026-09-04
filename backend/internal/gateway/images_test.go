@@ -923,7 +923,7 @@ func TestParseSSEUsage_ToolImageGen(t *testing.T) {
 	data := []byte(`{
 		"type":"response.completed",
 		"response":{
-			"model":"gpt-5.4",
+			"model":"gpt-5.6-luna",
 			"usage":{"input_tokens":100,"output_tokens":50},
 			"tool_usage":{"image_gen":{"input_tokens":8,"output_tokens":4160}}
 		}
@@ -931,8 +931,8 @@ func TestParseSSEUsage_ToolImageGen(t *testing.T) {
 	usage := &sdk.Usage{}
 	var toolIn, toolOut int
 	parseSSEUsage(data, usage, &toolIn, &toolOut)
-	if usage.Model != "gpt-5.4" {
-		t.Errorf("Model = %q, want gpt-5.4", usage.Model)
+	if usage.Model != "gpt-5.6-luna" {
+		t.Errorf("Model = %q, want gpt-5.6-luna", usage.Model)
 	}
 	if usageMetricInt(usage, usageMetricInputTokens) != 100 || usageMetricInt(usage, usageMetricOutputTokens) != 50 {
 		t.Errorf("Input/Output = %d/%d, want 100/50", usageMetricInt(usage, usageMetricInputTokens), usageMetricInt(usage, usageMetricOutputTokens))
@@ -945,20 +945,20 @@ func TestParseSSEUsage_ToolImageGen(t *testing.T) {
 // TestFillUsageCostWithImageTool 验证主 model token 按其单价计费，image tool
 // 的固定单张价只写入 metadata，由 Core 决定是否替代最终计费。
 func TestFillUsageCostWithImageTool(t *testing.T) {
-	usage := newTokenUsage("gpt-5.4", "", 1000, 500, 0, 0, 0, 0)
+	usage := newTokenUsage("gpt-5.6-luna", "", 1000, 500, 0, 0, 0, 0)
 	fillUsageCostWithImageTool(usage, 1, "1024x1024")
 
-	// 主 gpt-5.4 standard: input=$2.5/1M → 0.0025, output=$15/1M → 0.0075
+	// 主 gpt-5.6-luna standard: input=$1/1M → 0.001, output=$6/1M → 0.003
 	// image tool 单张价只进入 metadata；标准成本仍是 token 成本。
-	// total account cost = 0.0025 + 0.0075 = 0.0100
-	if !almostEqual(usage.InputCost, 0.0025, 1e-9) {
-		t.Errorf("input cost = %v, want 0.0025", usage.InputCost)
+	// total account cost = 0.001 + 0.003 = 0.004
+	if !almostEqual(usage.InputCost, 0.001, 1e-9) {
+		t.Errorf("input cost = %v, want 0.001", usage.InputCost)
 	}
-	if !almostEqual(usage.AccountCost, 0.0100, 1e-9) {
-		t.Errorf("AccountCost = %v, want 0.0100", usage.AccountCost)
+	if !almostEqual(usage.AccountCost, 0.004, 1e-9) {
+		t.Errorf("AccountCost = %v, want 0.004", usage.AccountCost)
 	}
-	if got := usage.InputPrice; !almostEqual(got, 2.5, 1e-9) {
-		t.Errorf("input unit price = %v, want 2.5", got)
+	if got := usage.InputPrice; !almostEqual(got, 1, 1e-9) {
+		t.Errorf("input unit price = %v, want 1", got)
 	}
 	if got := usageImageUnitPrice(usage); got != "0.1" {
 		t.Errorf("image unit price = %q, want 0.1", got)
@@ -967,7 +967,7 @@ func TestFillUsageCostWithImageTool(t *testing.T) {
 
 func TestFillUsageCostPerImageBySize_ReplacesContextCostWithImageModelTokenCost(t *testing.T) {
 	usage := newTokenUsage("gpt-image-2", "", 12, 0, 0, 0, 0, 0)
-	addUsageCostForModel(usage, "gpt-5.4", "", 1000, 500, 0, 0, 0)
+	addUsageCostForModel(usage, "gpt-5.6-luna", "", 1000, 500, 0, 0, 0)
 	setUsageTokens(usage, 12, 1056, 0, 0, 0)
 	fillUsageCostPerImageBySize(usage, 1, "1024x1024")
 
@@ -996,13 +996,13 @@ func TestFillUsageCostPerImageBySize_ReplacesContextCostWithImageModelTokenCost(
 
 // TestFillUsageCostWithImageTool_NoToolUsage 退化为 fillUsageCost 行为不变。
 func TestFillUsageCostWithImageTool_NoToolUsage(t *testing.T) {
-	usage := newTokenUsage("gpt-5.4", "", 1000, 500, 0, 0, 0, 0)
+	usage := newTokenUsage("gpt-5.6-luna", "", 1000, 500, 0, 0, 0, 0)
 	fillUsageCostWithImageTool(usage, 0, "")
 	if usageMetricInt(usage, usageMetricInputTokens) != 1000 || usageMetricInt(usage, usageMetricOutputTokens) != 500 {
 		t.Errorf("token counts mutated when no image tool usage")
 	}
-	if !almostEqual(usage.InputCost, 0.0025, 1e-9) {
-		t.Errorf("input cost = %v, want 0.0025", usage.InputCost)
+	if !almostEqual(usage.InputCost, 0.001, 1e-9) {
+		t.Errorf("input cost = %v, want 0.001", usage.InputCost)
 	}
 }
 
@@ -1323,6 +1323,20 @@ func TestImageTaskQualityEcho(t *testing.T) {
 	}
 }
 
+func TestBuildImagesToolCreateMsgUsesGPT56LunaForImage2(t *testing.T) {
+	body := []byte(`{"model":"gpt-image-2","prompt":"a shiba","size":"1024x1024"}`)
+	message, _, _, err := buildImagesToolCreateMsg(body, "application/json", false, openAISessionResolution{})
+	if err != nil {
+		t.Fatalf("buildImagesToolCreateMsg() error = %v", err)
+	}
+	if got := gjson.GetBytes(message, "model").String(); got != "gpt-5.6-luna" {
+		t.Fatalf("image generation chat model = %q, want gpt-5.6-luna", got)
+	}
+	if got := gjson.GetBytes(message, "tools.0.type").String(); got != "image_generation" {
+		t.Fatalf("image generation tool = %q, want image_generation", got)
+	}
+}
+
 // TestBuildImagesToolCreateMsg 翻译 Images REST 请求体为 Responses API
 // response.create 消息，tool 配置保持 Codex 对齐的极简 schema。
 func TestBuildImagesToolCreateMsg(t *testing.T) {
@@ -1342,8 +1356,8 @@ func TestBuildImagesToolCreateMsg(t *testing.T) {
 	if gjson.GetBytes(msg, "type").String() != "response.create" {
 		t.Errorf("type = %q, want response.create", gjson.GetBytes(msg, "type").String())
 	}
-	if gjson.GetBytes(msg, "model").String() != imagesOAuthChatModel {
-		t.Errorf("model = %q, want %q", gjson.GetBytes(msg, "model").String(), imagesOAuthChatModel)
+	if gjson.GetBytes(msg, "model").String() != "gpt-5.6-luna" {
+		t.Errorf("model = %q, want gpt-5.6-luna", gjson.GetBytes(msg, "model").String())
 	}
 	if gjson.GetBytes(msg, "tool_choice").String() != "auto" {
 		t.Errorf("tool_choice = %q, want auto", gjson.GetBytes(msg, "tool_choice").String())
@@ -2597,7 +2611,7 @@ func TestForwardImagesViaResponsesTool_Downgrades4KTo2KAfterFailure(t *testing.T
 				"type": "response.failed",
 				"response": map[string]any{
 					"id":    "resp_fail",
-					"model": "gpt-5.4",
+					"model": "gpt-5.6-luna",
 					"error": map[string]any{
 						"type":    "server_error",
 						"message": "temporary 4k image failure",
@@ -2611,7 +2625,7 @@ func TestForwardImagesViaResponsesTool_Downgrades4KTo2KAfterFailure(t *testing.T
 			"type": "response.created",
 			"response": map[string]any{
 				"id":    "resp_2",
-				"model": "gpt-5.4",
+				"model": "gpt-5.6-luna",
 				"tools": []map[string]any{{"type": "image_generation", "model": "gpt-image-2"}},
 			},
 		})
@@ -2632,7 +2646,7 @@ func TestForwardImagesViaResponsesTool_Downgrades4KTo2KAfterFailure(t *testing.T
 			"type": "response.completed",
 			"response": map[string]any{
 				"id":          "resp_2",
-				"model":       "gpt-5.4",
+				"model":       "gpt-5.6-luna",
 				"usage":       map[string]any{"input_tokens": 12, "output_tokens": 34},
 				"tool_usage":  map[string]any{"image_gen": map[string]any{"input_tokens": 0, "output_tokens": 0}},
 				"output":      []map[string]any{{"type": "image_generation_call", "id": "call_2"}},
@@ -2715,7 +2729,7 @@ func TestForwardImagesViaResponsesTool_UsesWebSocketForLargeEditImage(t *testing
 			"type": "response.created",
 			"response": map[string]any{
 				"id":    "resp_1",
-				"model": "gpt-5.4",
+				"model": "gpt-5.6-luna",
 				"tools": []map[string]any{{"type": "image_generation", "model": "gpt-image-1.5"}},
 			},
 		})
@@ -2736,7 +2750,7 @@ func TestForwardImagesViaResponsesTool_UsesWebSocketForLargeEditImage(t *testing
 			"type": "response.completed",
 			"response": map[string]any{
 				"id":           "resp_1",
-				"model":        "gpt-5.4",
+				"model":        "gpt-5.6-luna",
 				"usage":        map[string]any{"input_tokens": 12, "output_tokens": 34},
 				"tool_usage":   map[string]any{"image_gen": map[string]any{"input_tokens": 7, "output_tokens": 9}},
 				"output":       []map[string]any{{"type": "image_generation_call", "id": "call_1"}},

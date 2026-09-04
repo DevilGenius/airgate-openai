@@ -356,7 +356,7 @@ func (g *OpenAIGateway) validateAPIKeyViaModels(ctx context.Context, account *sd
 func (g *OpenAIGateway) validateAPIKeyViaResponses(ctx context.Context, account *sdk.Account, apiKey string) error {
 	targetURL := buildAPIKeyURL(account, "/v1/responses")
 	body, err := json.Marshal(map[string]any{
-		"model":             "gpt-5.4",
+		"model":             "gpt-5.5",
 		"input":             "Reply with just ok.",
 		"max_output_tokens": 8,
 	})

@@ -40,7 +40,7 @@ var (
 		"ANTHROPIC_DEFAULT_FABLE_MODEL",
 	)
 	fableFallbackModel = resolveRoleTargetModel(
-		"gpt-5.4",
+		"gpt-5.5",
 		"AIRGATE_MODEL_FABLE_FALLBACK",
 	)
 	opusTargetModel = resolveRoleTargetModel(
@@ -58,7 +58,7 @@ var (
 		"ANTHROPIC_DEFAULT_SONNET_MODEL",
 	)
 	sonnetFallbackModel = resolveRoleTargetModel(
-		"gpt-5.4",
+		"gpt-5.5",
 		"AIRGATE_MODEL_SONNET_FALLBACK",
 	)
 	haikuTargetModel = resolveRoleTargetModel(

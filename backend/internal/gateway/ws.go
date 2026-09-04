@@ -60,7 +60,7 @@ type WSResult struct {
 	ReasoningOutputTokens int
 	// ToolImageInputTokens / ToolImageOutputTokens 来自 response.usage.tool_usage.image_gen
 	// 或 response.completed 的 tool_usage 字段。按 gpt-image-1.5 单价单独计费，
-	// 因为主 model（通常是 gpt-5.4）与图像工具内部模型的单价不同。
+	// 因为主 model（通常是 gpt-5.6-luna）与图像工具内部模型的单价可能不同。
 	ToolImageInputTokens  int
 	ToolImageOutputTokens int
 	// ImageGenCalls 捕获 Responses API 返回的 image_generation_call output items，

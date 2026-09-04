@@ -164,8 +164,8 @@ func TestBuildPluginInfoAndRoutes(t *testing.T) {
 
 func TestLongContextModelConfiguration(t *testing.T) {
 	t.Setenv(longContextModelEnv, "")
-	if got := configuredLongContextModel(); got != defaultLongContextModel {
-		t.Fatalf("configuredLongContextModel() = %q, want default %q", got, defaultLongContextModel)
+	if got := configuredLongContextModel(); got != "gpt-5.6-sol" {
+		t.Fatalf("configuredLongContextModel() = %q, want gpt-5.6-sol", got)
 	}
 
 	t.Setenv(longContextModelEnv, "openai/gpt-long")

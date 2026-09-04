@@ -30,18 +30,16 @@ import (
 )
 
 // imagesOAuthChatModel OAuth 下 REST→tools 翻译时使用的主 chat 模型。
-// Codex 官方 $imagegen 技能同样用 gpt-5.4 作为主 model，image_generation 作为
-// tool 内部用 gpt-image-1.5。
-const imagesOAuthChatModel = "gpt-5.4"
+const imagesOAuthChatModel = "gpt-5.6-luna"
 
-// imagesPassthroughInstructions 强制 gpt-5.4 只做"调工具"这一件事，不发挥创意。
+// imagesPassthroughInstructions 强制 gpt-5.6-luna 只做"调工具"这一件事，不发挥创意。
 // 原因：
 //   - 客户端调 /v1/images/generations 期望的是 prompt 直达上游，而 Responses API
 //     的调用链必须先过一个 chat 模型再触发 image_generation 工具；
-//   - 如果给 gpt-5.4 用通用的 Codex/助理 instructions，它会把 prompt 扩写成一大段
+//   - 如果给主 chat 模型用通用的 Codex/助理 instructions，它会把 prompt 扩写成一大段
 //     "构图/灯光/配色/风格"的创意导演描述（revised_prompt 明显变长），用户体感就是
 //     "prompt 被改了"。
-//   - 这里用极简指令把 gpt-5.4 的角色压缩成"透传路由"，只会补合规改写（如真实人物
+//   - 这里用极简指令把主 chat 模型的角色压缩成"透传路由"，只会补合规改写（如真实人物
 //     换成匿名替身，这是 OpenAI 侧硬编码的安全策略，instruction 拦不住）。
 const imagesPassthroughInstructions = "Use the user's image description and appended Image API constraints as the image_generation prompt. Preserve the user's original description verbatim; do not rewrite, elaborate, or add details about style, composition, lighting, color, mood, or any elements the user did not explicitly request. Treat Image API constraints as generation parameters, not visible text. Do not answer with text."
 
@@ -1727,7 +1725,7 @@ func buildImagesToolCreateMsgWithUsage(
 	}
 	// image_generation tool 把 size/quality/background 当作"工具默认参数"——
 	// 上游每次调用该 tool 都按这些值执行。早先版本只把这些塞到 prompt constraints
-	// 文本里，但中间那个 chat 模型（gpt-5.4）在触发 image_generation tool 时不会把
+	// 文本里，但中间那个 chat 模型（gpt-5.6-luna）在触发 image_generation tool 时不会把
 	// prompt 文本翻译成 tool args，结果上游 image_generation 收不到 size，永远按
 	// 默认 1024×1024 出图——客户端选 4K 完全失效。
 	// constraints 文本仍保留作为兜底（双轨制），但 tool 字段是权威来源。

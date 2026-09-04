@@ -184,14 +184,14 @@ func TestFillUsageCostCacheWriteTokens(t *testing.T) {
 }
 
 func TestFillUsageCostCacheWriteFallsBackToInputPrice(t *testing.T) {
-	usage := newTokenUsage("gpt-5.4", "", 70, 0, 0, 30, 0, 0)
+	usage := newTokenUsage("gpt-5.5", "", 70, 0, 0, 30, 0, 0)
 	fillUsageCost(usage)
 
-	if usage.CacheCreationPrice != usage.InputPrice || usage.CacheCreationPrice != 2.5 {
-		t.Fatalf("cache write price = %v, input price = %v, want both 2.5", usage.CacheCreationPrice, usage.InputPrice)
+	if usage.CacheCreationPrice != usage.InputPrice || usage.CacheCreationPrice != 5 {
+		t.Fatalf("cache write price = %v, input price = %v, want both 5", usage.CacheCreationPrice, usage.InputPrice)
 	}
-	if !almostEqual(usage.AccountCost, 0.00025, 1e-12) {
-		t.Fatalf("account cost = %v, want 0.00025", usage.AccountCost)
+	if !almostEqual(usage.AccountCost, 0.0005, 1e-12) {
+		t.Fatalf("account cost = %v, want 0.0005", usage.AccountCost)
 	}
 }
 
