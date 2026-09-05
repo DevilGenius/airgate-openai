@@ -21,8 +21,8 @@ func TestForwardOAuthUnknownModelRequestsReroute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Forward() error = %v", err)
 	}
-	if target, ok := outcome.ModelRerouteClientTarget(); !ok || target != "gpt-5.6-luna" {
-		t.Fatalf("Forward() outcome = %+v, want gpt-5.6-luna model reroute", outcome)
+	if target, ok := outcome.ModelRerouteClientTarget(); !ok || target != "gpt-5.5" {
+		t.Fatalf("Forward() outcome = %+v, want gpt-5.5 model reroute", outcome)
 	}
 	if outcome.Upstream.StatusCode != http.StatusBadRequest {
 		t.Fatalf("Forward() status = %d, want %d", outcome.Upstream.StatusCode, http.StatusBadRequest)
@@ -45,10 +45,15 @@ func TestOAuthModelRerouteOutcome(t *testing.T) {
 			path: "/v1/responses",
 		},
 		{
-			name:       "removed GPT-5.4 reroutes to GPT-5.6-Luna",
+			name: "explicit Luna model is unchanged",
+			req:  oauthModelRerouteTestRequest("gpt-5.6-luna", "gpt-5.6-luna", "gpt-5.6-luna"),
+			path: "/v1/responses",
+		},
+		{
+			name:       "removed GPT-5.4 reroutes to GPT-5.5",
 			req:        oauthModelRerouteTestRequest("gpt-5.4", "gpt-5.4", "gpt-5.4"),
 			path:       "/v1/responses",
-			wantTarget: "gpt-5.6-luna",
+			wantTarget: "gpt-5.5",
 		},
 		{
 			name: "api key forwarding preserves unknown model",
@@ -61,19 +66,19 @@ func TestOAuthModelRerouteOutcome(t *testing.T) {
 		},
 		{
 			name: "rerouted dispatch plan does not loop on original client model",
-			req:  oauthModelRerouteTestRequest("codex-auto-review", "gpt-5.6-luna", "gpt-5.6-luna"),
+			req:  oauthModelRerouteTestRequest("codex-auto-review", "gpt-5.5", "gpt-5.5"),
 			path: "/v1/responses",
 		},
 		{
 			name: "wire model controls resolution independently of scheduling pool",
-			req:  oauthModelRerouteTestRequest("codex-auto-review", "review-pool", "gpt-5.6-luna"),
+			req:  oauthModelRerouteTestRequest("codex-auto-review", "review-pool", "gpt-5.5"),
 			path: "/v1/responses",
 		},
 		{
 			name:       "chat completions uses the same Codex upstream resolution",
 			req:        oauthModelRerouteTestRequest("codex-auto-review", "codex-auto-review", "codex-auto-review"),
 			path:       "/v1/chat/completions",
-			wantTarget: "gpt-5.6-luna",
+			wantTarget: "gpt-5.5",
 		},
 		{
 			name: "responses compact keeps its dedicated mapping",
