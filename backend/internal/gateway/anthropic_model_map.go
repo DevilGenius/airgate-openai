@@ -32,10 +32,10 @@ type anthropicModelPolicy struct {
 var (
 	defaultClaudeTargetModel = normalizeModelID(
 		firstNonEmptyEnv("AIRGATE_DEFAULT_CLAUDE_MODEL"),
-		"gpt-5.5",
+		"gpt-5.6-sol",
 	)
 	fableTargetModel = resolveRoleTargetModel(
-		"gpt-5.6-sol",
+		"gpt-6-astra",
 		"AIRGATE_MODEL_FABLE",
 		"ANTHROPIC_DEFAULT_FABLE_MODEL",
 	)
@@ -44,7 +44,7 @@ var (
 		"AIRGATE_MODEL_FABLE_FALLBACK",
 	)
 	opusTargetModel = resolveRoleTargetModel(
-		"gpt-5.6-terra",
+		"gpt-5.6-sol",
 		"AIRGATE_MODEL_OPUS",
 		"ANTHROPIC_DEFAULT_OPUS_MODEL",
 	)
@@ -53,7 +53,7 @@ var (
 		"AIRGATE_MODEL_OPUS_FALLBACK",
 	)
 	sonnetTargetModel = resolveRoleTargetModel(
-		"gpt-5.6-luna",
+		"gpt-5.6-terra",
 		"AIRGATE_MODEL_SONNET",
 		"ANTHROPIC_DEFAULT_SONNET_MODEL",
 	)
@@ -62,7 +62,7 @@ var (
 		"AIRGATE_MODEL_SONNET_FALLBACK",
 	)
 	haikuTargetModel = resolveRoleTargetModel(
-		"gpt-5.3-codex-spark",
+		"gpt-5.6-luna",
 		"AIRGATE_MODEL_HAIKU",
 		"ANTHROPIC_DEFAULT_HAIKU_MODEL",
 	)
@@ -71,7 +71,7 @@ var (
 		"AIRGATE_MODEL_HAIKU_FALLBACK",
 	)
 	defaultClaudeFallbackModel = resolveRoleTargetModel(
-		"gpt-5.5",
+		"gpt-5.6-luna",
 		"AIRGATE_MODEL_DEFAULT_FALLBACK",
 	)
 	// sparkTargetModel 简单操作加速模型（Read/Grep/Glob 结果处理时自动路由）
@@ -82,9 +82,9 @@ var (
 	)
 	// codexDefaultModel Codex CLI 透传路径的兜底模型。
 	// 当客户端请求体里 model 字段为空、null 或字面量 "None" 时使用这个值，
-	// 默认使用 gpt-5.5，也可通过 AIRGATE_CODEX_DEFAULT_MODEL 覆盖。
+	// 默认使用 gpt-5.6-luna，也可通过 AIRGATE_CODEX_DEFAULT_MODEL 覆盖。
 	codexDefaultModel = resolveRoleTargetModel(
-		"gpt-5.5",
+		"gpt-5.6-luna",
 		"AIRGATE_CODEX_DEFAULT_MODEL",
 	)
 	enableAnthropicContinuation = strings.EqualFold(firstNonEmptyEnv("AIRGATE_ENABLE_ANTHROPIC_CONTINUATION"), "true")

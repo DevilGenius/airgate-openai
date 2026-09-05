@@ -1926,9 +1926,11 @@ func TestPreprocessRequestBodyPreservesPreviousResponseID(t *testing.T) {
 func TestResolveEffectiveModelFallsBackToDefaultModel(t *testing.T) {
 	t.Parallel()
 
-	for _, existing := range []any{"", "None", "gpt-unknown", nil} {
-		if got := resolveEffectiveModel("", existing); got != "gpt-5.5" {
-			t.Fatalf("resolveEffectiveModel(%#v) = %q, want gpt-5.5", existing, got)
+	for _, requested := range []string{"", "None", "gpt-unknown", "gpt-5.4"} {
+		for _, existing := range []any{"", "None", "gpt-unknown", "gpt-5.4", nil} {
+			if got := resolveEffectiveModel(requested, existing); got != "gpt-5.6-luna" {
+				t.Fatalf("resolveEffectiveModel(%q, %#v) = %q, want gpt-5.6-luna", requested, existing, got)
+			}
 		}
 	}
 }

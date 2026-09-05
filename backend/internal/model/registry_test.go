@@ -9,8 +9,8 @@ func TestLookup_UnknownModelFallsBackToBillablePrice(t *testing.T) {
 	if spec.InputPrice <= 0 || spec.OutputPrice <= 0 {
 		t.Fatalf("未知模型必须有兜底价格；InputPrice=%v OutputPrice=%v", spec.InputPrice, spec.OutputPrice)
 	}
-	if spec != Lookup("gpt-5.5") {
-		t.Fatalf("unknown model pricing = %+v, want GPT-5.5 pricing", spec)
+	if spec != Lookup("gpt-5.6-luna") {
+		t.Fatalf("unknown model pricing = %+v, want GPT-5.6-Luna pricing", spec)
 	}
 }
 
@@ -25,11 +25,11 @@ func TestLookup_ByKeyword(t *testing.T) {
 		{"未知 image 系列 → gpt-image-2", "gpt-image-3", "gpt-image-2"},
 		{"未知 mini 系列 → gpt-5.4-mini", "gpt-5.9-mini", "gpt-5.4-mini"},
 		{"未知 nano 系列 → gpt-5.4-mini", "gpt-5.9-nano", "gpt-5.4-mini"},
-		{"未知 gpt-5 系列 → gpt-5.5", "gpt-5.9", "gpt-5.5"},
-		{"移除的 gpt-5.4 → gpt-5.5", "gpt-5.4", "gpt-5.5"},
-		{"o1 推理模型 → gpt-5.5", "o1-preview", "gpt-5.5"},
+		{"未知 gpt-5 系列 → gpt-5.6-luna", "gpt-5.9", "gpt-5.6-luna"},
+		{"移除的 gpt-5.4 → gpt-5.6-luna", "gpt-5.4", "gpt-5.6-luna"},
+		{"o1 推理模型 → gpt-5.6-luna", "o1-preview", "gpt-5.6-luna"},
 		{"o3 mini 推理模型 → gpt-5.4-mini", "o3-mini", "gpt-5.4-mini"}, // "mini" 优先
-		{"gpt-4 系列 → gpt-5.5（偏保守）", "gpt-4o", "gpt-5.5"},
+		{"gpt-4 系列 → gpt-5.6-luna", "gpt-4o", "gpt-5.6-luna"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

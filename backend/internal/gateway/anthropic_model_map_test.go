@@ -13,11 +13,11 @@ func TestAnthropicDefaultTargetModels(t *testing.T) {
 		gotFallback  string
 		wantFallback string
 	}{
-		{name: "fable", gotPrimary: fableTargetModel, wantPrimary: "gpt-5.6-sol", gotFallback: fableFallbackModel, wantFallback: "gpt-5.5"},
-		{name: "opus", gotPrimary: opusTargetModel, wantPrimary: "gpt-5.6-terra", gotFallback: opusFallbackModel, wantFallback: "gpt-5.5"},
-		{name: "sonnet", gotPrimary: sonnetTargetModel, wantPrimary: "gpt-5.6-luna", gotFallback: sonnetFallbackModel, wantFallback: "gpt-5.5"},
-		{name: "haiku", gotPrimary: haikuTargetModel, wantPrimary: "gpt-5.3-codex-spark", gotFallback: haikuFallbackModel, wantFallback: "gpt-5.4-mini"},
-		{name: "default", gotPrimary: defaultClaudeTargetModel, wantPrimary: "gpt-5.5", gotFallback: defaultClaudeFallbackModel, wantFallback: "gpt-5.5"},
+		{name: "fable", gotPrimary: fableTargetModel, wantPrimary: "gpt-6-astra", gotFallback: fableFallbackModel, wantFallback: "gpt-5.5"},
+		{name: "opus", gotPrimary: opusTargetModel, wantPrimary: "gpt-5.6-sol", gotFallback: opusFallbackModel, wantFallback: "gpt-5.5"},
+		{name: "sonnet", gotPrimary: sonnetTargetModel, wantPrimary: "gpt-5.6-terra", gotFallback: sonnetFallbackModel, wantFallback: "gpt-5.5"},
+		{name: "haiku", gotPrimary: haikuTargetModel, wantPrimary: "gpt-5.6-luna", gotFallback: haikuFallbackModel, wantFallback: "gpt-5.4-mini"},
+		{name: "default", gotPrimary: defaultClaudeTargetModel, wantPrimary: "gpt-5.6-sol", gotFallback: defaultClaudeFallbackModel, wantFallback: "gpt-5.6-luna"},
 	}
 
 	for _, tt := range tests {
@@ -47,8 +47,8 @@ func TestResolveAnthropicModelMapping_UsesUpdatedDefaultClaudeTarget(t *testing.
 			if mapping == nil {
 				t.Fatal("mapping is nil")
 			}
-			if mapping.OpenAIModel != "gpt-5.5" {
-				t.Fatalf("OpenAIModel = %q, want %q", mapping.OpenAIModel, "gpt-5.5")
+			if mapping.OpenAIModel != "gpt-5.6-sol" {
+				t.Fatalf("OpenAIModel = %q, want %q", mapping.OpenAIModel, "gpt-5.6-sol")
 			}
 		})
 	}
