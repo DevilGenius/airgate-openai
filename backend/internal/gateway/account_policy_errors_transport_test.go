@@ -327,8 +327,7 @@ func TestTransportPoolHelpers(t *testing.T) {
 
 	oldKey := poolKey(99, "")
 	pool.mu.Lock()
-	pool.transports[oldKey] = &transportPoolEntry{transport: &http.Transport{}, lastUsedAt: time.Now().Add(-transportPoolIdleTTL - time.Minute)}
-	pool.lastCleanupTime = time.Now().Add(-transportPoolCleanupInterval - time.Minute)
+	pool.putLocked(oldKey, &transportPoolEntry{transport: &http.Transport{}, lastUsedAt: time.Now().Add(-transportPoolIdleTTL - time.Minute)})
 	pool.cleanupIdleLocked(time.Now())
 	_, exists := pool.transports[oldKey]
 	pool.mu.Unlock()
@@ -337,8 +336,8 @@ func TestTransportPoolHelpers(t *testing.T) {
 	}
 
 	pool.mu.Lock()
-	pool.transports["newer"] = &transportPoolEntry{transport: &http.Transport{}, lastUsedAt: time.Now()}
-	pool.transports["older"] = &transportPoolEntry{transport: &http.Transport{}, lastUsedAt: time.Now().Add(-time.Hour)}
+	pool.putLocked("newer", &transportPoolEntry{transport: &http.Transport{}, lastUsedAt: time.Now()})
+	pool.putLocked("older", &transportPoolEntry{transport: &http.Transport{}, lastUsedAt: time.Now().Add(-time.Hour)})
 	pool.deleteOldestLocked()
 	_, olderExists := pool.transports["older"]
 	_, newerExists := pool.transports["newer"]

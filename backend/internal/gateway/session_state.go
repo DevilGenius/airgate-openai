@@ -225,23 +225,26 @@ const (
 
 	// sessionStateMemoryMaxEntries 只是异常流量下的高水位安全阀；正常回收主要靠 TTL。
 	sessionStateMemoryMaxEntries = 1000000
-	sessionStateCleanupInterval  = time.Minute
 )
 
 type sessionStateMemoryStore struct {
-	mu              sync.Mutex
-	items           map[string]*openAISessionState
-	ttl             time.Duration
-	maxEntries      int
-	lastCleanupTime time.Time
+	mu         sync.Mutex
+	items      map[string]*sessionMemoryEntry
+	ttl        time.Duration
+	maxEntries int
+	expiries   cacheExpiryQueue
+}
+
+type sessionMemoryEntry struct {
+	state  *openAISessionState
+	expiry *cacheExpiry
 }
 
 func newSessionStateMemoryStore(ttl time.Duration, maxEntries int) *sessionStateMemoryStore {
 	return &sessionStateMemoryStore{
-		items:           make(map[string]*openAISessionState),
-		ttl:             ttl,
-		maxEntries:      maxEntries,
-		lastCleanupTime: time.Now().UTC(),
+		items:      make(map[string]*sessionMemoryEntry),
+		ttl:        ttl,
+		maxEntries: maxEntries,
 	}
 }
 
@@ -258,11 +261,11 @@ func (s *sessionStateMemoryStore) Load(key any) (any, bool) {
 	if !ok {
 		return nil, false
 	}
-	if s.expired(state, now) {
-		delete(s.items, sessionKey)
+	if s.expired(state.state, now) {
+		s.deleteEntryLocked(sessionKey)
 		return nil, false
 	}
-	return cloneSessionState(state), true
+	return cloneSessionState(state.state), true
 }
 
 func (s *sessionStateMemoryStore) Store(key, value any) {
@@ -286,13 +289,13 @@ func (s *sessionStateMemoryStore) Store(key, value any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cleanupExpiredLocked(now)
-	if previous := s.items[sessionKey]; previous != nil && sessionStateLastActivity(previous).After(sessionStateLastActivity(cloned)) {
+	if previous := s.items[sessionKey]; previous != nil && sessionStateLastActivity(previous.state).After(sessionStateLastActivity(cloned)) {
 		return
 	}
 	if _, exists := s.items[sessionKey]; !exists && s.maxEntries > 0 && len(s.items) >= s.maxEntries {
 		s.deleteOldestLocked(now)
 	}
-	s.items[sessionKey] = cloned
+	s.putLocked(sessionKey, cloned)
 }
 
 func (s *sessionStateMemoryStore) Update(key string, update func(*openAISessionState)) *openAISessionState {
@@ -300,7 +303,10 @@ func (s *sessionStateMemoryStore) Update(key string, update func(*openAISessionS
 	defer s.mu.Unlock()
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	s.cleanupExpiredLocked(now)
-	current := cloneSessionState(s.items[key])
+	var current *openAISessionState
+	if entry := s.items[key]; entry != nil {
+		current = cloneSessionState(entry.state)
+	}
 	if current == nil || s.expired(current, now) {
 		current = &openAISessionState{SessionKey: key}
 	}
@@ -315,7 +321,7 @@ func (s *sessionStateMemoryStore) Update(key string, update func(*openAISessionS
 	if _, exists := s.items[key]; !exists && s.maxEntries > 0 && len(s.items) >= s.maxEntries {
 		s.deleteOldestLocked(now)
 	}
-	s.items[key] = current
+	s.putLocked(key, current)
 	return cloneSessionState(current)
 }
 
@@ -325,20 +331,37 @@ func (s *sessionStateMemoryStore) Delete(key any) {
 		return
 	}
 	s.mu.Lock()
-	delete(s.items, sessionKey)
+	s.deleteEntryLocked(sessionKey)
 	s.mu.Unlock()
 }
 
 func (s *sessionStateMemoryStore) cleanupExpiredLocked(now time.Time) {
-	if now.Sub(s.lastCleanupTime) < sessionStateCleanupInterval && (s.maxEntries <= 0 || len(s.items) < s.maxEntries) {
+	if s.ttl <= 0 {
 		return
 	}
-	for key, state := range s.items {
-		if s.expired(state, now) {
-			delete(s.items, key)
+	for removed := 0; removed < cacheCleanupBudget && len(s.expiries) > 0; removed++ {
+		oldest := s.expiries[0]
+		if now.Sub(oldest.at) <= s.ttl {
+			break
 		}
+		s.deleteEntryLocked(oldest.key)
 	}
-	s.lastCleanupTime = now
+}
+
+func (s *sessionStateMemoryStore) putLocked(key string, state *openAISessionState) {
+	if entry := s.items[key]; entry != nil {
+		entry.state = state
+		s.expiries.update(entry.expiry, sessionStateLastActivity(state))
+	} else {
+		s.items[key] = &sessionMemoryEntry{state: state, expiry: s.expiries.add(key, sessionStateLastActivity(state))}
+	}
+}
+
+func (s *sessionStateMemoryStore) deleteEntryLocked(key string) {
+	if entry := s.items[key]; entry != nil {
+		delete(s.items, key)
+		s.expiries.remove(entry.expiry)
+	}
 }
 
 func (s *sessionStateMemoryStore) expired(state *openAISessionState, now time.Time) bool {
@@ -349,25 +372,9 @@ func (s *sessionStateMemoryStore) expired(state *openAISessionState, now time.Ti
 	return !last.IsZero() && now.Sub(last) > s.ttl
 }
 
-func (s *sessionStateMemoryStore) deleteOldestLocked(now time.Time) {
-	var oldestKey string
-	var oldestAt time.Time
-	for key, state := range s.items {
-		if s.expired(state, now) {
-			delete(s.items, key)
-			return
-		}
-		last := sessionStateLastActivity(state)
-		if last.IsZero() {
-			last = now
-		}
-		if oldestKey == "" || last.Before(oldestAt) {
-			oldestKey = key
-			oldestAt = last
-		}
-	}
-	if oldestKey != "" {
-		delete(s.items, oldestKey)
+func (s *sessionStateMemoryStore) deleteOldestLocked(_ time.Time) {
+	if len(s.expiries) > 0 {
+		s.deleteEntryLocked(s.expiries[0].key)
 	}
 }
 
