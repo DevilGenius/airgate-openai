@@ -257,13 +257,10 @@ func configureWebSocketConn(conn *websocket.Conn) {
 	// Keep inbound permessage-deflate support, but avoid gorilla/websocket flate
 	// tail compatibility issues on outbound frames seen with some upstreams.
 	conn.EnableWriteCompression(false)
-	conn.SetPongHandler(func(string) error {
-		return conn.SetReadDeadline(time.Now().Add(webSocketReadTimeout))
-	})
+	// Control frames prove transport liveness, not model progress. Only complete
+	// application messages may renew the response read deadline.
+	conn.SetPongHandler(func(string) error { return nil })
 	conn.SetPingHandler(func(appData string) error {
-		if err := conn.SetReadDeadline(time.Now().Add(webSocketReadTimeout)); err != nil {
-			return err
-		}
 		return conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(webSocketControlWriteTimeout))
 	})
 }
@@ -276,6 +273,7 @@ func startWebSocketKeepAlive(ctx context.Context, conn *websocket.Conn) func() {
 		ctx = context.Background()
 	}
 	keepAliveCtx, cancel := context.WithCancel(ctx)
+	stopOnCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -294,6 +292,7 @@ func startWebSocketKeepAlive(ctx context.Context, conn *websocket.Conn) func() {
 		}
 	}()
 	return func() {
+		stopOnCancel()
 		cancel()
 		<-done
 	}
@@ -313,6 +312,10 @@ func cloneHTTPHeader(headers http.Header) http.Header {
 
 // ReceiveWSResponse 从 WebSocket 读取完整响应，通过 handler 回调输出
 func ReceiveWSResponse(ctx context.Context, conn *websocket.Conn, handler WSEventHandler) WSResult {
+	return receiveWSResponse(ctx, conn, handler, webSocketReadTimeout)
+}
+
+func receiveWSResponse(ctx context.Context, conn *websocket.Conn, handler WSEventHandler, idleTimeout time.Duration) WSResult {
 	start := time.Now()
 	result := WSResult{}
 	var textBuilder strings.Builder
@@ -330,14 +333,20 @@ func ReceiveWSResponse(ctx context.Context, conn *websocket.Conn, handler WSEven
 		default:
 		}
 
-		if err := conn.SetReadDeadline(time.Now().Add(webSocketReadTimeout)); err != nil {
-			result.Err = fmt.Errorf("设置 WebSocket 读取超时失败: %w", err)
+		if err := conn.SetReadDeadline(time.Now().Add(idleTimeout)); err != nil {
+			if ctx.Err() != nil {
+				result.Err = ctx.Err()
+			} else {
+				result.Err = fmt.Errorf("设置 WebSocket 读取超时失败: %w", err)
+			}
 			break
 		}
 
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
-			if websocket.IsCloseError(err, websocket.CloseMessageTooBig) {
+			if ctx.Err() != nil {
+				result.Err = ctx.Err()
+			} else if websocket.IsCloseError(err, websocket.CloseMessageTooBig) {
 				result.Err = &responsesFailureError{
 					Kind:               responsesFailureKindClient,
 					StatusCode:         http.StatusRequestEntityTooLarge,
