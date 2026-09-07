@@ -417,7 +417,7 @@ func (s *codexUsagePersistenceStore) WarmCache(ctx context.Context) error {
 }
 
 func (s *codexUsagePersistenceStore) warmSessionStateCache(ctx context.Context) (int, error) {
-	query := fmt.Sprintf(`SELECT session_key, session_id, conversation_id, prompt_cache_key, account_id, last_response_id, last_turn_state, last_seen_at, last_updated_at, last_response_at, last_turn_state_at FROM %s WHERE plugin_id = $1`, sessionStatePersistTable)
+	query := fmt.Sprintf(`SELECT session_key, session_id, conversation_id, prompt_cache_key, account_id, last_response_id, last_turn_state, last_seen_at, last_updated_at, last_response_at, last_turn_state_at FROM %s WHERE plugin_id = $1 AND session_key LIKE 'v2:%%'`, sessionStatePersistTable)
 	rows, err := s.db.QueryContext(ctx, query, s.pluginID)
 	if err != nil {
 		return 0, fmt.Errorf("warm session state query: %w", err)

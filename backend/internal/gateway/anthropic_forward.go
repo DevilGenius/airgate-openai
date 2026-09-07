@@ -27,16 +27,16 @@ func (g *OpenAIGateway) forwardAnthropicMessage(ctx context.Context, req *sdk.Fo
 	strategy := resolveAnthropicUpstreamStrategy(req.Account)
 	session := resolveOpenAISession(req.Headers, req.Body, req.Account.ID)
 	session.DigestChain = buildAnthropicDigestChain(body)
-	if session.SessionKey == "" {
-		if reusedSessionID, matchedChain, ok := findAnthropicDigestSession(req.Account.ID, session.DigestChain); ok {
+	if session.SessionKey == "" && !strings.HasPrefix(session.Scope, "anonymous:") {
+		if reusedSessionID, matchedChain, ok := findAnthropicDigestSession(req.Account.ID, session.DigestChain, session.Scope); ok {
 			session.SessionID = reusedSessionID
-			session.SessionKey = sessionStateKeyFromValues(reusedSessionID, "", "")
+			session.SessionKey = scopedSessionKey(session.Scope, sessionStateKeyFromValues(reusedSessionID, "", ""))
 			session.MatchedDigest = matchedChain
 			session.FromStoredState = true
 			session.SessionSource = "anthropic_digest_match"
 		} else if session.DigestChain != "" {
 			session.SessionID = deterministicUUIDFromSeed(fmt.Sprintf("anthropic:%d:%d:%s", req.Account.ID, time.Now().UnixNano(), session.DigestChain))
-			session.SessionKey = sessionStateKeyFromValues(session.SessionID, "", "")
+			session.SessionKey = scopedSessionKey(session.Scope, sessionStateKeyFromValues(session.SessionID, "", ""))
 			session.SessionSource = "anthropic_digest_new"
 		}
 	}
@@ -234,7 +234,7 @@ func injectAnthropicPromptCacheKey(responsesBody []byte, strategy anthropicUpstr
 	if gjson.GetBytes(responsesBody, "prompt_cache_key").Exists() {
 		return normalizePromptCacheKeyForUpstream(responsesBody)
 	}
-	next, err := sjson.SetBytes(responsesBody, "prompt_cache_key", upstreamPromptCacheKey(session.PromptCacheKey))
+	next, err := sjson.SetBytes(responsesBody, "prompt_cache_key", upstreamPromptCacheKey(session.wireValue("prompt_cache_key", session.PromptCacheKey)))
 	if err != nil {
 		return responsesBody
 	}
@@ -473,10 +473,10 @@ func (g *OpenAIGateway) buildAnthropicUpstreamRequest(
 			upstreamReq.Header.Set("ChatGPT-Account-ID", aid)
 		}
 		if session.SessionID != "" {
-			upstreamReq.Header.Set("session_id", isolateSessionID(session.SessionID))
+			upstreamReq.Header.Set("session_id", isolateSessionID(session.wireValue("session_id", session.SessionID)))
 		}
 		if session.ConversationID != "" {
-			upstreamReq.Header.Set("conversation_id", isolateSessionID(session.ConversationID))
+			upstreamReq.Header.Set("conversation_id", isolateSessionID(session.wireValue("conversation_id", session.ConversationID)))
 		}
 		if session.LastTurnState != "" {
 			upstreamReq.Header.Set("x-codex-turn-state", session.LastTurnState)
@@ -543,7 +543,7 @@ func (g *OpenAIGateway) handleAnthropicNonStreamFromResponses(
 		updateSessionStateResponseID(session.SessionKey, wsResult.ResponseID, accountID)
 	}
 	if session.SessionID != "" && session.DigestChain != "" {
-		saveAnthropicDigestSession(accountID, session.DigestChain, session.SessionID, session.MatchedDigest)
+		saveAnthropicDigestSession(accountID, session.DigestChain, session.SessionID, session.MatchedDigest, session.Scope)
 	}
 
 	if w != nil {

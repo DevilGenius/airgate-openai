@@ -28,7 +28,12 @@ type openAISessionState struct {
 }
 
 func normalizeSessionValue(value string) string {
-	return strings.TrimSpace(value)
+	value = strings.TrimSpace(value)
+	if len(value) > 1024 {
+		hash := sha256.Sum256([]byte(value))
+		return fmt.Sprintf("sha256:%x", hash)
+	}
+	return strings.Clone(value)
 }
 
 func isolateSessionID(raw string) string {
@@ -207,6 +212,7 @@ func deriveAnthropicPromptCacheKey(body []byte) string {
 }
 
 type openAISessionResolution struct {
+	Scope           string
 	SessionKey      string
 	SessionID       string
 	ConversationID  string
@@ -395,12 +401,12 @@ func sessionStateLastActivity(state *openAISessionState) time.Time {
 	return last.UTC()
 }
 
-func resolveOpenAISession(headers http.Header, body []byte, accountID int64) openAISessionResolution {
-	promptCacheKey := resolvePromptCacheKeyFromBody(body)
-	bodySessionID := resolveSessionIDFromBody(body)
-	bodyConversationID := resolveConversationIDFromBody(body)
-	headerSessionID := resolveSessionIDFromHeaders(headers)
-	headerConversationID := resolveConversationIDFromHeaders(headers)
+func resolveOpenAISessionWithScope(headers http.Header, body []byte, accountID int64, scope string) openAISessionResolution {
+	promptCacheKey := normalizeSessionValue(resolvePromptCacheKeyFromBody(body))
+	bodySessionID := normalizeSessionValue(resolveSessionIDFromBody(body))
+	bodyConversationID := normalizeSessionValue(resolveConversationIDFromBody(body))
+	headerSessionID := normalizeSessionValue(resolveSessionIDFromHeaders(headers))
+	headerConversationID := normalizeSessionValue(resolveConversationIDFromHeaders(headers))
 	sessionID := bodySessionID
 	if sessionID == "" {
 		sessionID = headerSessionID
@@ -414,8 +420,9 @@ func resolveOpenAISession(headers http.Header, body []byte, accountID int64) ope
 		previousResponseID = strings.TrimSpace(headers.Get("x-openai-previous-response-id"))
 	}
 
-	sessionKey := sessionStateKeyFromValues(sessionID, conversationID, promptCacheKey)
+	sessionKey := scopedSessionKey(scope, sessionStateKeyFromValues(sessionID, conversationID, promptCacheKey))
 	resolution := openAISessionResolution{
+		Scope:          scope,
 		SessionKey:     sessionKey,
 		SessionID:      sessionID,
 		ConversationID: conversationID,
@@ -433,10 +440,6 @@ func resolveOpenAISession(headers http.Header, body []byte, accountID int64) ope
 		resolution.SessionSource = "header_conversation_id"
 	case promptCacheKey != "":
 		resolution.SessionSource = "prompt_cache_key"
-	}
-
-	if sessionKey == "" {
-		return resolution
 	}
 
 	if state := getSessionState(sessionKey); state != nil {
@@ -592,15 +595,21 @@ func buildAnthropicDigestChain(body []byte) string {
 	return strings.Join(parts, "-")
 }
 
-func anthropicDigestNamespace(accountID int64) string {
+func anthropicDigestNamespace(accountID int64, scopes ...string) string {
+	if len(scopes) > 0 {
+		return fmt.Sprintf("v2:%s:%d|", scopes[0], accountID)
+	}
 	return fmt.Sprintf("%d|", accountID)
 }
 
-func saveAnthropicDigestSession(accountID int64, digestChain, sessionID, oldDigestChain string) {
+func saveAnthropicDigestSession(accountID int64, digestChain, sessionID, oldDigestChain string, scopes ...string) {
+	if len(scopes) > 0 && strings.HasPrefix(scopes[0], "anonymous:") {
+		return
+	}
 	if accountID <= 0 || digestChain == "" || sessionID == "" {
 		return
 	}
-	ns := anthropicDigestNamespace(accountID)
+	ns := anthropicDigestNamespace(accountID, scopes...)
 	key := ns + digestChain
 	anthropicDigestStore.Store(key, &anthropicDigestEntry{
 		SessionID: sessionID,
@@ -611,11 +620,14 @@ func saveAnthropicDigestSession(accountID int64, digestChain, sessionID, oldDige
 	}
 }
 
-func findAnthropicDigestSession(accountID int64, digestChain string) (sessionID string, matchedChain string, found bool) {
+func findAnthropicDigestSession(accountID int64, digestChain string, scopes ...string) (sessionID string, matchedChain string, found bool) {
+	if len(scopes) > 0 && strings.HasPrefix(scopes[0], "anonymous:") {
+		return "", "", false
+	}
 	if accountID <= 0 || digestChain == "" {
 		return "", "", false
 	}
-	ns := anthropicDigestNamespace(accountID)
+	ns := anthropicDigestNamespace(accountID, scopes...)
 	chain := digestChain
 	for {
 		if entry, ok := anthropicDigestStore.Load(ns + chain); ok && entry != nil {

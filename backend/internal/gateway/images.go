@@ -1936,8 +1936,8 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 			AccountID:      account.Credentials["chatgpt_account_id"],
 			ProxyURL:       account.ProxyURL,
 			Headers:        authHeaders,
-			SessionID:      session.SessionID,
-			ConversationID: session.ConversationID,
+			SessionID:      session.wireValue("session_id", session.SessionID),
+			ConversationID: session.wireValue("conversation_id", session.ConversationID),
 			TurnState:      session.LastTurnState,
 			Originator:     resolveCodexOriginator(req.Headers.Get("originator")),
 		}

@@ -662,7 +662,7 @@ func applySessionFields(reqData map[string]any, session openAISessionResolution)
 	if reqData == nil {
 		return reqData
 	}
-	if key := upstreamPromptCacheKey(session.PromptCacheKey); key != "" {
+	if key := upstreamPromptCacheKey(session.wireValue("prompt_cache_key", session.PromptCacheKey)); key != "" {
 		reqData["prompt_cache_key"] = key
 	}
 	return reqData

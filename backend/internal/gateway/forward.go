@@ -223,10 +223,10 @@ func (g *OpenAIGateway) forwardOAuthCompact(ctx context.Context, req *sdk.Forwar
 		upstreamReq.Header.Set("ChatGPT-Account-ID", aid)
 	}
 	if session.SessionID != "" {
-		upstreamReq.Header.Set("session_id", isolateSessionID(session.SessionID))
+		upstreamReq.Header.Set("session_id", isolateSessionID(session.wireValue("session_id", session.SessionID)))
 	}
 	if session.ConversationID != "" {
-		upstreamReq.Header.Set("conversation_id", isolateSessionID(session.ConversationID))
+		upstreamReq.Header.Set("conversation_id", isolateSessionID(session.wireValue("conversation_id", session.ConversationID)))
 	}
 	if session.LastTurnState != "" {
 		upstreamReq.Header.Set("x-codex-turn-state", session.LastTurnState)
@@ -299,10 +299,10 @@ func (g *OpenAIGateway) forwardOAuthCompact(ctx context.Context, req *sdk.Forwar
 				retryReq.Header.Set("ChatGPT-Account-ID", aid)
 			}
 			if session.SessionID != "" {
-				retryReq.Header.Set("session_id", isolateSessionID(session.SessionID))
+				retryReq.Header.Set("session_id", isolateSessionID(session.wireValue("session_id", session.SessionID)))
 			}
 			if session.ConversationID != "" {
-				retryReq.Header.Set("conversation_id", isolateSessionID(session.ConversationID))
+				retryReq.Header.Set("conversation_id", isolateSessionID(session.wireValue("conversation_id", session.ConversationID)))
 			}
 			if session.LastTurnState != "" {
 				retryReq.Header.Set("x-codex-turn-state", session.LastTurnState)
@@ -1031,8 +1031,8 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		AccountID:      account.Credentials["chatgpt_account_id"],
 		ProxyURL:       account.ProxyURL,
 		Headers:        authHeaders,
-		SessionID:      session.SessionID,
-		ConversationID: session.ConversationID,
+		SessionID:      session.wireValue("session_id", session.SessionID),
+		ConversationID: session.wireValue("conversation_id", session.ConversationID),
 		TurnState:      session.LastTurnState,
 		Originator:     resolveCodexOriginator(req.Headers.Get("originator")),
 	}

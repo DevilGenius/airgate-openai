@@ -10,7 +10,7 @@ import (
 
 func TestResolveOpenAISessionUsesPromptCacheKeyAsFallback(t *testing.T) {
 	headers := http.Header{}
-	resolution := resolveOpenAISession(headers, []byte(`{"prompt_cache_key":"pcache_123"}`), 101)
+	resolution := resolveSessionFixture(headers, []byte(`{"prompt_cache_key":"pcache_123"}`), 101)
 	if resolution.SessionKey != "pcache:pcache_123" {
 		t.Fatalf("expected session key from prompt_cache_key, got %q", resolution.SessionKey)
 	}
@@ -21,7 +21,7 @@ func TestResolveOpenAISessionUsesPromptCacheKeyAsFallback(t *testing.T) {
 
 func TestResolveOpenAISessionUsesMetadataUserIDSession(t *testing.T) {
 	body := []byte(`{"metadata":{"user_id":"{\"device_id\":\"device-a\",\"session_id\":\"session-abc\"}"}}`)
-	resolution := resolveOpenAISession(http.Header{}, body, 101)
+	resolution := resolveSessionFixture(http.Header{}, body, 101)
 
 	if resolution.SessionKey != "sid:claude:session-abc" {
 		t.Fatalf("SessionKey = %q, want sid:claude:session-abc", resolution.SessionKey)
@@ -38,7 +38,7 @@ func TestResolveOpenAISessionMetadataUserIDJSONWithoutSessionFallsBackToHeader(t
 	headers := http.Header{}
 	headers.Set("Session-Id", "header-session")
 	body := []byte(`{"metadata":{"user_id":"{\"device_id\":\"device-a\"}"}}`)
-	resolution := resolveOpenAISession(headers, body, 101)
+	resolution := resolveSessionFixture(headers, body, 101)
 
 	if resolution.SessionID != "header-session" {
 		t.Fatalf("SessionID = %q, want header-session", resolution.SessionID)
@@ -50,7 +50,7 @@ func TestResolveOpenAISessionMetadataUserIDJSONWithoutSessionFallsBackToHeader(t
 
 func TestResolveOpenAISessionMetadataUserIDJSONWithoutSessionFallsBackToPromptCache(t *testing.T) {
 	body := []byte(`{"metadata":{"user_id":"{\"device_id\":\"device-a\"}"},"prompt_cache_key":"pcache-1"}`)
-	resolution := resolveOpenAISession(http.Header{}, body, 101)
+	resolution := resolveSessionFixture(http.Header{}, body, 101)
 
 	if resolution.SessionKey != "pcache:pcache-1" {
 		t.Fatalf("SessionKey = %q, want pcache:pcache-1", resolution.SessionKey)
@@ -65,7 +65,7 @@ func TestResolveOpenAISessionMetadataUserIDJSONWithoutSessionFallsBackToPromptCa
 
 func TestResolveOpenAISessionUsesLegacyMetadataUserIDSession(t *testing.T) {
 	body := []byte(`{"metadata":{"user_id":"user_xxx_account__session_ac980658-63bd-4fb3-97ba-8da64cb1e344"}}`)
-	resolution := resolveOpenAISession(http.Header{}, body, 101)
+	resolution := resolveSessionFixture(http.Header{}, body, 101)
 
 	if resolution.SessionID != "claude:ac980658-63bd-4fb3-97ba-8da64cb1e344" {
 		t.Fatalf("SessionID = %q, want legacy Claude session", resolution.SessionID)
@@ -75,7 +75,7 @@ func TestResolveOpenAISessionUsesLegacyMetadataUserIDSession(t *testing.T) {
 func TestResolveOpenAISessionMetadataSessionOverridesHeader(t *testing.T) {
 	headers := http.Header{"Session-Id": []string{"header-session"}}
 	body := []byte(`{"metadata":{"user_id":"{\"session_id\":\"body-session\"}"}}`)
-	resolution := resolveOpenAISession(headers, body, 101)
+	resolution := resolveSessionFixture(headers, body, 101)
 
 	if resolution.SessionID != "claude:body-session" {
 		t.Fatalf("SessionID = %q, want claude:body-session", resolution.SessionID)
@@ -87,7 +87,7 @@ func TestResolveOpenAISessionMetadataSessionOverridesHeader(t *testing.T) {
 
 func TestResolveOpenAISessionUsesHeaderSessionFallback(t *testing.T) {
 	headers := http.Header{"Session-Id": []string{"header-session"}}
-	resolution := resolveOpenAISession(headers, nil, 101)
+	resolution := resolveSessionFixture(headers, nil, 101)
 
 	if resolution.SessionID != "header-session" {
 		t.Fatalf("SessionID = %q, want header-session", resolution.SessionID)
@@ -99,7 +99,7 @@ func TestResolveOpenAISessionUsesHeaderSessionFallback(t *testing.T) {
 
 func TestResolveOpenAISessionUsesBodyConversationID(t *testing.T) {
 	body := []byte(`{"conversation_id":"conv-123"}`)
-	resolution := resolveOpenAISession(http.Header{}, body, 101)
+	resolution := resolveSessionFixture(http.Header{}, body, 101)
 
 	if resolution.SessionKey != "cid:conv-123" {
 		t.Fatalf("SessionKey = %q, want cid:conv-123", resolution.SessionKey)
@@ -143,7 +143,7 @@ func TestResolveOpenAISessionReadsStoredState(t *testing.T) {
 		LastTurnState:  "turn_state_xyz",
 	})
 
-	resolution := resolveOpenAISession(http.Header{}, []byte(`{"prompt_cache_key":"pcache_456"}`), 202)
+	resolution := resolveSessionFixture(http.Header{}, []byte(`{"prompt_cache_key":"pcache_456"}`), 202)
 	if resolution.PreviousRespID != "resp_abc" {
 		t.Fatalf("expected previous response id from stored state, got %q", resolution.PreviousRespID)
 	}
@@ -163,7 +163,7 @@ func TestResolveOpenAISessionIgnoresStoredResponseFromDifferentAccount(t *testin
 		LastTurnState:  "turn_state_wrong_account",
 	})
 
-	resolution := resolveOpenAISession(http.Header{}, []byte(`{"prompt_cache_key":"pcache_account_mismatch"}`), 302)
+	resolution := resolveSessionFixture(http.Header{}, []byte(`{"prompt_cache_key":"pcache_account_mismatch"}`), 302)
 	if resolution.PreviousRespID != "" {
 		t.Fatalf("expected previous response id to be ignored across accounts, got %q", resolution.PreviousRespID)
 	}
@@ -186,7 +186,7 @@ func TestUpdateSessionStateFromRequestClearsContinuationStateOnAccountChange(t *
 		LastTurnState:  "turn_state_old",
 	})
 
-	resolution := resolveOpenAISession(http.Header{}, []byte(`{"prompt_cache_key":"pcache_account_change"}`), 402)
+	resolution := resolveSessionFixture(http.Header{}, []byte(`{"prompt_cache_key":"pcache_account_change"}`), 402)
 	updateSessionStateFromRequest(resolution, 402)
 
 	state := getSessionState("pcache:pcache_account_change")
