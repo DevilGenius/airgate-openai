@@ -660,12 +660,20 @@ func resizeMaskToImageSize(data []byte, mimeType string, width, height int) ([]b
 		return nil, "", fmt.Errorf("读取 mask 尺寸失败: %w", err)
 	}
 	if cfg.Width == width && cfg.Height == height {
+		if _, err := checkedImagePixels(width, height); err != nil {
+			return nil, "", err
+		}
 		return data, mimeType, nil
 	}
-	mask, _, err := image.Decode(bytes.NewReader(data))
+	targetPixels, err := checkedImagePixels(width, height)
+	if err != nil {
+		return nil, "", err
+	}
+	mask, release, err := decodeImageForWork(data, targetPixels)
 	if err != nil {
 		return nil, "", fmt.Errorf("解码 mask 失败: %w", err)
 	}
+	defer release()
 	resized := resizeImageNearest(mask, width, height)
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, resized); err != nil {
@@ -1326,14 +1334,16 @@ func buildEditRegionAnnotation(req *imagesRequest) (string, error) {
 	if req == nil || req.Mask == "" || len(req.Images) == 0 {
 		return "", nil
 	}
-	base, err := decodeImageRefImage(req.Images[0])
+	base, releaseBase, err := decodeImageRefImage(req.Images[0])
 	if err != nil {
 		return "", fmt.Errorf("解码编辑目标图片失败: %w", err)
 	}
-	mask, err := decodeImageRefImage(req.Mask)
+	defer releaseBase()
+	mask, releaseMask, err := decodeImageRefImage(req.Mask)
 	if err != nil {
 		return "", fmt.Errorf("解码编辑 mask 失败: %w", err)
 	}
+	defer releaseMask()
 	if base == nil {
 		base = whiteCanvas(mask.Bounds().Dx(), mask.Bounds().Dy())
 	}
@@ -1395,17 +1405,13 @@ func blendRGBA(dst, src color.RGBA) color.RGBA {
 	}
 }
 
-func decodeImageRefImage(ref string) (image.Image, error) {
+func decodeImageRefImage(ref string) (image.Image, func(), error) {
 	mimeType, data, err := readImageRefBytes(ref, 0)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	_ = mimeType
-	img, _, err := image.Decode(bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	return img, nil
+	return decodeImageForWork(data, 0)
 }
 
 func sampleImageRGBA(img image.Image, x, y, width, height int) color.RGBA {
@@ -1466,14 +1472,16 @@ func normalizeResponsesEditTargetAnnotationPair(req *imagesRequest, annotationRe
 		len(targetData) <= maxResponsesInputImageBytes && len(annotationData) <= maxResponsesInputImageBytes {
 		return nil
 	}
-	targetImg, _, err := image.Decode(bytes.NewReader(targetData))
+	targetImg, releaseTarget, err := decodeImageForWork(targetData, 0)
 	if err != nil {
 		return err
 	}
-	annotationImg, _, err := image.Decode(bytes.NewReader(annotationData))
+	defer releaseTarget()
+	annotationImg, releaseAnnotation, err := decodeImageForWork(annotationData, 0)
 	if err != nil {
 		return err
 	}
+	defer releaseAnnotation()
 
 	width, height := targetCfg.Width, targetCfg.Height
 	if annotationCfg.Width < width {
@@ -1554,10 +1562,11 @@ func shrinkDataImageURL(ref string, limit int) (string, error) {
 	if len(data) <= limit {
 		return ref, nil
 	}
-	img, _, err := image.Decode(bytes.NewReader(data))
+	img, release, err := decodeImageForWork(data, 0)
 	if err != nil {
 		return "", fmt.Errorf("图片过大且无法压缩: %w", err)
 	}
+	defer release()
 	return encodeJPEGDataURLWithinLimit(img, limit)
 }
 
@@ -1594,10 +1603,11 @@ func shrinkImageBytes(data []byte, mimeType string, limit int) ([]byte, string, 
 	if len(data) <= limit {
 		return data, mimeType, nil
 	}
-	img, _, err := image.Decode(bytes.NewReader(data))
+	img, release, err := decodeImageForWork(data, 0)
 	if err != nil {
 		return nil, "", fmt.Errorf("图片过大且无法解码进行压缩: %w", err)
 	}
+	defer release()
 	return encodeJPEGWithinLimit(img, limit)
 }
 
@@ -1605,8 +1615,8 @@ func shrinkImageBytes(data []byte, mimeType string, limit int) ([]byte, string, 
 func encodeJPEGWithinLimit(img image.Image, limit int) ([]byte, string, error) {
 	bounds := img.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
-	if width <= 0 || height <= 0 {
-		return nil, "", fmt.Errorf("图片尺寸无效")
+	if _, err := checkedImagePixels(width, height); err != nil {
+		return nil, "", err
 	}
 	current := img
 	for range 10 {
@@ -1894,6 +1904,9 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 		}
 		createMsg, attemptN, attemptInputEstimate, err := buildImagesToolCreateMsgWithUsage(attemptBody, attemptContentType, isEdit, session)
 		if err != nil {
+			if errors.Is(err, errImageProcessingBusy) {
+				return imageProcessingBusyOutcome(time.Since(start)), nil
+			}
 			body := jsonError(err.Error())
 			return sdk.ForwardOutcome{
 				Kind: sdk.OutcomeClientError,

@@ -462,6 +462,9 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 	if isImageEdit && len(req.Body) > 0 && !isMultipart {
 		body, contentType, _, err := buildAPIKeyImagesEditMultipartBodyWithRequest(req.Body, reqContentType)
 		if err != nil {
+			if errors.Is(err, errImageProcessingBusy) {
+				return imageProcessingBusyOutcome(time.Since(start)), nil
+			}
 			errBody := jsonError(err.Error())
 			return sdk.ForwardOutcome{
 				Kind: sdk.OutcomeClientError,
