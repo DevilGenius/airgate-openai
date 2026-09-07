@@ -164,13 +164,18 @@ func DialWebSocket(ctx context.Context, cfg WSConfig) (*websocket.Conn, *http.Re
 }
 
 func dialWebSocket(ctx context.Context, targetURL, proxyURL string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+	networkDialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
 	dialer := &websocket.Dialer{
 		TLSClientConfig:  &tls.Config{MinVersion: tls.VersionTLS12},
 		HandshakeTimeout: 30 * time.Second,
-		NetDialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
+		NetDialContext: func(dialCtx context.Context, network, address string) (net.Conn, error) {
+			conn, err := networkDialer.DialContext(dialCtx, network, address)
+			if err != nil {
+				return nil, err
+			}
+			// Bind the request lifetime, not gorilla's shorter handshake context.
+			return &requestBoundConn{Conn: conn, stop: context.AfterFunc(ctx, func() { _ = conn.Close() })}, nil
+		},
 		EnableCompression: true,
 	}
 
