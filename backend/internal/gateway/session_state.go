@@ -286,10 +286,37 @@ func (s *sessionStateMemoryStore) Store(key, value any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cleanupExpiredLocked(now)
+	if previous := s.items[sessionKey]; previous != nil && sessionStateLastActivity(previous).After(sessionStateLastActivity(cloned)) {
+		return
+	}
 	if _, exists := s.items[sessionKey]; !exists && s.maxEntries > 0 && len(s.items) >= s.maxEntries {
 		s.deleteOldestLocked(now)
 	}
 	s.items[sessionKey] = cloned
+}
+
+func (s *sessionStateMemoryStore) Update(key string, update func(*openAISessionState)) *openAISessionState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	s.cleanupExpiredLocked(now)
+	current := cloneSessionState(s.items[key])
+	if current == nil || s.expired(current, now) {
+		current = &openAISessionState{SessionKey: key}
+	}
+	// Preserve ordering even when the clock resolution is coarse or moves back.
+	// PostgreSQL stores microseconds, so a nanosecond increment is insufficient.
+	if !now.After(current.LastUpdatedAt) {
+		now = current.LastUpdatedAt.Add(time.Microsecond).Truncate(time.Microsecond)
+	}
+	current.LastSeenAt = now
+	update(current)
+	current.LastUpdatedAt = now
+	if _, exists := s.items[key]; !exists && s.maxEntries > 0 && len(s.items) >= s.maxEntries {
+		s.deleteOldestLocked(now)
+	}
+	s.items[key] = current
+	return cloneSessionState(current)
 }
 
 func (s *sessionStateMemoryStore) Delete(key any) {
@@ -636,15 +663,10 @@ func touchSessionState(sessionKey string, update func(*openAISessionState)) {
 	if sessionKey == "" || update == nil {
 		return
 	}
-	now := time.Now().UTC()
-	current := getSessionState(sessionKey)
-	if current == nil {
-		current = &openAISessionState{SessionKey: sessionKey}
+	current := sessionStateStore.Update(sessionKey, update)
+	if store := getCodexUsagePersistenceStore(); store != nil {
+		store.SaveSessionStateAsync(current)
 	}
-	current.LastSeenAt = now
-	update(current)
-	current.LastUpdatedAt = now
-	upsertSessionState(current)
 }
 
 func updateSessionStateFromRequest(resolution openAISessionResolution, accountID int64) {

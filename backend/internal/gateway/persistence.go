@@ -154,7 +154,9 @@ func (s *codexUsagePersistenceStore) SaveAsync(accountID int64, snapshot *CodexU
 		return
 	}
 	cloned := cloneCodexUsageSnapshot(snapshot)
-	s.pending.Store(accountID, cloned)
+	if !storeNewerPending(&s.pending, accountID, cloned, func(v *CodexUsageSnapshot) time.Time { return v.CapturedAt }) {
+		return
+	}
 
 	select {
 	case s.flushCh <- accountID:
@@ -193,14 +195,14 @@ func (s *codexUsagePersistenceStore) flushAccount(ctx context.Context, accountID
 	}
 	snapshot, ok := val.(*CodexUsageSnapshot)
 	if !ok || snapshot == nil {
-		s.pending.Delete(accountID)
+		s.pending.CompareAndDelete(accountID, val)
 		return
 	}
 	if err := s.upsert(ctx, accountID, snapshot); err != nil {
 		s.logger.Warn("持久化 Codex 用量快照失败", "account_id", accountID, "error", err)
 		return
 	}
-	s.pending.Delete(accountID)
+	s.pending.CompareAndDelete(accountID, val)
 }
 
 func (s *codexUsagePersistenceStore) upsert(ctx context.Context, accountID int64, snapshot *CodexUsageSnapshot) error {
@@ -220,7 +222,8 @@ ON CONFLICT (plugin_id, account_id)
 DO UPDATE SET
   snapshot = EXCLUDED.snapshot,
   captured_at = EXCLUDED.captured_at,
-  updated_at = NOW()`, codexUsageSnapshotTable)
+  updated_at = NOW()
+WHERE %[1]s.captured_at <= EXCLUDED.captured_at`, codexUsageSnapshotTable)
 
 	if _, err := s.db.ExecContext(ctx, query, s.pluginID, accountID, string(payload), capturedAt); err != nil {
 		return fmt.Errorf("upsert snapshot: %w", err)
@@ -236,7 +239,10 @@ func (s *codexUsagePersistenceStore) SaveSessionStateAsync(state *openAISessionS
 	if key == "" {
 		return
 	}
-	s.sessionPending.Store(key, cloneSessionState(state))
+	cloned := cloneSessionState(state)
+	if !storeNewerPending(&s.sessionPending, key, cloned, sessionStateLastActivity) {
+		return
+	}
 	select {
 	case s.sessionFlushCh <- key:
 	default:
@@ -250,14 +256,14 @@ func (s *codexUsagePersistenceStore) flushSessionStateRecord(ctx context.Context
 	}
 	state, ok := val.(*openAISessionState)
 	if !ok || state == nil {
-		s.sessionPending.Delete(key)
+		s.sessionPending.CompareAndDelete(key, val)
 		return
 	}
 	if err := s.upsertSessionState(ctx, state); err != nil {
 		s.logger.Warn("持久化 OpenAI 会话状态失败", "session_key", key, "error", err)
 		return
 	}
-	s.sessionPending.Delete(key)
+	s.sessionPending.CompareAndDelete(key, val)
 }
 
 func (s *codexUsagePersistenceStore) upsertSessionState(ctx context.Context, state *openAISessionState) error {
@@ -282,7 +288,8 @@ DO UPDATE SET
   last_seen_at = EXCLUDED.last_seen_at,
   last_updated_at = EXCLUDED.last_updated_at,
   last_response_at = EXCLUDED.last_response_at,
-  last_turn_state_at = EXCLUDED.last_turn_state_at`,
+  last_turn_state_at = EXCLUDED.last_turn_state_at
+WHERE %[1]s.last_updated_at <= EXCLUDED.last_updated_at`,
 		sessionStatePersistTable,
 	)
 	_, err := s.db.ExecContext(
