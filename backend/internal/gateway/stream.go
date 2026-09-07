@@ -145,10 +145,21 @@ func handleStreamResponseWithOptions(
 	var imageGenCount int
 	var imageGenSize string
 	responseID := ""
+	var limit *responseLimit
+	if resp.Request != nil {
+		limit = responseLimitFor(resp.Request.Context())
+	}
+	budget := streamResponseBudget{limit: limit}
 
 streamLoop:
 	for scanner.Scan() {
 		line := scanner.Text()
+		budgetData, _ := extractSSEData(line)
+		if err := budget.take(streamDiagnosticEventType(budgetData), []byte(budgetData), len(line)+1); err != nil {
+			streamErr = err
+			_ = resp.Body.Close()
+			break
+		}
 		forwardLine := line
 		diagnostics.observeLine(line)
 		data, ok := extractSSEData(line)
@@ -232,6 +243,11 @@ streamLoop:
 	}
 	if err := scanner.Err(); err != nil && streamErr == nil {
 		streamErr = fmt.Errorf("读取上游 SSE 失败: %w", err)
+		if errors.Is(err, bufio.ErrTooLong) {
+			budget.limit.trip()
+			streamErr = errResponseTooLarge
+			_ = resp.Body.Close()
+		}
 	}
 	if streamErr == nil && !completed {
 		streamErr = fmt.Errorf("未收到上游流式完成事件")
@@ -495,7 +511,7 @@ func firstNonZero(values ...int) int {
 
 // handleNonStreamResponse 处理非流式响应。resp.StatusCode 预设 2xx。
 func handleNonStreamResponse(resp *http.Response, w http.ResponseWriter, start time.Time, reqServiceTier string) (sdk.ForwardOutcome, error) {
-	body, err := io.ReadAll(resp.Body)
+	body, err := readResponseBody(resp)
 	if err != nil {
 		reason := fmt.Sprintf("读取上游响应失败: %v", err)
 		return transientOutcome(reason), fmt.Errorf("%s", reason)
@@ -545,17 +561,26 @@ func handleNonStreamResponse(resp *http.Response, w http.ResponseWriter, start t
 
 // ParseSSEStream 从 SSE 流中解析事件，通过 handler 回调输出，返回统一的 WSResult
 // 供 cmd/chat 等外部调用者复用，与 ReceiveWSResponse 签名对齐
-func ParseSSEStream(reader io.Reader, handler WSEventHandler) WSResult {
+func ParseSSEStream(reader io.Reader, handler WSEventHandler, contexts ...context.Context) WSResult {
 	start := time.Now()
 	result := WSResult{}
 	var textBuilder strings.Builder
 	var reasoningBuilder strings.Builder
+	budget := streamResponseBudget{limit: responseLimitFor(imageRequestContext(contexts))}
 
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64*1024), upstreamSSEMaxLineBytes)
 
 	for scanner.Scan() {
 		line := scanner.Text()
+		budgetData, _ := extractSSEData(line)
+		if err := budget.take(streamDiagnosticEventType(budgetData), []byte(budgetData), len(line)+1); err != nil {
+			result.Err = err
+			if closer, ok := reader.(io.Closer); ok {
+				_ = closer.Close()
+			}
+			break
+		}
 
 		data, ok := extractSSEData(line)
 		if !ok || len(data) == 0 || data == "[DONE]" {
@@ -572,6 +597,16 @@ func ParseSSEStream(reader io.Reader, handler WSEventHandler) WSResult {
 		// 通知 handler 原始事件
 		if handler != nil {
 			handler.OnRawEvent(eventType, []byte(data))
+			if err := handlerResponseError(handler); err != nil {
+				result.Err = err
+				if errors.Is(err, errResponseTooLarge) {
+					budget.limit.trip()
+				}
+				if closer, ok := reader.(io.Closer); ok {
+					_ = closer.Close()
+				}
+				break
+			}
 		}
 
 		switch eventType {
@@ -679,6 +714,13 @@ func ParseSSEStream(reader io.Reader, handler WSEventHandler) WSResult {
 
 	if err := scanner.Err(); err != nil && result.Err == nil {
 		result.Err = fmt.Errorf("读取 SSE 失败: %w", err)
+		if errors.Is(err, bufio.ErrTooLong) {
+			budget.limit.trip()
+			result.Err = errResponseTooLarge
+			if closer, ok := reader.(io.Closer); ok {
+				_ = closer.Close()
+			}
+		}
 	}
 
 	finalizeWSResult(&result, &textBuilder, &reasoningBuilder, start)

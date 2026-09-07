@@ -507,7 +507,7 @@ func (g *OpenAIGateway) handleAnthropicNonStreamFromResponses(
 	accountID int64,
 ) (sdk.ForwardOutcome, error) {
 	timing := newResponseEventTiming(start)
-	wsResult := ParseSSEStream(resp.Body, responseTimingObserver{timing: &timing})
+	wsResult := ParseSSEStream(resp.Body, responseTimingObserver{timing: &timing}, responseRequestContext(resp))
 	if wsResult.Err != nil {
 		var failure *responsesFailureError
 		if errors.As(wsResult.Err, &failure) {

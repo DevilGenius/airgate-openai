@@ -2835,7 +2835,7 @@ func (g *OpenAIGateway) handleImagesResponse(resp *http.Response, w http.Respons
 }
 
 func handleImagesResponseWithLogger(logger *slog.Logger, resp *http.Response, w http.ResponseWriter, sseKA *ssePingKeepAlive, start time.Time, fallbackModel string, options ...imagesResponseOptions) (sdk.ForwardOutcome, error) {
-	body, err := io.ReadAll(resp.Body)
+	body, err := readResponseBody(resp)
 	if err != nil {
 		reason := fmt.Sprintf("读取 Images 响应失败: %v", err)
 		if sseKA != nil {

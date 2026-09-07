@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -325,6 +326,7 @@ func receiveWSResponse(ctx context.Context, conn *websocket.Conn, handler WSEven
 	result := WSResult{}
 	var textBuilder strings.Builder
 	var reasoningBuilder strings.Builder
+	budget := streamResponseBudget{limit: responseLimitFor(ctx)}
 	stopKeepAlive := startWebSocketKeepAlive(ctx, conn)
 	defer stopKeepAlive()
 
@@ -351,14 +353,11 @@ func receiveWSResponse(ctx context.Context, conn *websocket.Conn, handler WSEven
 		if err != nil {
 			if ctx.Err() != nil {
 				result.Err = ctx.Err()
+			} else if errors.Is(err, websocket.ErrReadLimit) {
+				budget.limit.trip()
+				result.Err = errResponseTooLarge
 			} else if websocket.IsCloseError(err, websocket.CloseMessageTooBig) {
-				result.Err = &responsesFailureError{
-					Kind:               responsesFailureKindClient,
-					StatusCode:         http.StatusRequestEntityTooLarge,
-					AnthropicErrorType: "invalid_request_error",
-					Code:               "context_too_large",
-					Message:            contextTooLargeMessage,
-				}
+				result.Err = &responsesFailureError{Kind: responsesFailureKindClient, StatusCode: http.StatusRequestEntityTooLarge, AnthropicErrorType: "invalid_request_error", Code: "context_too_large", Message: contextTooLargeMessage}
 			} else {
 				result.Err = fmt.Errorf("读取 WebSocket 消息失败: %w", err)
 			}
@@ -366,6 +365,11 @@ func receiveWSResponse(ctx context.Context, conn *websocket.Conn, handler WSEven
 		}
 
 		var ev map[string]any
+		if err := budget.take(gjson.GetBytes(msg, "type").String(), msg); err != nil {
+			result.Err = err
+			_ = conn.Close()
+			break
+		}
 		if json.Unmarshal(msg, &ev) != nil {
 			continue
 		}
@@ -385,6 +389,14 @@ func receiveWSResponse(ctx context.Context, conn *websocket.Conn, handler WSEven
 		// 通知 handler 原始事件
 		if handler != nil {
 			handler.OnRawEvent(eventType, msg)
+			if err := handlerResponseError(handler); err != nil {
+				result.Err = err
+				if errors.Is(err, errResponseTooLarge) {
+					budget.limit.trip()
+				}
+				_ = conn.Close()
+				break
+			}
 		}
 
 		switch eventType {

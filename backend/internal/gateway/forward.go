@@ -853,7 +853,7 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 	// Images API 响应体无 model 字段，另走专用处理器回填后再 fillCost
 	if isImagesRequest(reqPath) {
 		// 检测异步任务模式（如 apimart.ai gpt-image-2 返回 task_id）
-		body, readErr := io.ReadAll(resp.Body)
+		body, readErr := readResponseBody(resp)
 		_ = resp.Body.Close()
 		if readErr != nil {
 			reason := fmt.Sprintf("读取 Images 响应失败: %v", readErr)
@@ -945,8 +945,13 @@ func enrichModelsResponse(resp *http.Response) *http.Response {
 		return resp
 	}
 
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := readResponseBody(resp)
 	_ = resp.Body.Close()
+	if err != nil {
+		resp.Body = io.NopCloser(failedResponseReader{err: err})
+		resp.ContentLength = -1
+		return resp
+	}
 	if err != nil || len(raw) == 0 {
 		resp.Body = io.NopCloser(bytes.NewReader(raw))
 		if len(raw) > 0 {
@@ -1474,11 +1479,14 @@ type sseEventWriter struct {
 	sessionKey             string
 	timing                 responseEventTiming
 	pendingEvents          []string // 首个真实输出前暂存控制事件，保留 Core failover 能力
+	pendingBytes           int
+	err                    error
 	wrote                  bool
 	terminalErrorForwarded bool
 }
 
 func (s *sseEventWriter) OnTextDelta(string)      {}
+func (s *sseEventWriter) Err() error              { return s.err }
 func (s *sseEventWriter) OnReasoningDelta(string) {}
 func (s *sseEventWriter) OnRateLimits(used float64) {
 	if s.accountID > 0 {
@@ -1490,7 +1498,7 @@ func (s *sseEventWriter) OnRateLimits(used float64) {
 }
 
 func (s *sseEventWriter) OnRawEvent(eventType string, data []byte) {
-	if s.w == nil || eventType == "" {
+	if s.w == nil || eventType == "" || s.err != nil {
 		return
 	}
 	data = normalizeInvalidImageInputEvent(eventType, data)
@@ -1514,6 +1522,7 @@ func (s *sseEventWriter) OnRawEvent(eventType string, data []byte) {
 		}
 		if !s.wrote {
 			s.pendingEvents = nil
+			s.pendingBytes = 0
 			return
 		}
 	case "response.completed", "response.done":
@@ -1527,18 +1536,36 @@ func (s *sseEventWriter) OnRawEvent(eventType string, data []byte) {
 	if !s.wrote {
 		// response.created / in_progress 不代表模型已经产生输出。先缓冲这些控制事件；
 		// 若上游随后 overload，整个 attempt 仍可由 Core 丢弃并换账号重试。
-		s.pendingEvents = append(s.pendingEvents, formatted)
 		if !isResponseOutputEvent(eventType, data) && !terminalSuccessEvent {
+			if len(formatted) > (1<<20)-s.pendingBytes {
+				s.err = errResponseTooLarge
+				s.pendingEvents = nil
+				s.pendingBytes = 0
+				return
+			}
+			s.pendingBytes += len(formatted)
+			s.pendingEvents = append(s.pendingEvents, formatted)
 			return
 		}
-		formatted = strings.Join(s.pendingEvents, "")
+		if len(s.pendingEvents) > 0 {
+			written, err := fmt.Fprint(s.w, strings.Join(s.pendingEvents, ""))
+			if written > 0 {
+				s.wrote = true
+			}
+			if err != nil {
+				s.err = err
+				return
+			}
+		}
 		s.pendingEvents = nil
+		s.pendingBytes = 0
 	}
 	written, err := fmt.Fprint(s.w, formatted)
 	if written > 0 {
 		s.wrote = true
 	}
 	if err != nil {
+		s.err = err
 		return
 	}
 	if terminalErrorEvent {

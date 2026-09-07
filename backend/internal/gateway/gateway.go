@@ -138,7 +138,7 @@ func (g *OpenAIGateway) Routes() []sdk.RouteDefinition {
 	return PluginRouteDefinitions()
 }
 
-func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (sdk.ForwardOutcome, error) {
+func (g *OpenAIGateway) forwardWithinResponseLimit(ctx context.Context, req *sdk.ForwardRequest) (sdk.ForwardOutcome, error) {
 	// 抽取/生成 request_id 并派生请求级 logger，注入 ctx 供下游使用
 	rid := sdk.ExtractOrGenerateRequestID(req.Headers)
 	logger := sdk.LoggerFromContext(ctx).With(sdk.LogFieldRequestID, rid)
