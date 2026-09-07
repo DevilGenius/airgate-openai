@@ -460,7 +460,7 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 		imagesRespOpts = imagesResponseOptionsFromRequestBody(req.Body, reqContentType, isImageEdit)
 	}
 	if isImageEdit && len(req.Body) > 0 && !isMultipart {
-		body, contentType, _, err := buildAPIKeyImagesEditMultipartBodyWithRequest(req.Body, reqContentType)
+		body, contentType, _, err := buildAPIKeyImagesEditMultipartBodyWithRequest(req.Body, reqContentType, ctx)
 		if err != nil {
 			if errors.Is(err, errImageProcessingBusy) {
 				return imageProcessingBusyOutcome(time.Since(start)), nil

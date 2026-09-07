@@ -1485,6 +1485,7 @@ func TestBuildImagesToolCreateMsg_EmptyPrompt(t *testing.T) {
 // TestBuildImagesToolCreateMsg_Edit_JSON 验证 /images/edits 走 JSON 路径时：
 // 参考图以 input_image 注入，mask 转成 Codex built-in image_gen 可理解的区域标注图。
 func TestBuildImagesToolCreateMsg_Edit_JSON(t *testing.T) {
+	useLocalImageDownloadClient(t)
 	imageRef := testPNGDataURL(2, 2, func(x, y int) color.RGBA {
 		return color.RGBA{R: 80, G: 90, B: 100, A: 255}
 	})
@@ -1572,6 +1573,7 @@ func TestBuildImagesToolCreateMsg_Edit_JSON(t *testing.T) {
 }
 
 func TestBuildAPIKeyImagesEditMultipartBody_RemoteRefs(t *testing.T) {
+	useLocalImageDownloadClient(t)
 	imageBytes := testPNGBytes(2, 2, func(x, y int) color.RGBA {
 		return color.RGBA{R: 90, G: 100, B: 110, A: 255}
 	})

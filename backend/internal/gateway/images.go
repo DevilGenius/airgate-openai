@@ -56,7 +56,7 @@ const (
 // 历史变量名保留，但实际对外提示保持统一的重试文案，不再暗示用户压缩图片。
 const imageTooLargeSSEErrorMessage = sanitizedImageSSEErrorMessage
 
-var imageDownloadHTTPClient = &http.Client{Timeout: 30 * time.Second}
+var imageDownloadHTTPClient = newImageDownloadHTTPClient()
 
 func imageSafetyFailure() *responsesFailureError {
 	return &responsesFailureError{
@@ -558,7 +558,7 @@ func buildAPIKeyImagesEditMultipartBody(body []byte, contentType string) ([]byte
 	return multipartBody, multipartContentType, err
 }
 
-func buildAPIKeyImagesEditMultipartBodyWithRequest(body []byte, contentType string) ([]byte, string, *imagesRequest, error) {
+func buildAPIKeyImagesEditMultipartBodyWithRequest(body []byte, contentType string, contexts ...context.Context) ([]byte, string, *imagesRequest, error) {
 	req, err := parseImagesRequest(body, contentType, true)
 	if err != nil {
 		return nil, "", nil, err
@@ -589,7 +589,7 @@ func buildAPIKeyImagesEditMultipartBodyWithRequest(body []byte, contentType stri
 		if len(req.Images) > 1 {
 			fieldName = "image[]"
 		}
-		mimeType, data, err := readImageRefBytes(ref, maxEditInputImageBytes)
+		mimeType, data, err := readImageRefBytes(ref, maxEditInputImageBytes, contexts...)
 		if err != nil {
 			_ = mw.Close()
 			return nil, "", nil, err
@@ -607,7 +607,7 @@ func buildAPIKeyImagesEditMultipartBodyWithRequest(body []byte, contentType stri
 	}
 	if req.Mask != "" {
 		// mask 不压缩：透明度信息不能转 JPEG
-		mimeType, data, err := readImageRefBytes(req.Mask, 0)
+		mimeType, data, err := readImageRefBytes(req.Mask, 0, contexts...)
 		if err != nil {
 			_ = mw.Close()
 			return nil, "", nil, err
@@ -682,7 +682,7 @@ func resizeMaskToImageSize(data []byte, mimeType string, width, height int) ([]b
 	return buf.Bytes(), "image/png", nil
 }
 
-func readImageRefBytes(ref string, shrinkLimit int) (string, []byte, error) {
+func readImageRefBytes(ref string, shrinkLimit int, contexts ...context.Context) (string, []byte, error) {
 	switch {
 	case strings.HasPrefix(ref, "data:"):
 		mimeType, data, err := decodeDataImageURL(ref)
@@ -697,7 +697,7 @@ func readImageRefBytes(ref string, shrinkLimit int) (string, []byte, error) {
 		}
 		return mimeType, data, nil
 	case strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://"):
-		data, mimeType, err := downloadImageBytes(ref)
+		data, mimeType, err := downloadImageBytes(imageRequestContext(contexts), ref)
 		if err != nil {
 			return "", nil, err
 		}
@@ -713,8 +713,8 @@ func readImageRefBytes(ref string, shrinkLimit int) (string, []byte, error) {
 	}
 }
 
-func downloadImageBytes(ref string) ([]byte, string, error) {
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ref, nil)
+func downloadImageBytes(ctx context.Context, ref string) ([]byte, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ref, nil)
 	if err != nil {
 		return nil, "", fmt.Errorf("构建图片下载请求失败: %w", err)
 	}
@@ -1330,16 +1330,16 @@ func cleanImageConstraintValue(value string) string {
 	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
 }
 
-func buildEditRegionAnnotation(req *imagesRequest) (string, error) {
+func buildEditRegionAnnotation(req *imagesRequest, contexts ...context.Context) (string, error) {
 	if req == nil || req.Mask == "" || len(req.Images) == 0 {
 		return "", nil
 	}
-	base, releaseBase, err := decodeImageRefImage(req.Images[0])
+	base, releaseBase, err := decodeImageRefImage(req.Images[0], contexts...)
 	if err != nil {
 		return "", fmt.Errorf("解码编辑目标图片失败: %w", err)
 	}
 	defer releaseBase()
-	mask, releaseMask, err := decodeImageRefImage(req.Mask)
+	mask, releaseMask, err := decodeImageRefImage(req.Mask, contexts...)
 	if err != nil {
 		return "", fmt.Errorf("解码编辑 mask 失败: %w", err)
 	}
@@ -1405,8 +1405,8 @@ func blendRGBA(dst, src color.RGBA) color.RGBA {
 	}
 }
 
-func decodeImageRefImage(ref string) (image.Image, func(), error) {
-	mimeType, data, err := readImageRefBytes(ref, 0)
+func decodeImageRefImage(ref string, contexts ...context.Context) (image.Image, func(), error) {
+	mimeType, data, err := readImageRefBytes(ref, 0, contexts...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1436,11 +1436,11 @@ func shrinkResponsesInputImages(req *imagesRequest) error {
 	return nil
 }
 
-func normalizeResponsesEditTargetImage(req *imagesRequest) error {
+func normalizeResponsesEditTargetImage(req *imagesRequest, contexts ...context.Context) error {
 	if req == nil || len(req.Images) == 0 {
 		return nil
 	}
-	mimeType, data, err := readImageRefBytes(req.Images[0], maxResponsesInputImageBytes)
+	mimeType, data, err := readImageRefBytes(req.Images[0], maxResponsesInputImageBytes, contexts...)
 	if err != nil {
 		return err
 	}
@@ -1701,6 +1701,7 @@ func buildImagesToolCreateMsgWithUsage(
 	contentType string,
 	isEdit bool,
 	session openAISessionResolution,
+	contexts ...context.Context,
 ) ([]byte, int, imagesInputTokenEstimate, error) {
 	req, err := parseImagesRequest(body, contentType, isEdit)
 	if err != nil {
@@ -1716,11 +1717,11 @@ func buildImagesToolCreateMsgWithUsage(
 		return nil, 0, imagesInputTokenEstimate{}, err
 	}
 	if isEdit && req.Mask != "" {
-		if err := normalizeResponsesEditTargetImage(req); err != nil {
+		if err := normalizeResponsesEditTargetImage(req, contexts...); err != nil {
 			return nil, 0, imagesInputTokenEstimate{}, err
 		}
 	}
-	regionAnnotation, err := buildEditRegionAnnotation(req)
+	regionAnnotation, err := buildEditRegionAnnotation(req, contexts...)
 	if err != nil {
 		return nil, 0, imagesInputTokenEstimate{}, err
 	}
@@ -1902,7 +1903,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 				Duration: time.Since(start),
 			}, nil
 		}
-		createMsg, attemptN, attemptInputEstimate, err := buildImagesToolCreateMsgWithUsage(attemptBody, attemptContentType, isEdit, session)
+		createMsg, attemptN, attemptInputEstimate, err := buildImagesToolCreateMsgWithUsage(attemptBody, attemptContentType, isEdit, session, ctx)
 		if err != nil {
 			if errors.Is(err, errImageProcessingBusy) {
 				return imageProcessingBusyOutcome(time.Since(start)), nil
