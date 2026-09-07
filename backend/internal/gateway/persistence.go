@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -32,6 +33,16 @@ type codexUsagePersistenceStore struct {
 	pending        sync.Map // accountID -> *CodexUsageSnapshot
 	sessionPending sync.Map // sessionKey -> *openAISessionState
 	wg             sync.WaitGroup
+	pendingMu      sync.Mutex
+	pendingSizes   map[any]int64
+	pendingBytes   int64
+	dropped        atomic.Int64
+	closing        bool
+	closeOnce      sync.Once
+	runCtx         context.Context
+	runCancel      context.CancelFunc
+	closeCtx       context.Context
+	done           chan struct{}
 }
 
 func sessionPersistKey(sessionKey string) string {
@@ -47,6 +58,9 @@ func newCodexUsagePersistenceStore(dsn, pluginID string, logger *slog.Logger) (*
 	if err != nil {
 		return nil, fmt.Errorf("open snapshot db: %w", err)
 	}
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(2)
+	db.SetConnMaxLifetime(10 * time.Minute)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -62,6 +76,7 @@ func newCodexUsagePersistenceStore(dsn, pluginID string, logger *slog.Logger) (*
 		flushCh:        make(chan int64, codexUsagePersistenceQueueSize),
 		stopCh:         make(chan struct{}),
 		sessionFlushCh: make(chan string, codexUsagePersistenceQueueSize),
+		done:           make(chan struct{}),
 	}
 	if err := store.ensureSchema(ctx); err != nil {
 		_ = db.Close()
@@ -69,6 +84,7 @@ func newCodexUsagePersistenceStore(dsn, pluginID string, logger *slog.Logger) (*
 	}
 
 	store.wg.Add(1)
+	store.runCtx, store.runCancel = context.WithCancel(context.Background())
 	go store.run()
 	return store, nil
 }
@@ -127,21 +143,28 @@ CREATE INDEX IF NOT EXISTS idx_%s_updated_at
 }
 
 func (s *codexUsagePersistenceStore) run() {
-	defer s.wg.Done()
+	s.runWithInterval(codexUsagePersistenceFlushEvery)
+}
 
-	ticker := time.NewTicker(codexUsagePersistenceFlushEvery)
+func (s *codexUsagePersistenceStore) runWithInterval(interval time.Duration) {
+	defer s.wg.Done()
+	defer close(s.done)
+	defer s.db.Close()
+
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case accountID := <-s.flushCh:
-			s.flushAccount(context.Background(), accountID)
-		case sessionKey := <-s.sessionFlushCh:
-			s.flushSessionStateRecord(context.Background(), sessionKey)
+		case <-s.flushCh:
+			// Coalesce snapshots until the bounded periodic batch.
+		case <-s.sessionFlushCh:
 		case <-ticker.C:
-			s.flushAll(context.Background())
+			ctx, cancel := context.WithTimeout(s.runCtx, 5*time.Second)
+			s.flushAll(ctx)
+			cancel()
 		case <-s.stopCh:
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			ctx, cancel := context.WithTimeout(s.closeCtx, 5*time.Second)
 			s.flushAll(ctx)
 			cancel()
 			return
@@ -154,7 +177,10 @@ func (s *codexUsagePersistenceStore) SaveAsync(accountID int64, snapshot *CodexU
 		return
 	}
 	cloned := cloneCodexUsageSnapshot(snapshot)
-	if !storeNewerPending(&s.pending, accountID, cloned, func(v *CodexUsageSnapshot) time.Time { return v.CapturedAt }) {
+	size := int64(512 + len(cloned.PlanType) + len(cloned.LimitName) + len(cloned.ActiveLimit))
+	if !s.savePending(accountID, size, func() bool {
+		return storeNewerPending(&s.pending, accountID, cloned, func(v *CodexUsageSnapshot) time.Time { return v.CapturedAt })
+	}) {
 		return
 	}
 
@@ -170,6 +196,9 @@ func (s *codexUsagePersistenceStore) flushAll(ctx context.Context) {
 		return
 	}
 	s.pending.Range(func(key, _ any) bool {
+		if ctx.Err() != nil {
+			return false
+		}
 		accountID, ok := key.(int64)
 		if ok {
 			s.flushAccount(ctx, accountID)
@@ -177,6 +206,9 @@ func (s *codexUsagePersistenceStore) flushAll(ctx context.Context) {
 		return true
 	})
 	s.sessionPending.Range(func(key, _ any) bool {
+		if ctx.Err() != nil {
+			return false
+		}
 		sessionKey, ok := key.(string)
 		if ok {
 			s.flushSessionStateRecord(ctx, sessionKey)
@@ -195,17 +227,19 @@ func (s *codexUsagePersistenceStore) flushAccount(ctx context.Context, accountID
 	}
 	snapshot, ok := val.(*CodexUsageSnapshot)
 	if !ok || snapshot == nil {
-		s.pending.CompareAndDelete(accountID, val)
+		s.removePending(&s.pending, accountID, val)
 		return
 	}
 	if err := s.upsert(ctx, accountID, snapshot); err != nil {
 		s.logger.Warn("持久化 Codex 用量快照失败", "account_id", accountID, "error", err)
 		return
 	}
-	s.pending.CompareAndDelete(accountID, val)
+	s.removePending(&s.pending, accountID, val)
 }
 
 func (s *codexUsagePersistenceStore) upsert(ctx context.Context, accountID int64, snapshot *CodexUsageSnapshot) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
 	payload, err := json.Marshal(snapshot)
 	if err != nil {
 		return fmt.Errorf("marshal snapshot: %w", err)
@@ -240,7 +274,8 @@ func (s *codexUsagePersistenceStore) SaveSessionStateAsync(state *openAISessionS
 		return
 	}
 	cloned := cloneSessionState(state)
-	if !storeNewerPending(&s.sessionPending, key, cloned, sessionStateLastActivity) {
+	size := int64(512 + len(cloned.SessionKey) + len(cloned.SessionID) + len(cloned.ConversationID) + len(cloned.PromptCacheKey) + len(cloned.LastResponseID) + len(cloned.LastTurnState))
+	if !s.savePending(key, size, func() bool { return storeNewerPending(&s.sessionPending, key, cloned, sessionStateLastActivity) }) {
 		return
 	}
 	select {
@@ -256,17 +291,19 @@ func (s *codexUsagePersistenceStore) flushSessionStateRecord(ctx context.Context
 	}
 	state, ok := val.(*openAISessionState)
 	if !ok || state == nil {
-		s.sessionPending.CompareAndDelete(key, val)
+		s.removePending(&s.sessionPending, key, val)
 		return
 	}
 	if err := s.upsertSessionState(ctx, state); err != nil {
 		s.logger.Warn("持久化 OpenAI 会话状态失败", "session_key", key, "error", err)
 		return
 	}
-	s.sessionPending.CompareAndDelete(key, val)
+	s.removePending(&s.sessionPending, key, val)
 }
 
 func (s *codexUsagePersistenceStore) upsertSessionState(ctx context.Context, state *openAISessionState) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
 	if state == nil || strings.TrimSpace(state.SessionKey) == "" {
 		return nil
 	}
@@ -429,12 +466,31 @@ func nullableUTCTime(t time.Time) any {
 }
 
 func (s *codexUsagePersistenceStore) Close() error {
+	return s.CloseContext(context.Background())
+}
+
+func (s *codexUsagePersistenceStore) CloseContext(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
-	close(s.stopCh)
-	s.wg.Wait()
-	return s.db.Close()
+	s.closeOnce.Do(func() {
+		s.pendingMu.Lock()
+		s.closing = true
+		s.pendingMu.Unlock()
+		s.closeCtx = ctx
+		close(s.stopCh)
+		if s.runCancel != nil {
+			s.runCancel()
+		}
+	})
+	wait, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	select {
+	case <-s.done:
+		return nil
+	case <-wait.Done():
+		return wait.Err()
+	}
 }
 
 func cloneCodexUsageSnapshot(snapshot *CodexUsageSnapshot) *CodexUsageSnapshot {

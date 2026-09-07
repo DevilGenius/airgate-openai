@@ -109,19 +109,21 @@ func (g *OpenAIGateway) Start(_ context.Context) error {
 	return nil
 }
 
-func (g *OpenAIGateway) Stop(_ context.Context) error {
+func (g *OpenAIGateway) Stop(ctx context.Context) error {
+	var stopErr error
 	if g.transportPool != nil {
 		g.transportPool.CloseIdle()
 	}
 	if g.snapshotStore != nil {
 		setCodexUsagePersistenceStore(nil)
-		if err := g.snapshotStore.Close(); err != nil {
+		if err := g.snapshotStore.CloseContext(ctx); err != nil {
 			g.logger.Warn("关闭 Codex 用量快照持久化失败", "error", err)
+			stopErr = err
 		}
 		g.snapshotStore = nil
 	}
 	g.logger.Info("OpenAI 网关插件停止")
-	return nil
+	return stopErr
 }
 
 func (g *OpenAIGateway) Platform() string {
