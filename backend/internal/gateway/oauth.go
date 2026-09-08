@@ -99,11 +99,13 @@ func (g *OpenAIGateway) StartOAuth(ctx context.Context, req *OAuthStartRequest) 
 	callbackURL := OAuthCallbackURL()
 
 	// 保存会话
-	oauthSessions.Store(state, &pkceSession{
+	if err := g.saveOAuthSession(ctx, state, &pkceSession{
 		verifier:    verifier,
 		callbackURL: callbackURL,
 		createdAt:   time.Now(),
-	})
+	}); err != nil {
+		return nil, err
+	}
 
 	// 构建授权 URL（参数与 codex 完全一致）
 	q := url.Values{}
@@ -128,11 +130,13 @@ func (g *OpenAIGateway) StartOAuth(ctx context.Context, req *OAuthStartRequest) 
 
 // HandleOAuthCallback 处理 OAuth 回调，完成 token 交换
 func (g *OpenAIGateway) HandleOAuthCallback(ctx context.Context, req *OAuthCallbackRequest) (*OAuthResult, error) {
-	val, ok := oauthSessions.LoadAndDelete(req.State)
+	session, ok, err := g.consumeOAuthSession(ctx, req.State)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, fmt.Errorf("无效或已过期的 state")
 	}
-	session := val.(*pkceSession)
 
 	if time.Since(session.createdAt) > 10*time.Minute {
 		return nil, fmt.Errorf("OAuth 会话已过期")

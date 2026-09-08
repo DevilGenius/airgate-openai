@@ -4,37 +4,24 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
 
 func TestLoadAssetsFromDir(t *testing.T) {
-	if got := loadAssetsFromDir(filepath.Join(t.TempDir(), "missing")); got != nil {
-		t.Fatalf("missing dir assets = %#v", got)
-	}
-
+	before := (&OpenAIGateway{}).GetWebAssets()
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "index.js"), []byte("console.log(1)"), 0o600); err != nil {
-		t.Fatalf("write index: %v", err)
+	if err := os.MkdirAll(filepath.Join(root, "web", "dist"), 0755); err != nil {
+		t.Fatal(err)
 	}
-	if err := os.Mkdir(filepath.Join(root, "nested"), 0o700); err != nil {
-		t.Fatalf("mkdir nested: %v", err)
+	if err := os.WriteFile(filepath.Join(root, "web", "dist", "index.js"), []byte("wrong project"), 0644); err != nil {
+		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "nested", "style.css"), []byte("body{}"), 0o600); err != nil {
-		t.Fatalf("write nested: %v", err)
-	}
-
-	assets := loadAssetsFromDir(root)
-	if string(assets["index.js"]) != "console.log(1)" {
-		t.Fatalf("index asset = %q", assets["index.js"])
-	}
-	if string(assets["nested/style.css"]) != "body{}" {
-		t.Fatalf("nested asset = %q", assets["nested/style.css"])
-	}
-
-	empty := t.TempDir()
-	if got := loadAssetsFromDir(empty); got != nil {
-		t.Fatalf("empty dir assets = %#v", got)
+	t.Chdir(root)
+	after := (&OpenAIGateway{}).GetWebAssets()
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("working directory changed immutable plugin assets")
 	}
 }
 

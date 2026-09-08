@@ -26,6 +26,9 @@ func (g *OpenAIGateway) forwardAnthropicMessage(ctx context.Context, req *sdk.Fo
 	body := req.Body
 	strategy := resolveAnthropicUpstreamStrategy(req.Account)
 	session := resolveOpenAISession(req.Headers, req.Body, req.Account.ID)
+	if session.StateError != nil {
+		return sharedStateUnavailable(session.StateError)
+	}
 	session.DigestChain = buildAnthropicDigestChain(body)
 	if session.SessionKey == "" && !strings.HasPrefix(session.Scope, "anonymous:") {
 		if reusedSessionID, matchedChain, ok := findAnthropicDigestSession(req.Account.ID, session.DigestChain, session.Scope); ok {

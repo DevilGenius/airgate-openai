@@ -63,6 +63,17 @@ func (g *OpenAIGateway) Init(ctx sdk.PluginContext) error {
 	if hostAware, ok := ctx.(sdk.HostAware); ok {
 		g.host = hostAware.Host()
 	}
+	if g.host != nil {
+		shared := &sdk.RuntimeStateClient{Host: g.host}
+		readyCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_, _, _, err := shared.Get(readyCtx, "readiness")
+		cancel()
+		if err != nil {
+			return fmt.Errorf("Core runtime state is unavailable: %w", err)
+		}
+		sessionStateStore.shared = shared
+		anthropicDigestStore.shared = shared
+	}
 	if dsn := sdk.GetPluginDSN(ctx); dsn != "" {
 		store, err := newCodexUsagePersistenceStore(dsn, PluginID, g.logger)
 		if err != nil {

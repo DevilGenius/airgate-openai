@@ -1830,6 +1830,9 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 	account := req.Account
 
 	session := resolveOpenAISession(req.Headers, req.Body, account.ID)
+	if session.StateError != nil {
+		return sharedStateUnavailable(session.StateError)
+	}
 	updateSessionStateFromRequest(session, account.ID)
 
 	_, reqPath := resolveAPIKeyRoute(req)

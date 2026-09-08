@@ -2,8 +2,12 @@ package gateway
 
 import (
 	"container/list"
+	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
+	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -212,6 +216,7 @@ func deriveAnthropicPromptCacheKey(body []byte) string {
 }
 
 type openAISessionResolution struct {
+	StateError      error
 	Scope           string
 	SessionKey      string
 	SessionID       string
@@ -234,6 +239,7 @@ const (
 )
 
 type sessionStateMemoryStore struct {
+	shared     sdk.RuntimeState
 	mu         sync.Mutex
 	items      map[string]*sessionMemoryEntry
 	ttl        time.Duration
@@ -259,6 +265,16 @@ func (s *sessionStateMemoryStore) Load(key any) (any, bool) {
 	if s == nil || !ok || sessionKey == "" {
 		return nil, false
 	}
+	if s.shared != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		state, err := s.loadShared(ctx, sessionKey)
+		if err != nil {
+			slog.Warn("session_state_read_failed", "error", err)
+			return nil, false
+		}
+		return state, state != nil
+	}
 	now := time.Now().UTC()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -278,6 +294,18 @@ func (s *sessionStateMemoryStore) Store(key, value any) {
 	sessionKey, ok := key.(string)
 	state, okState := value.(*openAISessionState)
 	if s == nil || !ok || sessionKey == "" || !okState || state == nil {
+		return
+	}
+	if s.shared != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		data, err := json.Marshal(state)
+		if err == nil {
+			_, err = s.shared.CompareAndSwap(ctx, sharedStateKey("session", sessionKey), "0", string(data))
+		}
+		if err != nil {
+			slog.Warn("session_state_seed_failed", "error", err)
+		}
 		return
 	}
 	now := time.Now().UTC()
@@ -305,6 +333,9 @@ func (s *sessionStateMemoryStore) Store(key, value any) {
 }
 
 func (s *sessionStateMemoryStore) Update(key string, update func(*openAISessionState)) *openAISessionState {
+	if s.shared != nil {
+		return s.updateShared(key, update)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC().Truncate(time.Microsecond)
@@ -442,7 +473,9 @@ func resolveOpenAISessionWithScope(headers http.Header, body []byte, accountID i
 		resolution.SessionSource = "prompt_cache_key"
 	}
 
-	if state := getSessionState(sessionKey); state != nil {
+	state, stateErr := readSessionState(sessionKey)
+	resolution.StateError = stateErr
+	if state != nil {
 		resolution.FromStoredState = true
 		sameAccount := state.AccountID == 0 || state.AccountID == accountID
 		if resolution.SessionID == "" {
@@ -502,6 +535,7 @@ type anthropicDigestCacheNode struct {
 }
 
 type anthropicDigestCache struct {
+	shared  sdk.RuntimeState
 	mu      sync.Mutex
 	ll      *list.List
 	items   map[string]*list.Element
@@ -519,6 +553,9 @@ func newAnthropicDigestCache(maxSize int, ttl time.Duration) *anthropicDigestCac
 }
 
 func (c *anthropicDigestCache) Load(key string) (*anthropicDigestEntry, bool) {
+	if c.shared != nil {
+		return loadSharedDigest(c.shared, key)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	el, ok := c.items[key]
@@ -536,6 +573,10 @@ func (c *anthropicDigestCache) Load(key string) (*anthropicDigestEntry, bool) {
 }
 
 func (c *anthropicDigestCache) Store(key string, entry *anthropicDigestEntry) {
+	if c.shared != nil {
+		storeSharedDigest(c.shared, key, entry)
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if el, ok := c.items[key]; ok {
@@ -556,6 +597,9 @@ func (c *anthropicDigestCache) Store(key string, entry *anthropicDigestEntry) {
 }
 
 func (c *anthropicDigestCache) Delete(key string) {
+	if c.shared != nil {
+		return
+	} // Prefixes remain valid until TTL; never delete a concurrent process's newer chain.
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if el, ok := c.items[key]; ok {
@@ -628,6 +672,9 @@ func findAnthropicDigestSession(accountID int64, digestChain string, scopes ...s
 		return "", "", false
 	}
 	ns := anthropicDigestNamespace(accountID, scopes...)
+	if anthropicDigestStore.shared != nil {
+		return findSharedDigestSession(anthropicDigestStore.shared, ns, digestChain)
+	}
 	chain := digestChain
 	for {
 		if entry, ok := anthropicDigestStore.Load(ns + chain); ok && entry != nil {

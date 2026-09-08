@@ -406,6 +406,9 @@ func (s *codexUsagePersistenceStore) WarmCache(ctx context.Context) error {
 	if count > 0 {
 		s.logger.Info("已预热 Codex 用量快照缓存", "count", count)
 	}
+	if sessionStateStore.shared != nil {
+		return nil
+	}
 	sessionCount, err := s.warmSessionStateCache(ctx)
 	if err != nil {
 		return err

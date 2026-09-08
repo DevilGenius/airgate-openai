@@ -187,6 +187,9 @@ func (g *OpenAIGateway) forwardOAuthCompact(ctx context.Context, req *sdk.Forwar
 	account := req.Account
 	logger := sdk.LoggerFromContext(ctx)
 	session := resolveOpenAISession(req.Headers, req.Body, account.ID)
+	if session.StateError != nil {
+		return sharedStateUnavailable(session.StateError)
+	}
 	updateSessionStateFromRequest(session, account.ID)
 	upstreamBody := normalizePromptCacheKeyForUpstream(applyOpenAIWireReasoningEffort(req.Body, req.Model))
 	fingerprintIDs := g.resolveCodexFingerprintIDs(account, req.Headers)
@@ -1016,6 +1019,9 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 	account := req.Account
 	logger := sdk.LoggerFromContext(ctx)
 	session := resolveOpenAISession(req.Headers, req.Body, account.ID)
+	if session.StateError != nil {
+		return sharedStateUnavailable(session.StateError)
+	}
 	updateSessionStateFromRequest(session, account.ID)
 
 	authHeaders, authErr := g.buildOpenAIAuthHeaders(ctx, account, false)
