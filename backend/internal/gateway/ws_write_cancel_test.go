@@ -27,9 +27,9 @@ func TestRequestCancellationInterruptsWebSocketWriteBeforeReceive(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	peer := <-accepted
-	defer peer.Close()
+	defer func() { _ = peer.Close() }()
 	done := make(chan error, 1)
 	go func() {
 		data := make([]byte, 64<<10)

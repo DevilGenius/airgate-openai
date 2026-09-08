@@ -149,7 +149,7 @@ func (s *codexUsagePersistenceStore) run() {
 func (s *codexUsagePersistenceStore) runWithInterval(interval time.Duration) {
 	defer s.wg.Done()
 	defer close(s.done)
-	defer s.db.Close()
+	defer func() { _ = s.db.Close() }()
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

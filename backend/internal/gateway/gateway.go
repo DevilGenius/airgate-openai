@@ -69,7 +69,7 @@ func (g *OpenAIGateway) Init(ctx sdk.PluginContext) error {
 		_, _, _, err := shared.Get(readyCtx, "readiness")
 		cancel()
 		if err != nil {
-			return fmt.Errorf("Core runtime state is unavailable: %w", err)
+			return fmt.Errorf("core runtime state is unavailable: %w", err)
 		}
 		sessionStateStore.shared = shared
 		anthropicDigestStore.shared = shared

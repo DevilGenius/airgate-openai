@@ -2,11 +2,12 @@ package gateway
 
 import (
 	"context"
-	"github.com/DevilGenius/airgate-sdk/devkit/testhost"
-	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/DevilGenius/airgate-sdk/devkit/testhost"
+	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
 func TestSharedSessionSurvivesProcessReplacementAndLateWrites(t *testing.T) {

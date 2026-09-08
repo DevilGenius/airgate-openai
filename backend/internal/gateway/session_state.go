@@ -6,13 +6,14 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 
 	"github.com/tidwall/gjson"
 )

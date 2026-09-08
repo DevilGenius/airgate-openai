@@ -3,8 +3,9 @@ package gateway
 import (
 	"context"
 	"encoding/json"
-	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 	"time"
+
+	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
 type persistedPKCE struct {

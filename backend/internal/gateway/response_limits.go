@@ -8,10 +8,11 @@ import (
 	"strings"
 	"sync/atomic"
 
-	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 	"github.com/tidwall/gjson"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
 var errResponseTooLarge = errors.New("上游响应超过大小限制")
