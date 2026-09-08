@@ -145,22 +145,6 @@ gateway:
       input_price_flex: 0.875
       output_price_flex: 7
       cached_input_price_flex: 0.0875
-    - id: gpt-5.4-mini
-      name: GPT 5.4 Mini
-      context_window: 128000
-      max_output_tokens: 128000
-      capabilities:
-        - chat
-        - reasoning
-      input_price: 0.75
-      output_price: 4.5
-      cached_input_price: 0.075
-      input_price_priority: 1.5
-      output_price_priority: 9
-      cached_input_price_priority: 0.15
-      input_price_flex: 0.375
-      output_price_flex: 2.25
-      cached_input_price_flex: 0.0375
     - id: gpt-5.5
       name: GPT 5.5
       context_window: 272000

@@ -34,7 +34,7 @@ type OpenAIGateway struct {
 	config        sdk.PluginConfig
 }
 
-const oauthUsageProbeModel = "gpt-5.4-mini"
+const oauthUsageProbeModel = "gpt-5.6-luna"
 
 func (g *OpenAIGateway) Info() sdk.PluginInfo {
 	return BuildPluginInfo()

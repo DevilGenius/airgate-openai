@@ -135,7 +135,6 @@ var registry = map[string]Spec{
 	// gpt-5.3-codex 已失效，保留历史配置但不再注册。
 	// "gpt-5.3-codex": std("GPT 5.3 Codex", 272000, 128000, 1.75, 0.175, 14.0),
 	"gpt-5.3-codex-spark": std("GPT 5.3 Codex Spark", 128000, 128000, 1.75, 0.175, 14.0),
-	"gpt-5.4-mini":        std("GPT 5.4 Mini", 128000, 128000, 0.75, 0.075, 4.5),
 
 	// ── GPT 基础系列 ──
 	// gpt-5.2 已失效，保留历史配置但不再注册。
@@ -176,7 +175,7 @@ func fallbackByKeyword(id string) (Spec, bool) {
 	case strings.Contains(id, "image"):
 		return registry["gpt-image-2"], true
 	case strings.Contains(id, "mini") || strings.Contains(id, "nano"):
-		return registry["gpt-5.4-mini"], true
+		return registry["gpt-5.6-luna"], true
 	case strings.Contains(id, "gpt-5") || strings.HasPrefix(id, "gpt5") ||
 		strings.Contains(id, "o1") || strings.Contains(id, "o3") || strings.Contains(id, "o4"):
 		return registry["gpt-5.5"], true

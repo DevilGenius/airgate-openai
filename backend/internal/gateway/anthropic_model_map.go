@@ -66,10 +66,6 @@ var (
 		"AIRGATE_MODEL_HAIKU",
 		"ANTHROPIC_DEFAULT_HAIKU_MODEL",
 	)
-	haikuFallbackModel = resolveRoleTargetModel(
-		"gpt-5.4-mini",
-		"AIRGATE_MODEL_HAIKU_FALLBACK",
-	)
 	defaultClaudeFallbackModel = resolveRoleTargetModel(
 		"gpt-5.5",
 		"AIRGATE_MODEL_DEFAULT_FALLBACK",
@@ -103,7 +99,6 @@ var anthropicModelPolicies = []anthropicModelPolicy{
 		RuleID:                 "anthropic-haiku",
 		ModelPrefixes:          []string{"claude-haiku-"},
 		PrimaryModel:           haikuTargetModel,
-		FallbackModel:          haikuFallbackModel,
 		DefaultReasoningEffort: defaultAnthropicReasoningEffort,
 	},
 	{

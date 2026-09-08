@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestBuildOAuthUsageProbeBodyUsesMiniModel(t *testing.T) {
+func TestBuildOAuthUsageProbeBodyUsesLunaModel(t *testing.T) {
 	t.Parallel()
 
 	var body struct {
@@ -20,8 +20,8 @@ func TestBuildOAuthUsageProbeBodyUsesMiniModel(t *testing.T) {
 	if body.Model != oauthUsageProbeModel {
 		t.Fatalf("model = %q, want %q", body.Model, oauthUsageProbeModel)
 	}
-	if body.Model != "gpt-5.4-mini" {
-		t.Fatalf("probe model regressed to %q, want gpt-5.4-mini", body.Model)
+	if body.Model != "gpt-5.6-luna" {
+		t.Fatalf("probe model = %q, want gpt-5.6-luna", body.Model)
 	}
 	if body.Instructions == "" {
 		t.Fatalf("instructions should not be empty")

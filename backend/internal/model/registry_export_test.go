@@ -17,7 +17,7 @@ func TestModelPredicates(t *testing.T) {
 	if IsKnown(" ") {
 		t.Fatal("blank model should not be known")
 	}
-	for _, removed := range []string{"gpt-5.4", "gpt-image-1", "gpt-image-1.5"} {
+	for _, removed := range []string{"gpt-5.4", "gpt-5.4-mini", "gpt-image-1", "gpt-image-1.5"} {
 		if IsKnown(removed) {
 			t.Fatalf("removed model %q should not be known", removed)
 		}
@@ -56,8 +56,8 @@ func TestAllSpecsFilteringAndSorting(t *testing.T) {
 	assertSortedModelInfos(t, withImages)
 	foundImage := false
 	for _, m := range withImages {
-		if m.ID == "gpt-5.4" {
-			t.Fatal("AllSpecs(true) must not include removed GPT-5.4")
+		if m.ID == "gpt-5.4" || m.ID == "gpt-5.4-mini" {
+			t.Fatalf("AllSpecs(true) must not include removed model %q", m.ID)
 		}
 		if m.ID == "gpt-image-2" {
 			foundImage = true

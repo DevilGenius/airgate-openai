@@ -16,7 +16,7 @@ func TestAnthropicDefaultTargetModels(t *testing.T) {
 		{name: "fable", gotPrimary: fableTargetModel, wantPrimary: "gpt-6-astra", gotFallback: fableFallbackModel, wantFallback: "gpt-5.5"},
 		{name: "opus", gotPrimary: opusTargetModel, wantPrimary: "gpt-5.6-sol", gotFallback: opusFallbackModel, wantFallback: "gpt-5.5"},
 		{name: "sonnet", gotPrimary: sonnetTargetModel, wantPrimary: "gpt-5.6-terra", gotFallback: sonnetFallbackModel, wantFallback: "gpt-5.5"},
-		{name: "haiku", gotPrimary: haikuTargetModel, wantPrimary: "gpt-5.6-luna", gotFallback: haikuFallbackModel, wantFallback: "gpt-5.4-mini"},
+		{name: "haiku", gotPrimary: haikuTargetModel, wantPrimary: "gpt-5.6-luna", gotFallback: resolveAnthropicModelPolicy("claude-haiku-4-5").FallbackModel},
 		{name: "default", gotPrimary: defaultClaudeTargetModel, wantPrimary: "gpt-5.6-sol", gotFallback: defaultClaudeFallbackModel, wantFallback: "gpt-5.5"},
 	}
 

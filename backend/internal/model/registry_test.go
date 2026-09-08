@@ -23,12 +23,13 @@ func TestLookup_ByKeyword(t *testing.T) {
 	}{
 		{"未知 codex 系列 → gpt-5.3-codex-spark", "gpt-5.9-codex-preview", "gpt-5.3-codex-spark"},
 		{"未知 image 系列 → gpt-image-2", "gpt-image-3", "gpt-image-2"},
-		{"未知 mini 系列 → gpt-5.4-mini", "gpt-5.9-mini", "gpt-5.4-mini"},
-		{"未知 nano 系列 → gpt-5.4-mini", "gpt-5.9-nano", "gpt-5.4-mini"},
+		{"未知 mini 系列 → gpt-5.6-luna", "gpt-5.9-mini", "gpt-5.6-luna"},
+		{"未知 nano 系列 → gpt-5.6-luna", "gpt-5.9-nano", "gpt-5.6-luna"},
+		{"移除的 gpt-5.4-mini → gpt-5.6-luna", "gpt-5.4-mini", "gpt-5.6-luna"},
 		{"未知 gpt-5 系列 → gpt-5.5", "gpt-5.9", "gpt-5.5"},
 		{"移除的 gpt-5.4 → gpt-5.5", "gpt-5.4", "gpt-5.5"},
 		{"o1 推理模型 → gpt-5.5", "o1-preview", "gpt-5.5"},
-		{"o3 mini 推理模型 → gpt-5.4-mini", "o3-mini", "gpt-5.4-mini"}, // "mini" 优先
+		{"o3 mini 推理模型 → gpt-5.6-luna", "o3-mini", "gpt-5.6-luna"}, // "mini" 优先
 		{"gpt-4 系列 → gpt-5.5", "gpt-4o", "gpt-5.5"},
 	}
 	for _, tc := range cases {
