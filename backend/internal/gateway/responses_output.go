@@ -142,7 +142,7 @@ func mergeCompletedResponseItem(snapshot, completed json.RawMessage) json.RawMes
 	changed := false
 	for key, value := range source {
 		current, exists := fields[key]
-		if exists && !(key == "encrypted_content" && gjson.ParseBytes(current).String() == "" && gjson.ParseBytes(value).String() != "") {
+		if exists && (key != "encrypted_content" || gjson.ParseBytes(current).String() != "" || gjson.ParseBytes(value).String() == "") {
 			continue
 		}
 		fields[key] = value
