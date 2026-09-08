@@ -326,6 +326,7 @@ func receiveWSResponse(ctx context.Context, conn *websocket.Conn, handler WSEven
 	result := WSResult{}
 	var textBuilder strings.Builder
 	var reasoningBuilder strings.Builder
+	var outputItems responsesOutputAccumulator
 	budget := streamResponseBudget{limit: responseLimitFor(ctx)}
 	stopKeepAlive := startWebSocketKeepAlive(ctx, conn)
 	defer stopKeepAlive()
@@ -386,7 +387,9 @@ func receiveWSResponse(ctx context.Context, conn *websocket.Conn, handler WSEven
 			}
 		}
 
-		// 通知 handler 原始事件
+		msg = outputItems.apply(eventType, msg)
+
+		// 在转发终止事件前补齐 output，供流式快照和非流式 JSON 共用。
 		if handler != nil {
 			handler.OnRawEvent(eventType, msg)
 			if err := handlerResponseError(handler); err != nil {

@@ -566,6 +566,7 @@ func ParseSSEStream(reader io.Reader, handler WSEventHandler, contexts ...contex
 	result := WSResult{}
 	var textBuilder strings.Builder
 	var reasoningBuilder strings.Builder
+	var outputItems responsesOutputAccumulator
 	budget := streamResponseBudget{limit: responseLimitFor(imageRequestContext(contexts))}
 
 	scanner := bufio.NewScanner(reader)
@@ -593,8 +594,9 @@ func ParseSSEStream(reader io.Reader, handler WSEventHandler, contexts ...contex
 		}
 
 		eventType := streamDiagnosticEventType(data)
+		data = string(outputItems.apply(eventType, []byte(data)))
 
-		// 通知 handler 原始事件
+		// 在转发终止事件前补齐 output，供流式快照和非流式 JSON 共用。
 		if handler != nil {
 			handler.OnRawEvent(eventType, []byte(data))
 			if err := handlerResponseError(handler); err != nil {

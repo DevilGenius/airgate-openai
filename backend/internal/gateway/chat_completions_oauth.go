@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
@@ -587,8 +588,8 @@ func (h *responsesSilentHandler) OnRawEvent(eventType string, data []byte) {
 //
 // Responses API 非流式响应的 JSON 结构通常就是最终 `response.completed` SSE 事件里
 // `response` 字段的那坨对象——优先直接抽出来返回，避免丢失上游新加字段。
-// ChatGPT Codex WS 偶尔只在 delta 事件里给文本，completed.response.output 为空；
-// 这种情况下用 WSResult 里已聚合的内容补齐 output。
+// WS/SSE 读取器会用 output_item.done 补齐终止事件的完整 output（含密文）。
+// 若上游仅给文本 delta，则继续用 WSResult 的聚合内容兜底。
 //
 // 上游没给 `response.completed`（典型：被中途 cancel）时回退到一个最小占位对象，
 // 避免空体返回。
@@ -627,20 +628,34 @@ func patchResponsesOutput(raw string, result WSResult) []byte {
 	if len(patchedOutput) == 0 {
 		return nil
 	}
-	var response map[string]any
-	if err := json.Unmarshal([]byte(raw), &response); err != nil {
+	response := gjson.Parse(raw)
+	if !response.IsObject() {
 		return nil
 	}
-	output, _ := response["output"].([]any)
-	if len(output) > 0 {
-		return nil
+	var output []json.RawMessage
+	for _, item := range response.Get("output").Array() {
+		if item.Get("type").String() != "reasoning" {
+			return nil
+		}
+		output = append(output, json.RawMessage(item.Raw))
 	}
-	response["output"] = patchedOutput
-	b, err := json.Marshal(response)
+	// Retained reasoning must not suppress the existing delta-only fallback.
+	for _, item := range patchedOutput {
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			return nil
+		}
+		output = append(output, encoded)
+	}
+	b, err := json.Marshal(output)
 	if err != nil {
 		return nil
 	}
-	return b
+	patched, err := sjson.SetRawBytes([]byte(raw), "output", b)
+	if err != nil {
+		return nil
+	}
+	return patched
 }
 
 func synthesizeResponsesOutput(result WSResult) []map[string]any {
