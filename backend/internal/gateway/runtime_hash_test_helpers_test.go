@@ -140,15 +140,6 @@ func (g *OpenAIGateway) newEncryptedContentRetryRequestState() *encryptedContent
 	}
 }
 
-func (g *OpenAIGateway) cacheInvalidEncryptedContentRetry(
-	state *encryptedContentRetryRequestState,
-	path string,
-) bool {
-	return state != nil && isResponsesRequestPath(path) && state.CacheViolation(explicitUpstreamError{
-		Code: "invalid_encrypted_content",
-	})
-}
-
 type imageSafetyRequestContextKey struct{}
 type imageSafetyRequestHashCaptureContextKey struct{}
 type imageSafetyRequestCache = safetyRequestCache

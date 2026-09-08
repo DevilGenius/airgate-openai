@@ -283,7 +283,7 @@ streamLoop:
 				kind = sdk.OutcomeStreamAborted
 				code = kind.String()
 			}
-			errBody := openAIErrorJSON(openAIErrorTypeForStatus(failure.StatusCode), code, failure.Message)
+			errBody := failure.openAIErrorBody(code)
 			return sdk.ForwardOutcome{
 				Kind:           kind,
 				FailoverScope:  failure.failoverScopeForKind(kind),
@@ -491,8 +491,8 @@ func writeSanitizedSSEError(w http.ResponseWriter) {
 
 func writeSSEFailureError(w http.ResponseWriter, err error) {
 	var failure *responsesFailureError
-	if errors.As(err, &failure) && isInvalidImageInputFailure(failure) {
-		body := openAIErrorJSON("invalid_request_error", failure.Code, failure.Message)
+	if errors.As(err, &failure) && (isInvalidImageInputFailure(failure) || failure.Kind == responsesFailureKindEncryptedContent) {
+		body := failure.openAIErrorBody(failure.Code)
 		_, _ = fmt.Fprintf(w, "data: %s\n\n", body)
 		flushResponseWriter(w)
 		return

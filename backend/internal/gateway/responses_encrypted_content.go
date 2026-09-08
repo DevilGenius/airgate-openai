@@ -2,19 +2,16 @@ package gateway
 
 import (
 	"bytes"
-	"strconv"
 	"strings"
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
 
-const maxGPTReasoningEncryptedContentLen = 32 * 1024 * 1024
-
-// sanitizeResponsesReasoningEncryptedContent removes reasoning
-// encrypted_content values whose Fernet-like transport envelope is malformed.
-// It only validates the outer shape; a structurally valid value may still be
-// expired or otherwise undecryptable by the upstream.
+// sanitizeResponsesReasoningEncryptedContent preserves encrypted reasoning as
+// opaque context for subsequent Responses requests. Only ciphertexts cached
+// after an explicit Prompt or Cyber rejection may be removed.
+// https://developers.openai.com/api/docs/guides/reasoning#preserve-reasoning-without-stored-responses
 //
 // The common path returns the original body slice without rebuilding JSON.
 func sanitizeResponsesReasoningEncryptedContent(body []byte) []byte {
@@ -35,36 +32,34 @@ func sanitizeResponsesReasoningEncryptedContentKnownPresentWithState(body []byte
 	}
 	session.BeginRewrite()
 	// Inspect every ciphertext once, then use the same cached decision during
-	// rewriting. All supported upstream violations share this removal path.
+	// rewriting. Only Prompt and Cyber rejections populate this cache.
 	inspectResponsesReasoningEncryptedContentKnownPresent(body, session)
 	policy := reasoningEncryptedContentRewritePolicy{
-		removeInvalid:          true,
 		stripExistingOrphanIDs: stripOrphanReasoningIDs,
 		stripRemovedContentID:  stripOrphanReasoningIDs,
-		removeValid:            session.ShouldRemove,
+		shouldRemove:           session.ShouldRemove,
 	}
 	updated, _ := rewriteResponsesReasoningEncryptedContentKnownPresent(body, policy)
 	return updated
 }
 
-// removeResponsesReasoningEncryptedContentForRetry drops only structurally
-// valid reasoning encrypted_content values selected by shouldRemove. The
-// caller uses this after the same ciphertext was rejected by the upstream.
+// removeResponsesReasoningEncryptedContentForRetry drops only reasoning
+// encrypted_content strings selected by shouldRemove after a safety rejection.
 func removeResponsesReasoningEncryptedContentForRetry(body []byte, shouldRemove func(string) bool) ([]byte, bool) {
 	if len(body) == 0 || shouldRemove == nil || !bytes.Contains(body, []byte(`"encrypted_content"`)) {
 		return body, false
 	}
 	return rewriteResponsesReasoningEncryptedContentKnownPresent(body, reasoningEncryptedContentRewritePolicy{
-		removeValid:           shouldRemove,
+		shouldRemove:          shouldRemove,
 		stripRemovedContentID: true,
 	})
 }
 
 type reasoningEncryptedContentRewritePolicy struct {
-	removeInvalid          bool
+	removeAll              bool // Used only to exclude ciphertext from the prompt hash.
 	stripExistingOrphanIDs bool
 	stripRemovedContentID  bool
-	removeValid            func(string) bool
+	shouldRemove           func(string) bool
 }
 
 func rewriteResponsesReasoningEncryptedContentKnownPresent(body []byte, policy reasoningEncryptedContentRewritePolicy) ([]byte, bool) {
@@ -100,17 +95,17 @@ func inspectResponsesReasoningEncryptedContentKnownPresent(body []byte, session 
 		return
 	}
 	if input.IsArray() {
-		for index, item := range input.Array() {
-			inspectResponsesReasoningEncryptedContentItem(item, "input."+strconv.Itoa(index)+".encrypted_content", session)
+		for _, item := range input.Array() {
+			inspectResponsesReasoningEncryptedContentItem(item, session)
 		}
 		return
 	}
 	if input.IsObject() {
-		inspectResponsesReasoningEncryptedContentItem(input, "input.encrypted_content", session)
+		inspectResponsesReasoningEncryptedContentItem(input, session)
 	}
 }
 
-func inspectResponsesReasoningEncryptedContentItem(item gjson.Result, path string, session encryptedContentHashSession) {
+func inspectResponsesReasoningEncryptedContentItem(item gjson.Result, session encryptedContentHashSession) {
 	if strings.TrimSpace(item.Get("type").String()) != "reasoning" {
 		return
 	}
@@ -119,8 +114,8 @@ func inspectResponsesReasoningEncryptedContentItem(item gjson.Result, path strin
 		return
 	}
 	raw := encryptedContent.String()
-	if isStructurallyValidGPTReasoningEncryptedContent(raw) {
-		session.Inspect(raw, path)
+	if raw != "" {
+		session.Inspect(raw)
 	}
 }
 
@@ -189,11 +184,9 @@ func rewriteResponsesReasoningEncryptedContentItem(item gjson.Result, policy rea
 	}
 
 	raw := encryptedContent.String()
-	valid := encryptedContent.Type == gjson.String &&
-		isStructurallyValidGPTReasoningEncryptedContent(raw)
-	remove := !valid && policy.removeInvalid
-	if valid && policy.removeValid != nil {
-		remove = policy.removeValid(raw)
+	remove := policy.removeAll
+	if !remove && encryptedContent.Type == gjson.String && raw != "" && policy.shouldRemove != nil {
+		remove = policy.shouldRemove(raw)
 	}
 	if !remove {
 		return item.Raw, false
@@ -211,63 +204,6 @@ func rewriteResponsesReasoningEncryptedContentItem(item gjson.Result, policy rea
 	return nextItem, true
 }
 
-func isStructurallyValidGPTReasoningEncryptedContent(raw string) bool {
-	if raw == "" || raw != strings.TrimSpace(raw) || len(raw) > maxGPTReasoningEncryptedContentLen {
-		return false
-	}
-	padding := 0
-	for padding < len(raw) && raw[len(raw)-1-padding] == '=' {
-		padding++
-	}
-	if padding > 2 {
-		return false
-	}
-	unpaddedLen := len(raw) - padding
-	for i := 0; i < unpaddedLen; i++ {
-		char := raw[i]
-		switch {
-		case char >= 'A' && char <= 'Z':
-		case char >= 'a' && char <= 'z':
-		case char >= '0' && char <= '9':
-		case char == '-' || char == '_':
-		default:
-			return false
-		}
-	}
-	for i := unpaddedLen; i < len(raw); i++ {
-		if raw[i] != '=' {
-			return false
-		}
-	}
-	if !strings.HasPrefix(raw, "gAAAA") {
-		return false
-	}
-	remainder := unpaddedLen % 4
-	if remainder == 1 {
-		return false
-	}
-	if padding > 0 {
-		if len(raw)%4 != 0 ||
-			(padding == 1 && remainder != 3) ||
-			(padding == 2 && remainder != 2) {
-			return false
-		}
-	}
-	decodedLen := (unpaddedLen / 4) * 3
-	switch remainder {
-	case 2:
-		decodedLen++
-	case 3:
-		decodedLen += 2
-	}
-	if decodedLen < 73 {
-		return false
-	}
-
-	ciphertextLen := decodedLen - 1 - 8 - 16 - 32
-	return ciphertextLen > 0 && ciphertextLen%16 == 0
-}
-
 func sanitizeResponsesWebSocketClientMessage(message []byte, opts responsesNormalizeOptions) []byte {
 	if len(message) == 0 {
 		return message
@@ -279,9 +215,5 @@ func sanitizeResponsesWebSocketClientMessage(message []byte, opts responsesNorma
 		opts.model = gjson.GetBytes(message, "model").String()
 	}
 	opts.finalize = true
-	result := normalizeResponsesInputWithOptions(message, "/v1/responses", opts)
-	if bytes.Contains(result, []byte(`"encrypted_content"`)) {
-		result = sanitizeResponsesReasoningEncryptedContentKnownPresent(result)
-	}
-	return result
+	return normalizeResponsesInputWithOptions(message, "/v1/responses", opts)
 }

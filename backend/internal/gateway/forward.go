@@ -1387,6 +1387,9 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 			}
 		}
 		errBody := openAIErrorJSON(openAIErrorTypeForStatus(statusCode), code, message)
+		if failure != nil {
+			errBody = failure.openAIErrorBody(code)
+		}
 		logger.Warn("upstream_request_non_2xx",
 			sdk.LogFieldAccountID, account.ID,
 			sdk.LogFieldModel, req.Model,

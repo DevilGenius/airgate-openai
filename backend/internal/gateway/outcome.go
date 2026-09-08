@@ -64,7 +64,7 @@ func failureOutcome(statusCode int, body []byte, headers http.Header, message st
 	}
 	return sdk.ForwardOutcome{
 		Kind:           kind,
-		FailoverScope:  failoverScopeForHTTPFailure(kind, message),
+		FailoverScope:  failoverScopeForHTTPFailure(kind, body, message),
 		SafetyRejected: isExplicitSafetyRejectedPayload(body),
 		Upstream: sdk.UpstreamResponse{
 			StatusCode: statusCode,
@@ -76,7 +76,13 @@ func failureOutcome(statusCode int, body []byte, headers http.Header, message st
 	}
 }
 
-func failoverScopeForHTTPFailure(kind sdk.OutcomeKind, message string) sdk.FailoverScope {
+func failoverScopeForHTTPFailure(kind sdk.OutcomeKind, body []byte, message string) sdk.FailoverScope {
+	if rejection, ok := parseExplicitUpstreamError(body); ok && rejection.Code == "invalid_encrypted_content" {
+		return sdk.FailoverScopeNone
+	}
+	if isEncryptedContentVerificationError(message) {
+		return sdk.FailoverScopeNone
+	}
 	if kind == sdk.OutcomeClientError && isModelUnsupportedText(message) {
 		return sdk.FailoverScopeDispatchCandidate
 	}

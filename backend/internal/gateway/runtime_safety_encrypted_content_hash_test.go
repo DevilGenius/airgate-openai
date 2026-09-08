@@ -75,7 +75,7 @@ func preprocessPromptPolicyTestRequest(begin textHashBegin, req *sdk.ForwardRequ
 	return session
 }
 
-func TestPromptUsagePolicyCachesPromptWithoutEncryptedContent(t *testing.T) {
+func TestPromptUsagePolicyCachesPromptAndEncryptedContent(t *testing.T) {
 	first := validGPTReasoningEncryptedContentForTestMarker(0x31)
 	second := validGPTReasoningEncryptedContentForTestMarker(0x32)
 	hash := &enabledTextHash{}
@@ -94,8 +94,8 @@ func TestPromptUsagePolicyCachesPromptWithoutEncryptedContent(t *testing.T) {
 	}
 
 	finish := begin.request.Finish(promptUsagePolicyFailureOutcomeForTest(), nil)
-	if !finish.promptSafetyCached || !finish.textSafetyCached || finish.encryptedContentCached {
-		t.Fatalf("finish = %+v, want prompt cached without encrypted content", finish)
+	if !finish.promptSafetyCached || !finish.textSafetyCached || !finish.encryptedContentCached {
+		t.Fatalf("finish = %+v, want prompt and encrypted content cached", finish)
 	}
 	if size, _ := hash.promptSafety.stats(time.Now()); size != 1 {
 		t.Fatalf("prompt rejection cache size = %d, want 1", size)
@@ -113,11 +113,11 @@ func TestPromptUsagePolicyCachesPromptWithoutEncryptedContent(t *testing.T) {
 		t.Fatalf("request rejection stats = size:%d counts:%v, want invalid_prompt only", requestSize, requestCounts)
 	}
 	scope := encryptedContentScopeHash(req)
-	if hash.encryptedContent.contains(encryptedContentHashWithScope(scope, first), time.Now()) {
-		t.Fatal("prompt rejection must not cache first encrypted_content")
+	if !hash.encryptedContent.contains(encryptedContentHashWithScope(scope, first), time.Now()) {
+		t.Fatal("prompt rejection must cache first encrypted_content")
 	}
-	if hash.encryptedContent.contains(encryptedContentHashWithScope(scope, second), time.Now()) {
-		t.Fatal("prompt rejection must not cache second encrypted_content")
+	if !hash.encryptedContent.contains(encryptedContentHashWithScope(scope, second), time.Now()) {
+		t.Fatal("prompt rejection must cache second encrypted_content")
 	}
 
 	retry := promptPolicyTestRequest("apikey", validGPTReasoningEncryptedContentForTestMarker(0x33), validGPTReasoningEncryptedContentForTestMarker(0x34), "")
@@ -130,7 +130,7 @@ func TestPromptUsagePolicyCachesPromptWithoutEncryptedContent(t *testing.T) {
 	}
 }
 
-func TestPromptUsagePolicyDoesNotRemoveEncryptedContent(t *testing.T) {
+func TestPromptUsagePolicyRemovesRejectedEncryptedContent(t *testing.T) {
 	rejectedFirst := validGPTReasoningEncryptedContentForTestMarker(0x41)
 	rejectedSecond := validGPTReasoningEncryptedContentForTestMarker(0x42)
 	fresh := validGPTReasoningEncryptedContentForTestMarker(0x43)
@@ -148,11 +148,11 @@ func TestPromptUsagePolicyDoesNotRemoveEncryptedContent(t *testing.T) {
 		t.Fatalf("changed request unexpectedly hit complete request cache: %+v", changedBegin.outcome)
 	}
 	changedSession := preprocessPromptPolicyTestRequest(changedBegin, changedReq)
-	if changedSession.Sanitized() {
-		t.Fatal("prompt rejection must not sanitize encrypted_content")
+	if !changedSession.Sanitized() {
+		t.Fatal("prompt rejection must sanitize encrypted_content")
 	}
-	if got := gjson.GetBytes(changedReq.Body, "input.0.encrypted_content").String(); got != rejectedFirst {
-		t.Fatalf("changed request first encrypted_content = %q, want preserved", got)
+	if gjson.GetBytes(changedReq.Body, "input.0.encrypted_content").Exists() {
+		t.Fatalf("changed request retained rejected encrypted_content: %s", changedReq.Body)
 	}
 	if got := gjson.GetBytes(changedReq.Body, "input.1.encrypted_content").String(); got != fresh {
 		t.Fatalf("changed request removed fresh encrypted_content: got %q, want %q", got, fresh)
@@ -212,7 +212,7 @@ func TestPromptUsagePolicyCacheIsScopedByAccountType(t *testing.T) {
 	}
 }
 
-func TestCybersecurityRiskCachesExactRequestWithoutEncryptedContent(t *testing.T) {
+func TestCybersecurityRiskCachesRequestAndEncryptedContent(t *testing.T) {
 	rejectedFirst := validGPTReasoningEncryptedContentForTestMarker(0x61)
 	rejectedSecond := validGPTReasoningEncryptedContentForTestMarker(0x62)
 	fresh := validGPTReasoningEncryptedContentForTestMarker(0x63)
@@ -222,8 +222,8 @@ func TestCybersecurityRiskCachesExactRequestWithoutEncryptedContent(t *testing.T
 	firstBegin := hash.Begin(firstReq, http.MethodPost, "/v1/responses", "")
 	preprocessPromptPolicyTestRequest(firstBegin, firstReq)
 	finish := firstBegin.request.Finish(cybersecurityRiskFailureOutcomeForTest(), nil)
-	if finish.encryptedContentCached || !finish.textSafetyCached {
-		t.Fatalf("cybersecurity finish = %+v, want exact request only", finish)
+	if !finish.encryptedContentCached || !finish.textSafetyCached {
+		t.Fatalf("cybersecurity finish = %+v, want request and ciphertext cached", finish)
 	}
 	requestSize, _, requestCounts := hash.textSafety.statsWithCategoryCounts(
 		time.Now(),
@@ -241,11 +241,11 @@ func TestCybersecurityRiskCachesExactRequestWithoutEncryptedContent(t *testing.T
 		t.Fatalf("cyber rejection cache size = %d, want 1", size)
 	}
 	scope := encryptedContentScopeHash(firstReq)
-	if hash.encryptedContent.contains(encryptedContentHashWithScope(scope, rejectedFirst), time.Now()) {
-		t.Fatal("cybersecurity rejection must not cache first encrypted_content")
+	if !hash.encryptedContent.contains(encryptedContentHashWithScope(scope, rejectedFirst), time.Now()) {
+		t.Fatal("cybersecurity rejection must cache first encrypted_content")
 	}
-	if hash.encryptedContent.contains(encryptedContentHashWithScope(scope, rejectedSecond), time.Now()) {
-		t.Fatal("cybersecurity rejection must not cache second encrypted_content")
+	if !hash.encryptedContent.contains(encryptedContentHashWithScope(scope, rejectedSecond), time.Now()) {
+		t.Fatal("cybersecurity rejection must cache second encrypted_content")
 	}
 
 	exactRetry := promptPolicyTestRequest("apikey", rejectedFirst, rejectedSecond, " cybersecurity")
@@ -269,24 +269,24 @@ func TestCybersecurityRiskCachesExactRequestWithoutEncryptedContent(t *testing.T
 		t.Fatalf("cybersecurity carrier-changed retry = %+v, want cyber cache hit", carrierChangedBegin)
 	}
 
-	changedReq := promptPolicyTestRequest("oauth", rejectedFirst, fresh, " changed cybersecurity request")
+	changedReq := promptPolicyTestRequest("apikey", rejectedFirst, fresh, " changed cybersecurity request")
 	changedBegin := hash.Begin(changedReq, http.MethodPost, "/v1/responses", "")
 	if changedBegin.outcome != nil {
 		t.Fatalf("changed cybersecurity request unexpectedly hit full request cache: %+v", changedBegin.outcome)
 	}
 	changedSession := preprocessPromptPolicyTestRequest(changedBegin, changedReq)
-	if changedSession.Sanitized() {
-		t.Fatal("cybersecurity rejection must not sanitize encrypted_content")
+	if !changedSession.Sanitized() {
+		t.Fatal("cybersecurity rejection must sanitize encrypted_content")
 	}
-	if got := gjson.GetBytes(changedReq.Body, "input.0.encrypted_content").String(); got != rejectedFirst {
-		t.Fatalf("changed cybersecurity request first encrypted_content = %q, want preserved", got)
+	if gjson.GetBytes(changedReq.Body, "input.0.encrypted_content").Exists() {
+		t.Fatalf("changed cybersecurity request retained rejected encrypted_content: %s", changedReq.Body)
 	}
 	if got := gjson.GetBytes(changedReq.Body, "input.1.encrypted_content").String(); got != fresh {
 		t.Fatalf("changed cybersecurity request removed fresh encrypted_content: got %q, want %q", got, fresh)
 	}
 }
 
-func TestInvalidEncryptedContentCachesOnlyExplicitlyIdentifiedCiphertext(t *testing.T) {
+func TestInvalidEncryptedContentPreservesExplicitlyIdentifiedCiphertext(t *testing.T) {
 	rejected := validGPTReasoningEncryptedContentForTestMarker(0x71)
 	secondRejected := validGPTReasoningEncryptedContentForTestMarker(0x72)
 	fresh := validGPTReasoningEncryptedContentForTestMarker(0x73)
@@ -296,11 +296,11 @@ func TestInvalidEncryptedContentCachesOnlyExplicitlyIdentifiedCiphertext(t *test
 	invalidBegin := hash.Begin(invalidReq, http.MethodPost, "/v1/responses", "")
 	preprocessPromptPolicyTestRequest(invalidBegin, invalidReq)
 	invalidFinish := invalidBegin.request.Finish(invalidEncryptedContentFailureOutcomeForTest(rejected), nil)
-	if !invalidFinish.encryptedContentCached {
-		t.Fatal("invalid_encrypted_content did not cache the explicitly identified ciphertext")
+	if invalidFinish.encryptedContentCached {
+		t.Fatal("invalid_encrypted_content must not cache even an explicitly identified ciphertext")
 	}
-	if size, _ := hash.encryptedContent.statsWithCapacity(time.Now(), encryptedContentCacheMaxEntries); size != 1 {
-		t.Fatalf("encrypted_content cache size = %d, want only the identified ciphertext", size)
+	if size, _ := hash.encryptedContent.statsWithCapacity(time.Now(), encryptedContentCacheMaxEntries); size != 0 {
+		t.Fatalf("encrypted_content cache size = %d, want 0", size)
 	}
 	scope := encryptedContentScopeHash(invalidReq)
 	if hash.encryptedContent.contains(encryptedContentHashWithScope(scope, secondRejected), time.Now()) {
@@ -310,18 +310,18 @@ func TestInvalidEncryptedContentCachesOnlyExplicitlyIdentifiedCiphertext(t *test
 	safetyReq := promptPolicyTestRequest("apikey", rejected, fresh, " shared cache")
 	safetyBegin := hash.Begin(safetyReq, http.MethodPost, "/v1/responses", "")
 	safetySession := preprocessPromptPolicyTestRequest(safetyBegin, safetyReq)
-	if !safetySession.Sanitized() {
-		t.Fatal("ciphertext cached by invalid_encrypted_content was not removed on the next request")
+	if safetySession.Sanitized() {
+		t.Fatal("invalid_encrypted_content must not sanitize the next request")
 	}
-	if gjson.GetBytes(safetyReq.Body, "input.0.encrypted_content").Exists() {
-		t.Fatalf("shared cache retained rejected encrypted_content: %s", safetyReq.Body)
+	if got := gjson.GetBytes(safetyReq.Body, "input.0.encrypted_content").String(); got != rejected {
+		t.Fatalf("verification failure lost ciphertext: %s", safetyReq.Body)
 	}
 	if got := gjson.GetBytes(safetyReq.Body, "input.1.encrypted_content").String(); got != fresh {
 		t.Fatalf("shared cache removed fresh encrypted_content: got %q, want %q", got, fresh)
 	}
 	safetyBegin.request.Finish(promptUsagePolicyFailureOutcomeForTest(), nil)
-	if size, _ := hash.encryptedContent.statsWithCapacity(time.Now(), encryptedContentCacheMaxEntries); size != 1 {
-		t.Fatalf("encrypted_content cache size after prompt rejection = %d, want unchanged", size)
+	if size, _ := hash.encryptedContent.statsWithCapacity(time.Now(), encryptedContentCacheMaxEntries); size != 2 {
+		t.Fatalf("encrypted_content cache size after prompt rejection = %d, want 2", size)
 	}
 }
 
@@ -348,7 +348,58 @@ func TestInvalidEncryptedContentWithoutUniqueMarkerDoesNotCacheCandidates(t *tes
 	}
 }
 
-func TestInvalidEncryptedContentParamSelectsOneCiphertext(t *testing.T) {
+func TestEncryptedContentRemovalRequiresExplicitSafetyRejection(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		code        string
+		kind        sdk.OutcomeKind
+		status      int
+		wantRemoval bool
+	}{
+		{name: "prompt", code: "invalid_prompt", kind: sdk.OutcomeClientError, status: 400, wantRemoval: true},
+		{name: "cyber", code: "cybersecurity_risk", kind: sdk.OutcomeClientError, status: 400, wantRemoval: true},
+		{name: "cyber alias", code: "cyber_policy", kind: sdk.OutcomeClientError, status: 403, wantRemoval: true},
+		{name: "verification", code: "invalid_encrypted_content", kind: sdk.OutcomeClientError, status: 400},
+		{name: "generic safety", code: "safety_rejected", kind: sdk.OutcomeClientError, status: 400},
+		{name: "content policy", code: "content_policy_violation", kind: sdk.OutcomeClientError, status: 400},
+		{name: "rate limit", code: "rate_limit_exceeded", kind: sdk.OutcomeAccountRateLimited, status: 429},
+		{name: "server error", code: "server_error", kind: sdk.OutcomeUpstreamTransient, status: 500},
+		{name: "success quoting rejection", code: "invalid_prompt", kind: sdk.OutcomeSuccess, status: 200},
+		{name: "message only", kind: sdk.OutcomeClientError, status: 400},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hash := &enabledTextHash{}
+			// Opaque strings deliberately do not resemble any assumed envelope.
+			req := promptPolicyTestRequest("apikey", "opaque-first", "opaque-second", "")
+			begin := hash.Begin(req, http.MethodPost, "/v1/responses", "")
+			preprocessPromptPolicyTestRequest(begin, req)
+			finish := begin.request.Finish(sdk.ForwardOutcome{
+				Kind: tc.kind,
+				Upstream: sdk.UpstreamResponse{
+					StatusCode: tc.status,
+					Body:       openAIErrorJSON("invalid_request_error", tc.code, promptUsagePolicyRejectionForTest),
+				},
+			}, nil)
+			if finish.encryptedContentCached != tc.wantRemoval {
+				t.Fatalf("encrypted content cached = %v, want %v", finish.encryptedContentCached, tc.wantRemoval)
+			}
+			retry := promptPolicyTestRequest("apikey", "opaque-first", "fresh", " changed visible prompt")
+			retryBegin := hash.Begin(retry, http.MethodPost, "/v1/responses", "")
+			if retryBegin.outcome != nil {
+				t.Fatalf("changed request unexpectedly blocked: %+v", retryBegin)
+			}
+			session := preprocessPromptPolicyTestRequest(retryBegin, retry)
+			if session.Sanitized() != tc.wantRemoval || gjson.GetBytes(retry.Body, "input.0.encrypted_content").Exists() == tc.wantRemoval {
+				t.Fatalf("ciphertext removal must match explicit safety rejection: %s", retry.Body)
+			}
+			if got := gjson.GetBytes(retry.Body, "input.1.encrypted_content").String(); got != "fresh" {
+				t.Fatalf("fresh encrypted_content = %q, want preserved", got)
+			}
+		})
+	}
+}
+
+func TestInvalidEncryptedContentParamDoesNotCacheCiphertext(t *testing.T) {
 	first := validGPTReasoningEncryptedContentForTestMarker(0x91)
 	second := validGPTReasoningEncryptedContentForTestMarker(0x92)
 	hash := &enabledTextHash{}
@@ -363,15 +414,15 @@ func TestInvalidEncryptedContentParamSelectsOneCiphertext(t *testing.T) {
 		},
 	}
 	finish := begin.request.Finish(outcome, nil)
-	if !finish.encryptedContentCached {
-		t.Fatalf("parameter-selected finish = %+v, want one ciphertext cached", finish)
+	if finish.encryptedContentCached {
+		t.Fatalf("parameter-selected finish = %+v, want no ciphertext cached", finish)
 	}
 	scope := encryptedContentScopeHash(req)
 	if hash.encryptedContent.contains(encryptedContentHashWithScope(scope, first), time.Now()) {
 		t.Fatal("error.param cached the wrong encrypted_content")
 	}
-	if !hash.encryptedContent.contains(encryptedContentHashWithScope(scope, second), time.Now()) {
-		t.Fatal("error.param did not cache the selected encrypted_content")
+	if hash.encryptedContent.contains(encryptedContentHashWithScope(scope, second), time.Now()) {
+		t.Fatal("error.param must not cache the selected encrypted_content")
 	}
 }
 

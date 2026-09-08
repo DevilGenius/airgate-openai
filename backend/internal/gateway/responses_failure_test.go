@@ -203,7 +203,7 @@ func TestClassifyResponsesFailureEncryptedContentVerifyFailed(t *testing.T) {
 	if failure == nil {
 		t.Fatalf("expected failure")
 	}
-	if failure.Kind != responsesFailureKindContinuationAnchor {
+	if failure.Kind != responsesFailureKindEncryptedContent {
 		t.Fatalf("unexpected kind %q", failure.Kind)
 	}
 	if failure.StatusCode != http.StatusBadRequest {
@@ -223,7 +223,7 @@ func TestClassifyResponsesFailureInvalidEncryptedContentVariants(t *testing.T) {
 	if failure == nil {
 		t.Fatalf("expected failure")
 	}
-	if failure.Kind != responsesFailureKindContinuationAnchor {
+	if failure.Kind != responsesFailureKindEncryptedContent {
 		t.Fatalf("unexpected kind %q", failure.Kind)
 	}
 	if failure.Code != "invalid_encrypted_content" {
@@ -235,11 +235,25 @@ func TestClassifyResponsesFailureInvalidEncryptedContentVariants(t *testing.T) {
 	if wsFailure == nil {
 		t.Fatalf("expected websocket failure")
 	}
-	if wsFailure.Kind != responsesFailureKindContinuationAnchor {
+	if wsFailure.Kind != responsesFailureKindEncryptedContent {
 		t.Fatalf("unexpected websocket kind %q", wsFailure.Kind)
 	}
 	if wsFailure.Code != "" {
 		t.Fatalf("message-only websocket code = %q, want empty", wsFailure.Code)
+	}
+}
+
+func TestEncryptedContentVerificationFailuresReturnClientError(t *testing.T) {
+	for _, code := range []string{"invalid_encrypted_content", ""} {
+		failure := classifyResponsesError("invalid_request_error", code, "The encrypted content could not be verified.")
+		body := openAIErrorJSON("invalid_request_error", code, failure.Message)
+		outcome := failureOutcome(http.StatusBadRequest, body, nil, failure.Message, 0)
+		if outcome.Kind != sdk.OutcomeClientError || outcome.FailoverScope != sdk.FailoverScopeNone || outcome.SafetyRejected || string(outcome.Upstream.Body) != string(body) {
+			t.Fatalf("HTTP verification failure must return the error without failover: %+v", outcome)
+		}
+		if failure.outcomeKind() != sdk.OutcomeClientError || !failure.shouldReturnClientError() || canReplayContinuationAnchor(failure) || failure.isSafetyRejected() {
+			t.Fatalf("verification failure must return a client error without recovery: %+v", failure)
+		}
 	}
 }
 

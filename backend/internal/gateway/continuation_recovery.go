@@ -66,9 +66,6 @@ func delegatedContinuationRecoveryBody(body []byte) ([]byte, bool) {
 		delete(reqData, "previous_response_id")
 		changed = true
 	}
-	if removedPreviousResponseID && sanitizeEncryptedReasoningItems(reqData) {
-		changed = true
-	}
 	if !changed {
 		return body, true
 	}
@@ -104,7 +101,6 @@ func previousResponseNotFoundRecoveryBody(body []byte) ([]byte, bool) {
 		return nil, false
 	}
 	delete(reqData, "previous_response_id")
-	sanitizeEncryptedReasoningItems(reqData)
 	patched, err := json.Marshal(reqData)
 	if err != nil {
 		return nil, false
@@ -123,111 +119,6 @@ func requestCanRecoverPreviousResponseNotFound(body []byte) bool {
 	}
 	signals := analyzePreviousResponseRecoverySignals(reqData)
 	return !signals.hasToolOutput || signals.hasToolCallContext || signals.hasCompactionReplay
-}
-
-func sanitizeEncryptedReasoningItems(reqData map[string]any) bool {
-	return sanitizeEncryptedReplayItems(reqData, false)
-}
-
-func sanitizeAnchoredEncryptedReplayBodyKnownPresent(body []byte) []byte {
-	if !bytes.Contains(body, []byte(`"previous_response_id"`)) {
-		return body
-	}
-	var reqData map[string]any
-	if err := json.Unmarshal(body, &reqData); err != nil {
-		return body
-	}
-	if !sanitizeAnchoredEncryptedReplayItems(reqData) {
-		return body
-	}
-	patched, err := json.Marshal(reqData)
-	if err != nil {
-		return body
-	}
-	return patched
-}
-
-// previous_response_id 与加密 replay item 是两种上下文承载方式。续链锚点存在时，
-// 重复回传 reasoning/compaction 密文既无必要，也可能因路由到不同加密域而校验失败。
-func sanitizeAnchoredEncryptedReplayItems(reqData map[string]any) bool {
-	if strings.TrimSpace(jsonString(reqData["previous_response_id"])) == "" {
-		return false
-	}
-	return sanitizeEncryptedReplayItems(reqData, true)
-}
-
-func sanitizeEncryptedReplayItems(reqData map[string]any, dropCompaction bool) bool {
-	if len(reqData) == 0 {
-		return false
-	}
-	changed := false
-	if input, ok := reqData["input"]; ok {
-		next, inputChanged, keep := sanitizeEncryptedReplayValue(input, dropCompaction)
-		if inputChanged {
-			changed = true
-			if keep {
-				reqData["input"] = next
-			} else {
-				delete(reqData, "input")
-			}
-		}
-	}
-	if messages, ok := reqData["messages"]; ok {
-		next, messagesChanged, keep := sanitizeEncryptedReplayValue(messages, dropCompaction)
-		if messagesChanged {
-			changed = true
-			if keep {
-				reqData["messages"] = next
-			} else {
-				delete(reqData, "messages")
-			}
-		}
-	}
-	return changed
-}
-
-func sanitizeEncryptedReplayValue(value any, dropCompaction bool) (next any, changed bool, keep bool) {
-	switch v := value.(type) {
-	case []any:
-		filtered := v[:0]
-		changed := false
-		for _, item := range v {
-			nextItem, itemChanged, keepItem := sanitizeEncryptedReplayItem(item, dropCompaction)
-			if itemChanged {
-				changed = true
-			}
-			if keepItem {
-				filtered = append(filtered, nextItem)
-			}
-		}
-		if !changed {
-			return value, false, true
-		}
-		if len(filtered) == 0 {
-			return nil, true, false
-		}
-		return filtered, true, true
-	case map[string]any:
-		return sanitizeEncryptedReplayItem(v, dropCompaction)
-	default:
-		return value, false, true
-	}
-}
-
-func sanitizeEncryptedReplayItem(item any, dropCompaction bool) (next any, changed bool, keep bool) {
-	itemMap, ok := item.(map[string]any)
-	if !ok {
-		return item, false, true
-	}
-	itemType := strings.TrimSpace(jsonString(itemMap["type"]))
-	if itemType != "reasoning" && (!dropCompaction || !isCompactionReplayItemType(itemType)) {
-		return item, false, true
-	}
-	if strings.TrimSpace(jsonString(itemMap["encrypted_content"])) == "" {
-		return item, false, true
-	}
-
-	return nil, true, false
 }
 
 func analyzePreviousResponseRecoverySignals(reqData map[string]any) previousResponseRecoverySignals {
@@ -381,8 +272,13 @@ func outcomeIsPreviousResponseNotFound(outcome sdk.ForwardOutcome) bool {
 	if outcome.Kind != sdk.OutcomeClientError && outcome.Upstream.StatusCode < 400 {
 		return false
 	}
-	if failure := classifyOpenAIErrorBody(outcome.Upstream.Body); isPreviousResponseNotFoundFailure(failure) {
-		return true
+	if failure := classifyOpenAIErrorBody(outcome.Upstream.Body); failure != nil {
+		if failure.Kind == responsesFailureKindEncryptedContent {
+			return false
+		}
+		if isPreviousResponseNotFoundFailure(failure) {
+			return true
+		}
 	}
 	if reason := strings.TrimSpace(outcome.Reason); reason != "" {
 		return isPreviousResponseNotFoundFailure(classifyResponsesError("", "", reason))
@@ -394,8 +290,13 @@ func outcomeIsFunctionCallOutputWithoutCall(outcome sdk.ForwardOutcome) bool {
 	if outcome.Kind != sdk.OutcomeClientError && outcome.Upstream.StatusCode < 400 {
 		return false
 	}
-	if failure := classifyOpenAIErrorBody(outcome.Upstream.Body); isFunctionCallOutputWithoutCallFailure(failure) {
-		return true
+	if failure := classifyOpenAIErrorBody(outcome.Upstream.Body); failure != nil {
+		if failure.Kind == responsesFailureKindEncryptedContent {
+			return false
+		}
+		if isFunctionCallOutputWithoutCallFailure(failure) {
+			return true
+		}
 	}
 	if reason := strings.TrimSpace(outcome.Reason); reason != "" {
 		return isFunctionCallOutputWithoutCallFailure(classifyResponsesError("", "", reason))
@@ -407,8 +308,13 @@ func outcomeIsContextTooLarge(outcome sdk.ForwardOutcome) bool {
 	if outcome.Kind != sdk.OutcomeClientError && outcome.Upstream.StatusCode < 400 {
 		return false
 	}
-	if failure := classifyOpenAIErrorBody(outcome.Upstream.Body); isContextTooLargeFailure(failure) {
-		return true
+	if failure := classifyOpenAIErrorBody(outcome.Upstream.Body); failure != nil {
+		if failure.Kind == responsesFailureKindEncryptedContent {
+			return false
+		}
+		if isContextTooLargeFailure(failure) {
+			return true
+		}
 	}
 	if reason := strings.TrimSpace(outcome.Reason); reason != "" {
 		if isContextTooLargeFailure(classifyResponsesError("", "", reason)) {
@@ -431,7 +337,7 @@ func classifyOpenAIErrorBody(body []byte) *responsesFailureError {
 		if msg == "" && errType == "" && code == "" {
 			return nil
 		}
-		return classifyResponsesError(errType, code, msg)
+		return classifyResponsesError(errType, code, msg).withUpstreamError(gjson.ParseBytes(body))
 	}
 	msg := strings.TrimSpace(errNode.Get("message").String())
 	errType := strings.ToLower(strings.TrimSpace(errNode.Get("type").String()))
@@ -439,5 +345,5 @@ func classifyOpenAIErrorBody(body []byte) *responsesFailureError {
 	if msg == "" && errType == "" && errCode == "" {
 		return nil
 	}
-	return classifyResponsesError(errType, errCode, msg)
+	return classifyResponsesError(errType, errCode, msg).withUpstreamError(errNode)
 }

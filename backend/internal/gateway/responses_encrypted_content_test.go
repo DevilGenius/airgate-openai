@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"encoding/base64"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -23,49 +22,38 @@ func validGPTReasoningEncryptedContentForTestMarker(marker byte) string {
 	return base64.RawURLEncoding.EncodeToString(payload)
 }
 
-var structurallyValidEncryptedContentSink bool
 var encryptedContentPreprocessBenchmarkSink []byte
 
-func TestIsStructurallyValidGPTReasoningEncryptedContent(t *testing.T) {
+func TestSanitizeResponsesReasoningEncryptedContentPreservesOpaqueValues(t *testing.T) {
 	valid := validGPTReasoningEncryptedContentForTest()
 	cases := []struct {
 		name  string
 		value string
-		want  bool
 	}{
-		{name: "valid raw base64url", value: valid, want: true},
-		{name: "valid padded base64url", value: valid + "==", want: true},
-		{name: "empty", value: "", want: false},
-		{name: "wrong prefix", value: "fAAAA" + valid[5:], want: false},
-		{name: "invalid character", value: valid[:20] + "…" + valid[20:], want: false},
-		{name: "leading whitespace", value: " " + valid, want: false},
-		{name: "bad base64", value: "gAAAA!!!!", want: false},
-		{name: "short decoded payload", value: "gAAAAA", want: false},
-		{name: "internal padding", value: valid[:20] + "=" + valid[20:], want: false},
-		{name: "excessive padding", value: valid + "===", want: false},
-		{name: "wrong padding count", value: valid + "=", want: false},
-		{name: "invalid base64 remainder", value: valid[:len(valid)-1], want: false},
+		{name: "raw base64url", value: valid},
+		{name: "padded base64url", value: valid + "=="},
+		{name: "empty", value: ""},
+		{name: "different prefix", value: "fAAAA" + valid[5:]},
+		{name: "unicode", value: valid[:20] + "…" + valid[20:]},
+		{name: "leading whitespace", value: " " + valid},
+		{name: "non-base64", value: "gAAAA!!!!"},
+		{name: "short payload", value: "gAAAAA"},
+		{name: "internal padding", value: valid[:20] + "=" + valid[20:]},
+		{name: "excessive padding", value: valid + "==="},
+		{name: "different padding", value: valid + "="},
+		{name: "different remainder", value: valid[:len(valid)-1]},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isStructurallyValidGPTReasoningEncryptedContent(tc.value); got != tc.want {
-				t.Fatalf("valid(%q) = %v, want %v", tc.value, got, tc.want)
+			body := []byte(`{"store":false,"input":[{"id":"rs_1","type":"reasoning","encrypted_content":"` + tc.value + `","summary":[]}]}`)
+			if got := sanitizeResponsesReasoningEncryptedContent(body); string(got) != string(body) {
+				t.Fatalf("opaque ciphertext changed: %s", got)
 			}
 		})
 	}
 }
 
-func TestIsStructurallyValidGPTReasoningEncryptedContentDoesNotAllocate(t *testing.T) {
-	valid := validGPTReasoningEncryptedContentForTest() + "=="
-	allocations := testing.AllocsPerRun(100, func() {
-		structurallyValidEncryptedContentSink = isStructurallyValidGPTReasoningEncryptedContent(valid)
-	})
-	if allocations != 0 {
-		t.Fatalf("structural validation allocations = %.2f, want 0", allocations)
-	}
-}
-
-func TestSanitizeResponsesReasoningEncryptedContentDropsMalformedValues(t *testing.T) {
+func TestSanitizeResponsesReasoningEncryptedContentPreservesMalformedValues(t *testing.T) {
 	valid := validGPTReasoningEncryptedContentForTest()
 	body := []byte(`{"store":false,"input":[` +
 		`{"id":"rs_bad","type":"reasoning","encrypted_content":"bad","summary":[]},` +
@@ -77,23 +65,8 @@ func TestSanitizeResponsesReasoningEncryptedContentDropsMalformedValues(t *testi
 		`]}`)
 
 	got := sanitizeResponsesReasoningEncryptedContent(body)
-	for index := 0; index < 4; index++ {
-		path := "input." + strconv.Itoa(index)
-		if gjson.GetBytes(got, path+".encrypted_content").Exists() {
-			t.Fatalf("input[%d] invalid encrypted_content still exists: %s", index, got)
-		}
-		if gjson.GetBytes(got, path+".id").Exists() {
-			t.Fatalf("input[%d] orphan reasoning id still exists: %s", index, got)
-		}
-	}
-	if gotID := gjson.GetBytes(got, "input.4.id").String(); gotID != "rs_good" {
-		t.Fatalf("valid reasoning id = %q, want rs_good; body=%s", gotID, got)
-	}
-	if gotValue := gjson.GetBytes(got, "input.4.encrypted_content").String(); gotValue != valid {
-		t.Fatalf("valid encrypted_content = %q, want preserved value", gotValue)
-	}
-	if gotID := gjson.GetBytes(got, "input.5.id").String(); gotID != "msg_1" {
-		t.Fatalf("non-reasoning id = %q, want msg_1; body=%s", gotID, got)
+	if string(got) != string(body) {
+		t.Fatalf("unrejected encrypted content must be preserved: %s", got)
 	}
 }
 
@@ -104,8 +77,8 @@ func TestSanitizeResponsesReasoningEncryptedContentPreservesStoreIDs(t *testing.
 		`]}`)
 
 	got := sanitizeResponsesReasoningEncryptedContent(body)
-	if gjson.GetBytes(got, "input.0.encrypted_content").Exists() {
-		t.Fatalf("invalid encrypted_content still exists: %s", got)
+	if gotValue := gjson.GetBytes(got, "input.0.encrypted_content").String(); gotValue != "bad" {
+		t.Fatalf("opaque encrypted_content = %q, want preserved", gotValue)
 	}
 	if gotID := gjson.GetBytes(got, "input.0.id").String(); gotID != "rs_bad" {
 		t.Fatalf("store=true invalid reasoning id = %q, want rs_bad", gotID)
@@ -127,8 +100,8 @@ func TestSanitizeResponsesReasoningEncryptedContentNoopKeepsOriginalBody(t *test
 	}
 }
 
-func TestRemoveResponsesReasoningEncryptedContentForRetryDropsValidCiphertext(t *testing.T) {
-	valid := validGPTReasoningEncryptedContentForTest()
+func TestRemoveResponsesReasoningEncryptedContentForRetryDropsOpaqueCiphertext(t *testing.T) {
+	valid := "opaque-reasoning-content"
 	body := []byte(`{"store":true,"input":[` +
 		`{"id":"rs_retry","type":"reasoning","encrypted_content":"` + valid + `","summary":[{"type":"summary_text","text":"keep"}]},` +
 		`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]},` +
@@ -195,11 +168,8 @@ func TestRemoveResponsesReasoningEncryptedContentForRetryOnlyDropsMatchedCiphert
 func TestSanitizeResponsesReasoningEncryptedContentSupportsInputObject(t *testing.T) {
 	body := []byte(`{"store":false,"input":{"id":"rs_bad","type":"reasoning","encrypted_content":"bad","summary":[]}}`)
 	got := sanitizeResponsesReasoningEncryptedContent(body)
-	if gjson.GetBytes(got, "input.encrypted_content").Exists() {
-		t.Fatalf("invalid encrypted_content was not removed from input object: %s", got)
-	}
-	if gjson.GetBytes(got, "input.id").Exists() {
-		t.Fatalf("orphan reasoning id was not removed from input object: %s", got)
+	if string(got) != string(body) {
+		t.Fatalf("input object encrypted_content changed: %s", got)
 	}
 }
 
@@ -207,8 +177,8 @@ func TestSanitizeResponsesWebSocketClientMessageOnlyTouchesResponseCreate(t *tes
 	invalid := `{"type":"reasoning","id":"rs_bad","encrypted_content":"bad"}`
 	responseCreate := []byte(`{"type":"response.create","store":false,"input":[` + invalid + `]}`)
 	got := sanitizeResponsesWebSocketClientMessage(responseCreate, responsesNormalizeOptions{strictCodex: true})
-	if gjson.GetBytes(got, "input.0.encrypted_content").Exists() {
-		t.Fatalf("response.create invalid encrypted_content still exists: %s", got)
+	if value := gjson.GetBytes(got, "input.0.encrypted_content").String(); value != "bad" {
+		t.Fatalf("response.create encrypted_content = %q, want preserved", value)
 	}
 	if gjson.GetBytes(got, "input.0.id").Exists() {
 		t.Fatalf("response.create orphan id still exists: %s", got)
@@ -220,11 +190,11 @@ func TestSanitizeResponsesWebSocketClientMessageOnlyTouchesResponseCreate(t *tes
 	}
 }
 
-func TestPreprocessRequestBodySanitizesMalformedReasoningEncryptedContent(t *testing.T) {
+func TestPreprocessRequestBodyPreservesOpaqueReasoningEncryptedContent(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.4","input":[{"id":"rs_bad","type":"reasoning","encrypted_content":"bad","summary":[]},{"type":"message","role":"user","content":"hi"}]}`)
 	got := preprocessRequestBody(body, "gpt-5.4", "/v1/responses")
-	if gjson.GetBytes(got, "input.0.encrypted_content").Exists() {
-		t.Fatalf("preprocess retained malformed encrypted_content: %s", got)
+	if value := gjson.GetBytes(got, "input.0.encrypted_content").String(); value != "bad" {
+		t.Fatalf("preprocess encrypted_content = %q, want preserved", value)
 	}
 	if gjson.GetBytes(got, "input.0.id").Exists() {
 		t.Fatalf("preprocess retained orphan reasoning id: %s", got)

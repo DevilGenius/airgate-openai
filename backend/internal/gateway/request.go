@@ -197,10 +197,9 @@ func buildAPIKeyURL(account *sdk.Account, reqPath string) string {
 //  1. model 同步（使用 Core 选出的上游模型）
 //  2. data:image 输入保持原样（对齐 Codex，不在网关内重采样用户图片）
 //  3. 按 Core 委托恢复信号移除失效续链锚点
-//  4. 已有 previous_response_id 时移除重复的加密 replay item
-//  5. input 规范化（/v1/responses 的 string input → list，messages → input 转换）
-//  6. Responses API 强制禁用上游存储（store=false）
-//  7. 删除外层结构明显无效的 reasoning encrypted_content
+//  4. input 规范化（/v1/responses 的 string input → list，messages → input 转换）
+//  5. Responses API 强制禁用上游存储（store=false）
+//  6. 仅移除已被 Prompt / Cyber 拒绝并缓存的 reasoning encrypted_content
 func preprocessRequestBody(body []byte, model, reqPath string, headers ...http.Header) []byte {
 	return preprocessRequestBodyWithEncryptedContentState(body, model, reqPath, disabledEncryptedContent, headers...)
 }
@@ -251,9 +250,6 @@ func preprocessRequestBodyWithEncryptedContentState(
 	}
 	hasEncryptedContent := isResponsesRequest && bytes.Contains(result, []byte(`"encrypted_content"`))
 
-	if hasEncryptedContent {
-		result = sanitizeAnchoredEncryptedReplayBodyKnownPresent(result)
-	}
 	result = normalizeResponsesInput(result, reqPath)
 	result = forceResponsesStoreFalse(result, reqPath)
 	if hasEncryptedContent {
@@ -675,7 +671,6 @@ func applyContinuationState(reqData map[string]any, session openAISessionResolut
 
 	if previous, ok := reqData["previous_response_id"].(string); ok {
 		if strings.TrimSpace(previous) != "" {
-			sanitizeAnchoredEncryptedReplayItems(reqData)
 			normalizeResponsesRequestMap(reqData, responsesNormalizeOptions{strictCodex: true, finalize: true, model: jsonString(reqData["model"])})
 			return reqData
 		}
@@ -684,7 +679,6 @@ func applyContinuationState(reqData map[string]any, session openAISessionResolut
 	if requestNeedsPreviousResponseID(reqData) && strings.TrimSpace(session.PreviousRespID) != "" {
 		reqData["previous_response_id"] = strings.TrimSpace(session.PreviousRespID)
 	}
-	sanitizeAnchoredEncryptedReplayItems(reqData)
 	normalizeResponsesRequestMap(reqData, responsesNormalizeOptions{strictCodex: true, finalize: true, model: jsonString(reqData["model"])})
 	return reqData
 }

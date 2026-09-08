@@ -2066,7 +2066,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 			}
 			var failure *responsesFailureError
 			if errors.As(wsResult.Err, &failure) {
-				errBody := openAIErrorJSON(openAIErrorTypeForStatus(failure.StatusCode), failure.codeOrKind(), failure.Message)
+				errBody := failure.openAIErrorBody(failure.codeOrKind())
 				retryOutcome = sdk.ForwardOutcome{
 					Kind:          failure.outcomeKind(),
 					FailoverScope: failure.failoverScopeForKind(failure.outcomeKind()),
@@ -2194,7 +2194,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 					"kind", failure.Kind, "retry_after", failure.RetryAfter, "error", wsResult.Err)
 				writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
 			}
-			errBody := openAIErrorJSON(openAIErrorTypeForStatus(failure.StatusCode), failure.codeOrKind(), failure.Message)
+			errBody := failure.openAIErrorBody(failure.codeOrKind())
 			outcome := sdk.ForwardOutcome{
 				Kind:          failure.outcomeKind(),
 				FailoverScope: failure.failoverScopeForKind(failure.outcomeKind()),

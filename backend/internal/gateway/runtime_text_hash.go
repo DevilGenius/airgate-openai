@@ -149,9 +149,8 @@ func (r *enabledTextHashRequest) Finish(outcome sdk.ForwardOutcome, err error) t
 	if rejected {
 		now := time.Now()
 		switch rejection.Code {
-		case "invalid_encrypted_content":
-			result.encryptedContentCached = encrypted.CacheViolation(rejection)
 		case promptUsagePolicyErrorCode:
+			result.encryptedContentCached = encrypted.CacheViolation(rejection)
 			if r.ready {
 				r.hash.textSafety.addWithCategory(r.value, now, promptUsagePolicyErrorCode)
 				result.textSafetyCached = true
@@ -161,6 +160,7 @@ func (r *enabledTextHashRequest) Finish(outcome sdk.ForwardOutcome, err error) t
 				result.promptSafetyCached = true
 			}
 		case cybersecurityRiskErrorCode:
+			result.encryptedContentCached = encrypted.CacheViolation(rejection)
 			if r.ready {
 				r.hash.textSafety.addWithCategory(r.value, now, cybersecurityRiskErrorCode)
 				result.textSafetyCached = true
@@ -262,12 +262,9 @@ func textPromptHash(req *sdk.ForwardRequest, method, path string) (uint64, bool)
 	body := req.Body
 	if isResponsesRequestPath(normalizedPath) && bytes.Contains(body, []byte(`"encrypted_content"`)) {
 		if updated, changed := rewriteResponsesReasoningEncryptedContentKnownPresent(body, reasoningEncryptedContentRewritePolicy{
-			removeInvalid:          true,
+			removeAll:              true,
 			stripExistingOrphanIDs: true,
 			stripRemovedContentID:  true,
-			removeValid: func(string) bool {
-				return true
-			},
 		}); changed {
 			body = updated
 		}

@@ -1,12 +1,12 @@
 package gateway
 
 import (
-	"context"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -44,7 +44,7 @@ func abbreviatedEncryptedContentForTest(raw string) string {
 	return raw[:8] + "..." + raw[len(raw)-4:]
 }
 
-func TestInvalidEncryptedContentRetryMatchesCiphertextAcrossBodyChanges(t *testing.T) {
+func TestSafetyRejectionRetryMatchesCiphertextAcrossBodyChanges(t *testing.T) {
 	rejected := validGPTReasoningEncryptedContentForTestMarker(0x11)
 	fresh := validGPTReasoningEncryptedContentForTestMarker(0x22)
 	gateway := &OpenAIGateway{}
@@ -57,8 +57,8 @@ func TestInvalidEncryptedContentRetryMatchesCiphertextAcrossBodyChanges(t *testi
 	if got := gjson.GetBytes(first.Body, "input.0.encrypted_content").String(); got != rejected {
 		t.Fatalf("first request encrypted_content = %q, want preserved", got)
 	}
-	if !gateway.cacheInvalidEncryptedContentRetry(firstState, "/v1/responses") {
-		t.Fatal("invalid encrypted content failure should cache the ciphertext hash")
+	if !firstState.CacheViolation(explicitUpstreamError{Code: promptUsagePolicyErrorCode}) {
+		t.Fatal("Prompt rejection should cache the ciphertext hash")
 	}
 
 	retry := &sdk.ForwardRequest{Body: []byte(`{"model":"gpt-5.4","input":[` +
@@ -87,158 +87,116 @@ func TestInvalidEncryptedContentRetryMatchesCiphertextAcrossBodyChanges(t *testi
 	}
 }
 
-func TestInvalidEncryptedContentRetryCachesOnlyValidReasoningCiphertexts(t *testing.T) {
+func TestSafetyRejectionCachesOnlyReasoningCiphertextStrings(t *testing.T) {
 	gateway := &OpenAIGateway{}
 	for _, body := range [][]byte{
-		[]byte(`{"input":[{"type":"reasoning","encrypted_content":"bad"}]}`),
+		[]byte(`{"input":[{"type":"reasoning","encrypted_content":null},{"type":"reasoning","encrypted_content":123}]}`),
 		[]byte(`{"input":[{"type":"compaction","encrypted_content":"` + validGPTReasoningEncryptedContentForTest() + `"}]}`),
 	} {
 		req := &sdk.ForwardRequest{Body: body, Model: "gpt-5.4"}
 		state := preprocessEncryptedContentRetryTestRequest(gateway, req)
-		if gateway.cacheInvalidEncryptedContentRetry(state, "/v1/responses") {
+		if state.CacheViolation(explicitUpstreamError{Code: promptUsagePolicyErrorCode}) {
 			t.Fatalf("invalid or non-reasoning encrypted content was cached: %s", body)
 		}
 	}
 }
 
-func TestForwardInvalidEncryptedContentOnlySanitizesClientRetry(t *testing.T) {
-	valid := validGPTReasoningEncryptedContentForTest()
-	var requestCount atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		attempt := requestCount.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		if attempt == 1 {
-			if !gjson.GetBytes(body, "input.0.encrypted_content").Exists() {
-				t.Errorf("first upstream request removed encrypted_content: %s", body)
+func TestForwardInvalidEncryptedContentReturnsClientError(t *testing.T) {
+	const errorObject = `{"type":"invalid_request_error","code":"invalid_encrypted_content","message":"The encrypted content from the previous response could not be verified.","param":"input[0].encrypted_content"}`
+	const errorBody = `{"error":` + errorObject + `}`
+	for _, tc := range []struct {
+		name          string
+		eventType     string
+		outputStarted bool
+	}{
+		{name: "HTTP"},
+		{name: "SSE response.failed", eventType: "response.failed"},
+		{name: "SSE error", eventType: "error"},
+		{name: "SSE after output", eventType: "response.failed", outputStarted: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ciphertext := validGPTReasoningEncryptedContentForTest()
+			var requestCount atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				requestCount.Add(1)
+				if got := gjson.GetBytes(body, "input.0.encrypted_content").String(); got != ciphertext {
+					t.Errorf("request lost ciphertext: %s", body)
+				}
+				if got := gjson.GetBytes(body, "previous_response_id").String(); got != "resp_previous" {
+					t.Errorf("verification failure must not recover the continuation anchor: %s", body)
+				}
+				if tc.eventType == "" {
+					w.Header().Set("Content-Type", "application/json")
+					w.Header().Set("X-Request-Id", "req_encrypted")
+					w.WriteHeader(http.StatusBadRequest)
+					_, _ = io.WriteString(w, errorBody)
+					return
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				if tc.outputStarted {
+					_, _ = io.WriteString(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n")
+				}
+				if tc.eventType == "error" {
+					_, _ = io.WriteString(w, "data: {\"type\":\"error\",\"error\":"+errorObject+"}\n\n")
+				} else {
+					_, _ = io.WriteString(w, "data: {\"type\":\"response.failed\",\"response\":{\"error\":"+errorObject+"}}\n\n")
+				}
+			}))
+			defer server.Close()
+
+			gateway := &OpenAIGateway{logger: slog.Default(), transportPool: NewTransportPool()}
+			ctx := sdk.WithLogger(t.Context(), slog.Default())
+			// A later client request must still carry the ciphertext and reach
+			// upstream; the verification failure must not populate any cache.
+			for attempt := int32(1); attempt <= 2; attempt++ {
+				writer := httptest.NewRecorder()
+				req := encryptedContentRetryTestRequest(ciphertext, "")
+				req.Account = &sdk.Account{ID: 1, Credentials: map[string]string{
+					"api_key":  "sk-test",
+					"base_url": server.URL,
+				}}
+				req.Body = append([]byte(`{"previous_response_id":"resp_previous",`), req.Body[1:]...)
+				req.Headers.Set("X-Forwarded-Path", "/v1/responses")
+				req.DispatchPlan = sdk.DispatchPlan{SchedulingModel: req.Model, WireModel: req.Model}
+				req.Stream = tc.eventType != ""
+				req.Writer = writer
+
+				outcome, err := gateway.Forward(ctx, req)
+				if err != nil {
+					t.Fatalf("verification failure returned transport error: %v", err)
+				}
+				if outcome.Kind != sdk.OutcomeClientError || outcome.FailoverScope != sdk.FailoverScopeNone || outcome.SafetyRejected {
+					t.Fatalf("verification failure must be terminal without account penalty: %+v", outcome)
+				}
+				if outcome.Upstream.StatusCode != http.StatusBadRequest || string(outcome.Upstream.Body) != errorBody {
+					t.Fatalf("verification error details changed: %+v", outcome.Upstream)
+				}
+				if tc.eventType == "" && outcome.Upstream.Headers.Get("X-Request-Id") != "req_encrypted" {
+					t.Fatal("HTTP upstream request ID was not preserved")
+				}
+				if tc.outputStarted {
+					if !strings.Contains(writer.Body.String(), "data: "+errorBody+"\n\n") {
+						t.Fatalf("started stream lost terminal error details: %s", writer.Body.String())
+					}
+				} else if tc.eventType != "" && writer.Body.Len() != 0 {
+					t.Fatalf("unstarted stream must let Core return the 400 error: %s", writer.Body.String())
+				}
+				if got := requestCount.Load(); got != attempt {
+					t.Fatalf("%d client requests made %d upstream calls", attempt, got)
+				}
 			}
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error","code":"invalid_encrypted_content","message":"The encrypted content ` + abbreviatedEncryptedContentForTest(valid) + ` could not be verified."}}`))
-			return
-		}
-		if gjson.GetBytes(body, "input.0.encrypted_content").Exists() || gjson.GetBytes(body, "input.0.id").Exists() {
-			t.Errorf("client retry retained encrypted reasoning data: %s", body)
-		}
-		if got := gjson.GetBytes(body, "input.0.summary.0.text").String(); got != "keep" {
-			t.Errorf("client retry summary = %q, want keep; body=%s", got, body)
-		}
-		_, _ = w.Write([]byte(`{"id":"resp_retry","object":"response","status":"completed","model":"gpt-5.4","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`))
-	}))
-	defer server.Close()
-
-	newRequest := func(suffix string) *sdk.ForwardRequest {
-		return &sdk.ForwardRequest{
-			Account: &sdk.Account{ID: 1, Credentials: map[string]string{
-				"api_key":  "sk-test",
-				"base_url": server.URL,
-			}},
-			Body: []byte(`{"model":"gpt-5.4","input":[` +
-				`{"id":"rs_retry","type":"reasoning","encrypted_content":"` + valid + `","summary":[{"type":"summary_text","text":"keep"}]},` +
-				`{"type":"message","role":"user","content":[{"type":"input_text","text":"continue` + suffix + `"}]}` +
-				`]}`),
-			Headers: http.Header{
-				"Content-Type":     []string{"application/json"},
-				"X-Forwarded-Path": []string{"/v1/responses"},
-			},
-			Model:        "gpt-5.4",
-			DispatchPlan: sdk.DispatchPlan{SchedulingModel: "gpt-5.4", WireModel: "gpt-5.4"},
-		}
-	}
-
-	gateway := &OpenAIGateway{logger: slog.Default(), transportPool: NewTransportPool()}
-	ctx := sdk.WithLogger(context.Background(), slog.Default())
-	firstOutcome, firstErr := gateway.Forward(ctx, newRequest(""))
-	if !isInvalidEncryptedContentOutcome(firstOutcome, firstErr) {
-		t.Fatalf("first request outcome=%#v err=%v, want invalid encrypted content", firstOutcome, firstErr)
-	}
-	if got := requestCount.Load(); got != 1 {
-		t.Fatalf("first client request made %d upstream attempts, want exactly 1", got)
-	}
-
-	retryOutcome, retryErr := gateway.Forward(ctx, newRequest(" with added retry content"))
-	if retryErr != nil {
-		t.Fatalf("client retry returned error: %v", retryErr)
-	}
-	if retryOutcome.Kind != sdk.OutcomeSuccess {
-		t.Fatalf("client retry outcome = %s, want success; reason=%s", retryOutcome.Kind, retryOutcome.Reason)
-	}
-	if got := requestCount.Load(); got != 2 {
-		t.Fatalf("two client requests made %d upstream attempts, want exactly 2", got)
+		})
 	}
 }
 
-func TestForwardStreamingInvalidEncryptedContentOnlySanitizesClientRetry(t *testing.T) {
-	valid := validGPTReasoningEncryptedContentForTest()
-	var requestCount atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		attempt := requestCount.Add(1)
-		w.Header().Set("Content-Type", "text/event-stream")
-		if attempt == 1 {
-			if !gjson.GetBytes(body, "input.0.encrypted_content").Exists() {
-				t.Errorf("first streaming request removed encrypted_content: %s", body)
-			}
-			_, _ = io.WriteString(w, `data: {"type":"response.failed","response":{"error":{"type":"invalid_request_error","code":"invalid_encrypted_content","message":"The encrypted content `+abbreviatedEncryptedContentForTest(valid)+` could not be verified. Reason: Encrypted content could not be decrypted or parsed."}}}`+"\n\n")
-			return
-		}
-		if gjson.GetBytes(body, "input.0.encrypted_content").Exists() || gjson.GetBytes(body, "input.0.id").Exists() {
-			t.Errorf("streaming client retry retained encrypted reasoning data: %s", body)
-		}
-		_, _ = io.WriteString(w, `data: {"type":"response.output_text.delta","delta":"ok"}`+"\n\n")
-		_, _ = io.WriteString(w, `data: {"type":"response.completed","response":{"id":"resp_retry","model":"gpt-5.4","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`+"\n\n")
-	}))
-	defer server.Close()
-
-	newRequest := func(suffix string) *sdk.ForwardRequest {
-		return &sdk.ForwardRequest{
-			Account: &sdk.Account{ID: 1, Credentials: map[string]string{
-				"api_key":  "sk-test",
-				"base_url": server.URL,
-			}},
-			Body: []byte(`{"model":"gpt-5.4","stream":true,"input":[` +
-				`{"id":"rs_retry","type":"reasoning","encrypted_content":"` + valid + `","summary":[{"type":"summary_text","text":"keep"}]},` +
-				`{"type":"message","role":"user","content":[{"type":"input_text","text":"continue` + suffix + `"}]}` +
-				`]}`),
-			Headers: http.Header{
-				"Content-Type":     []string{"application/json"},
-				"X-Forwarded-Path": []string{"/v1/responses"},
-			},
-			Model:        "gpt-5.4",
-			DispatchPlan: sdk.DispatchPlan{SchedulingModel: "gpt-5.4", WireModel: "gpt-5.4"},
-			Stream:       true,
-			Writer:       httptest.NewRecorder(),
-		}
-	}
-
-	gateway := &OpenAIGateway{logger: slog.Default(), transportPool: NewTransportPool()}
-	ctx := sdk.WithLogger(context.Background(), slog.Default())
-	firstOutcome, firstErr := gateway.Forward(ctx, newRequest(""))
-	if !isInvalidEncryptedContentOutcome(firstOutcome, firstErr) {
-		t.Fatalf("first streaming request outcome=%#v err=%v, want invalid encrypted content", firstOutcome, firstErr)
-	}
-	if got := requestCount.Load(); got != 1 {
-		t.Fatalf("first streaming client request made %d upstream attempts, want exactly 1", got)
-	}
-
-	retryOutcome, retryErr := gateway.Forward(ctx, newRequest(" with added retry content"))
-	if retryErr != nil {
-		t.Fatalf("streaming client retry returned error: %v", retryErr)
-	}
-	if retryOutcome.Kind != sdk.OutcomeSuccess {
-		t.Fatalf("streaming client retry outcome = %s, want success; reason=%s", retryOutcome.Kind, retryOutcome.Reason)
-	}
-	if got := requestCount.Load(); got != 2 {
-		t.Fatalf("two streaming client requests made %d upstream attempts, want exactly 2", got)
-	}
-}
-
-func TestInvalidEncryptedContentRetryCacheExpires(t *testing.T) {
+func TestSafetyRejectionEncryptedContentCacheExpires(t *testing.T) {
 	valid := validGPTReasoningEncryptedContentForTest()
 	gateway := &OpenAIGateway{}
 	encryptedContentCacheForTest(gateway).ttl = time.Nanosecond
 	req := encryptedContentRetryTestRequest(valid, "")
 	state := preprocessEncryptedContentRetryTestRequest(gateway, req)
-	if !gateway.cacheInvalidEncryptedContentRetry(state, "/v1/responses") {
+	if !state.CacheViolation(explicitUpstreamError{Code: promptUsagePolicyErrorCode}) {
 		t.Fatal("expected retry marker to be cached")
 	}
 	time.Sleep(time.Millisecond)

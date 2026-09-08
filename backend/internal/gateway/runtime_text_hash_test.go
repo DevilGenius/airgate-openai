@@ -212,7 +212,7 @@ func TestInvalidPromptClassificationSetsSafetyRejected(t *testing.T) {
 		0,
 	)
 	if invalidEncryptedContent.SafetyRejected {
-		t.Fatal("invalid_encrypted_content is a continuation error, not a safety rejection")
+		t.Fatal("invalid_encrypted_content must not be marked as a safety rejection")
 	}
 }
 

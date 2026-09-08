@@ -91,9 +91,6 @@ func functionCallOutputRecoveryBody(body []byte) ([]byte, bool) {
 	if normalizeResponsesRequestMap(reqData, responsesNormalizeOptions{finalize: true}) {
 		changed = true
 	}
-	if sanitizeEncryptedReasoningItems(reqData) {
-		changed = true
-	}
 	if !changed || !responsesInputHasRecoverableContext(reqData) {
 		return nil, false
 	}

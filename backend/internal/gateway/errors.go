@@ -34,6 +34,9 @@ const maxErrorResponseBodyBytes = 1 << 20
 //	5xx → UpstreamTransient
 //	其它 4xx → ClientError（客户端请求自己的问题，账号无辜）
 func classifyHTTPFailure(statusCode int, message string) sdk.OutcomeKind {
+	if statusCode == http.StatusBadRequest && isEncryptedContentVerificationError(message) {
+		return sdk.OutcomeClientError
+	}
 	if statusCode >= 400 && isOverloadedText(message) {
 		return sdk.OutcomeFamilyTransient
 	}

@@ -41,7 +41,7 @@ type textHashRequest interface {
 
 type encryptedContentHashSession interface {
 	BeginRewrite()
-	Inspect(raw, path string)
+	Inspect(raw string)
 	ShouldRemove(raw string) bool
 	Sanitized() bool
 	CacheViolation(rejection explicitUpstreamError) bool
@@ -360,7 +360,7 @@ func (disabledTextHashRequest) Finish(sdk.ForwardOutcome, error) textHashFinish 
 type disabledEncryptedContentHashSession struct{}
 
 func (disabledEncryptedContentHashSession) BeginRewrite()            {}
-func (disabledEncryptedContentHashSession) Inspect(string, string)   {}
+func (disabledEncryptedContentHashSession) Inspect(string)           {}
 func (disabledEncryptedContentHashSession) ShouldRemove(string) bool { return false }
 func (disabledEncryptedContentHashSession) Sanitized() bool          { return false }
 func (disabledEncryptedContentHashSession) CacheViolation(explicitUpstreamError) bool {

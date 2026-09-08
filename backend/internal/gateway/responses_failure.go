@@ -18,6 +18,7 @@ const (
 	responsesFailureKindUnknown            responsesFailureKind = "unknown"
 	responsesFailureKindClient             responsesFailureKind = "client"
 	responsesFailureKindContinuationAnchor responsesFailureKind = "continuation_anchor"
+	responsesFailureKindEncryptedContent   responsesFailureKind = "encrypted_content"
 	responsesFailureKindRateLimited        responsesFailureKind = "rate_limited"
 	responsesFailureKindFamilyTransient    responsesFailureKind = "family_transient"
 	responsesFailureKindServer             responsesFailureKind = "server"
@@ -35,19 +36,21 @@ type responsesFailureError struct {
 	Code               string
 	Message            string
 	UpstreamMessage    string
+	upstreamErrorBody  []byte
 	RetryAfter         time.Duration
 	FailoverScope      sdk.FailoverScope
 }
 
 // outcomeKind 把内部 responsesFailureKind 映射到 SDK 的 OutcomeKind。
 // continuationAnchor 本质是客户端传了失效的 previous_response_id，归到 ClientError。
+// encryptedContent 校验失败保留密文，作为客户端错误返回，不重试或回避账号。
 // Unknown 兜底走 UpstreamTransient —— Core 能尝试 failover，而不是把账号标死。
 func (e *responsesFailureError) outcomeKind() sdk.OutcomeKind {
 	if e == nil {
 		return sdk.OutcomeUnknown
 	}
 	switch e.Kind {
-	case responsesFailureKindClient, responsesFailureKindContinuationAnchor:
+	case responsesFailureKindClient, responsesFailureKindContinuationAnchor, responsesFailureKindEncryptedContent:
 		return sdk.OutcomeClientError
 	case responsesFailureKindRateLimited:
 		return sdk.OutcomeAccountRateLimited
@@ -68,7 +71,7 @@ func (e *responsesFailureError) Error() string {
 	switch e.Kind {
 	case responsesFailureKindContinuationAnchor:
 		return "上游续链锚点失效: " + message
-	case responsesFailureKindClient:
+	case responsesFailureKindClient, responsesFailureKindEncryptedContent:
 		return "上游请求无效: " + message
 	case responsesFailureKindRateLimited:
 		if e.RetryAfter > 0 {
@@ -97,7 +100,7 @@ func isInvalidImageInputFailure(failure *responsesFailureError) bool {
 }
 
 func (e *responsesFailureError) shouldReturnClientError() bool {
-	return e != nil && e.Kind == responsesFailureKindClient
+	return e != nil && (e.Kind == responsesFailureKindClient || e.Kind == responsesFailureKindEncryptedContent)
 }
 
 func (e *responsesFailureError) isContinuationAnchorError() bool {
@@ -105,7 +108,7 @@ func (e *responsesFailureError) isContinuationAnchorError() bool {
 }
 
 func (e *responsesFailureError) failoverScopeForKind(kind sdk.OutcomeKind) sdk.FailoverScope {
-	if e == nil || kind != sdk.OutcomeClientError {
+	if e == nil || kind != sdk.OutcomeClientError || e.Kind == responsesFailureKindEncryptedContent {
 		return sdk.FailoverScopeNone
 	}
 	return e.FailoverScope
@@ -125,6 +128,22 @@ func (e *responsesFailureError) isSafetyRejected() bool {
 	return e != nil && isExplicitSafetyRejectedCode(e.Code)
 }
 
+// Preserve verification error details so clients can identify the invalid
+// input. Other failures retain their existing normalized error responses.
+func (e *responsesFailureError) withUpstreamError(errNode gjson.Result) *responsesFailureError {
+	if e != nil && e.Kind == responsesFailureKindEncryptedContent && errNode.IsObject() {
+		e.upstreamErrorBody = []byte(`{"error":` + errNode.Raw + `}`)
+	}
+	return e
+}
+
+func (e *responsesFailureError) openAIErrorBody(code string) []byte {
+	if len(e.upstreamErrorBody) > 0 {
+		return e.upstreamErrorBody
+	}
+	return openAIErrorJSON(openAIErrorTypeForStatus(e.StatusCode), code, e.Message)
+}
+
 func classifyResponsesFailure(data []byte) *responsesFailureError {
 	eventType := gjson.GetBytes(data, "type").String()
 	if eventType != "response.failed" {
@@ -141,7 +160,7 @@ func classifyResponsesFailure(data []byte) *responsesFailureError {
 
 	failure := classifyResponsesError(errType, errCode, msg)
 	applyOpenAIRateLimitReset(failure, errNode)
-	return failure
+	return failure.withUpstreamError(errNode)
 }
 
 // classifyWSErrorEvent 处理 WebSocket "error" 事件（区别于 "response.failed"）。
@@ -167,7 +186,7 @@ func classifyWSErrorEvent(data []byte) *responsesFailureError {
 	errCode := strings.ToLower(strings.TrimSpace(errNode.Get("code").String()))
 	failure := classifyResponsesError(errType, errCode, msg)
 	applyOpenAIRateLimitReset(failure, errNode)
-	return failure
+	return failure.withUpstreamError(errNode)
 }
 
 func classifyGenericSSEErrorEvent(data []byte) *responsesFailureError {
@@ -205,7 +224,7 @@ func classifyGenericSSEErrorEvent(data []byte) *responsesFailureError {
 	}
 	failure := classifyResponsesError(errType, errCode, msg)
 	applyOpenAIRateLimitReset(failure, errNode)
-	return failure
+	return failure.withUpstreamError(errNode)
 }
 
 // applyOpenAIRateLimitReset 把 OpenAI OAuth 错误体里的 resets_at / resets_in_seconds
@@ -244,6 +263,21 @@ func applyOpenAIRateLimitReset(failure *responsesFailureError, errNode gjson.Res
 func classifyResponsesError(errType, errCode, msg string) *responsesFailureError {
 	errCode = normalizeExplicitUpstreamErrorCode(errCode)
 	switch {
+	case errCode == "invalid_encrypted_content":
+		return &responsesFailureError{
+			Kind:               responsesFailureKindEncryptedContent,
+			StatusCode:         http.StatusBadRequest,
+			AnthropicErrorType: "invalid_request_error",
+			Code:               "invalid_encrypted_content",
+			Message:            msg,
+		}
+	case isEncryptedContentVerificationError(errType, errCode, msg):
+		return &responsesFailureError{
+			Kind:               responsesFailureKindEncryptedContent,
+			StatusCode:         http.StatusBadRequest,
+			AnthropicErrorType: "invalid_request_error",
+			Message:            msg,
+		}
 	case containsAny(errType, errCode, msg, "previous_response_not_found", "previous response", "response not found"):
 		return &responsesFailureError{
 			Kind:               responsesFailureKindContinuationAnchor,
@@ -258,21 +292,6 @@ func classifyResponsesError(errType, errCode, msg string) *responsesFailureError
 			StatusCode:         http.StatusBadRequest,
 			AnthropicErrorType: "invalid_request_error",
 			Code:               "function_call_output_without_call",
-			Message:            msg,
-		}
-	case errCode == "invalid_encrypted_content":
-		return &responsesFailureError{
-			Kind:               responsesFailureKindContinuationAnchor,
-			StatusCode:         http.StatusBadRequest,
-			AnthropicErrorType: "invalid_request_error",
-			Code:               "invalid_encrypted_content",
-			Message:            msg,
-		}
-	case isEncryptedContentVerificationError(errType, errCode, msg):
-		return &responsesFailureError{
-			Kind:               responsesFailureKindContinuationAnchor,
-			StatusCode:         http.StatusBadRequest,
-			AnthropicErrorType: "invalid_request_error",
 			Message:            msg,
 		}
 	case isContextTooLargeError(errType, errCode, msg):
