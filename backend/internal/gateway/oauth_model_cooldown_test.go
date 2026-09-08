@@ -19,6 +19,12 @@ func TestApplyOAuthModelEntitlementCooldown(t *testing.T) {
 		},
 		Reason: message,
 	}
+	const accessMessage = "The model `gpt-5.5` does not exist or you do not have access to it."
+	accessOutcome := failureOutcome(400, openAIErrorJSON("invalid_request_error", "model_not_found", accessMessage), nil, accessMessage, 0)
+	bodyOnlyAccessOutcome := accessOutcome
+	bodyOnlyAccessOutcome.Reason = ""
+	notFoundAccessOutcome := accessOutcome
+	notFoundAccessOutcome.Upstream.StatusCode = 404
 
 	tests := []struct {
 		name        string
@@ -31,6 +37,28 @@ func TestApplyOAuthModelEntitlementCooldown(t *testing.T) {
 			credentials: map[string]string{"access_token": "oauth-token"},
 			outcome:     baseOutcome,
 			wantApplied: true,
+		},
+		{
+			name:        "chatgpt oauth model access rejection HTTP 400",
+			credentials: map[string]string{"access_token": "oauth-token"},
+			outcome:     accessOutcome,
+			wantApplied: true,
+		},
+		{
+			name:        "model access rejection in upstream body only",
+			credentials: map[string]string{"access_token": "oauth-token"},
+			outcome:     bodyOnlyAccessOutcome,
+			wantApplied: true,
+		},
+		{
+			name:        "model access rejection HTTP 404 remains unchanged",
+			credentials: map[string]string{"access_token": "oauth-token"},
+			outcome:     notFoundAccessOutcome,
+		},
+		{
+			name:        "api key model access rejection remains client error",
+			credentials: map[string]string{"api_key": "sk-test"},
+			outcome:     accessOutcome,
 		},
 		{
 			name:        "api key account remains client error",
@@ -53,11 +81,7 @@ func TestApplyOAuthModelEntitlementCooldown(t *testing.T) {
 		{
 			name:        "generic missing model remains client error",
 			credentials: map[string]string{"access_token": "oauth-token"},
-			outcome: sdk.ForwardOutcome{
-				Kind:          sdk.OutcomeClientError,
-				FailoverScope: sdk.FailoverScopeDispatchCandidate,
-				Reason:        "The model does not exist.",
-			},
+			outcome:     failureOutcome(400, nil, nil, "The model does not exist.", 0),
 		},
 		{
 			name:        "successful response remains unchanged",
@@ -86,6 +110,9 @@ func TestApplyOAuthModelEntitlementCooldown(t *testing.T) {
 			if got.Kind != sdk.OutcomeAccountRateLimited {
 				t.Fatalf("Kind = %v, want OutcomeAccountRateLimited", got.Kind)
 			}
+			if !got.Kind.ShouldFailover() || !got.Kind.IsAccountFault() {
+				t.Fatal("expected account failover excluding the rejected account")
+			}
 			if got.FailoverScope != sdk.FailoverScopeNone {
 				t.Fatalf("FailoverScope = %q, want none", got.FailoverScope)
 			}
@@ -113,10 +140,16 @@ func TestOAuthModelEntitlementBackoffSequenceAndSuccessReset(t *testing.T) {
 		Kind:   sdk.OutcomeClientError,
 		Reason: message,
 	}
+	const accessMessage = "The model `gpt-5.6-sol` does not exist or you do not have access to it."
+	accessOutcome := failureOutcome(400, nil, nil, accessMessage, 0)
 
 	wantSequence := append(oauthModelEntitlementBackoffSchedule[:], 2*time.Hour)
 	for index, want := range wantSequence {
-		got, applied := tracker.apply(req, unsupported)
+		outcome := unsupported
+		if index%2 == 1 {
+			outcome = accessOutcome
+		}
+		got, applied := tracker.apply(req, outcome)
 		if !applied {
 			t.Fatalf("attempt %d was not converted to cooldown", index+1)
 		}
@@ -128,7 +161,7 @@ func TestOAuthModelEntitlementBackoffSequenceAndSuccessReset(t *testing.T) {
 	if got, applied := tracker.apply(req, sdk.ForwardOutcome{Kind: sdk.OutcomeSuccess}); applied || got.Kind != sdk.OutcomeSuccess {
 		t.Fatalf("success outcome changed unexpectedly: got=%+v applied=%v", got, applied)
 	}
-	got, applied := tracker.apply(req, unsupported)
+	got, applied := tracker.apply(req, accessOutcome)
 	if !applied || got.RetryAfter != time.Minute {
 		t.Fatalf("backoff after success = %v, applied=%v; want 1m", got.RetryAfter, applied)
 	}

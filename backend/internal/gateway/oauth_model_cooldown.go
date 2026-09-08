@@ -55,7 +55,7 @@ func (t *oauthModelEntitlementBackoffTracker) apply(req *sdk.ForwardRequest, out
 	if outcome.Kind != sdk.OutcomeClientError {
 		return outcome, false
 	}
-	if !isOAuthModelEntitlementUnavailableText(outcome.Reason, string(outcome.Upstream.Body)) {
+	if !isOAuthModelEntitlementUnavailableText(outcome.Upstream.StatusCode, outcome.Reason, string(outcome.Upstream.Body)) {
 		return outcome, false
 	}
 
@@ -103,10 +103,11 @@ func (t *oauthModelEntitlementBackoffTracker) reset(key oauthModelEntitlementBac
 	delete(t.failures, key)
 }
 
-func isOAuthModelEntitlementUnavailableText(parts ...string) bool {
+func isOAuthModelEntitlementUnavailableText(statusCode int, parts ...string) bool {
 	combined := strings.ToLower(strings.Join(parts, " "))
 	if !strings.Contains(combined, "model") {
 		return false
 	}
-	return strings.Contains(combined, "not supported when using codex with a chatgpt account")
+	return strings.Contains(combined, "not supported when using codex with a chatgpt account") ||
+		(statusCode == 400 && strings.Contains(combined, "does not exist or you do not have access to it"))
 }
