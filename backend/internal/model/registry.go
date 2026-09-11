@@ -141,7 +141,34 @@ var registry = map[string]Spec{
 	// "gpt-5.2": std("GPT 5.2", 272000, 128000, 1.75, 0.175, 14.0),
 
 	// ── 图像生成：标准成本按 token 计，分组图片固定单价由 Core 替代最终计费 ──
-	"gpt-image-2": imgSpec("GPT Image 2", 5.0, 0.5, 30.0, 0.20),
+	// 上游把 gpt-image-2.5 拆成 sunburst / flare 两个变体；裸名 gpt-image-2.5 由
+	// imageModelReroutes 统一路由到 sunburst，客户端要另一变体时直接请求 -flare。
+	// 图像条目计费口径一致（input 5 / cached 0.5 / output 30 / 每张 $0.20），调价只改这里。
+	"gpt-image-2":             imgSpec("GPT Image 2", 5.0, 0.5, 30.0, 0.20),
+	"gpt-image-2.5-sunburst":  imgSpec("GPT Image 2.5 Sunburst", 5.0, 0.5, 30.0, 0.20),
+	"gpt-image-2.5-flare":     imgSpec("GPT Image 2.5 Flare", 5.0, 0.5, 30.0, 0.20),
+}
+
+// imageModelReroutes 客户端模型名 → 实际上游模型名（key 必须是小写规范形式）。
+//
+// gpt-image-2.5 是上游的"裸名"：客户端可以照常请求，插件转发与计费都按目标模型进行。
+var imageModelReroutes = map[string]string{
+	"gpt-image-2.5": "gpt-image-2.5-sunburst",
+}
+
+// RerouteTarget 返回模型的重路由目标（大小写不敏感、忽略首尾空白）；没有规则时 ok 为 false。
+func RerouteTarget(modelID string) (string, bool) {
+	target, ok := imageModelReroutes[strings.ToLower(strings.TrimSpace(modelID))]
+	return target, ok
+}
+
+// CanonicalModel 返回模型最终应使用的 ID：命中重路由规则时返回目标，否则返回去掉首尾空白的原名。
+// Lookup / IsKnown 都经过它，因此别名模型的计价与已知性与目标模型完全一致。
+func CanonicalModel(modelID string) string {
+	if target, ok := RerouteTarget(modelID); ok {
+		return target
+	}
+	return strings.TrimSpace(modelID)
 }
 
 // DefaultSpec 未注册模型的最终兜底值。复用 gpt-5.5 的计价规格，避免返回零价。
@@ -153,7 +180,7 @@ var DefaultSpec = registry["gpt-5.5"]
 // 这避免了"客户端请求未知模型 → Spec 全 0 → cost=0 免费使用"的坑：只要能看出系列
 // （mini / codex / image / gpt-5 等），就按对应系列定价；彻底不认识的兜底到 GPT-5.5 标准价。
 func Lookup(modelID string) Spec {
-	id := strings.ToLower(strings.TrimSpace(modelID))
+	id := strings.ToLower(CanonicalModel(modelID))
 	if spec, ok := registry[id]; ok {
 		return spec
 	}
@@ -192,10 +219,11 @@ func IsImageOnly(modelID string) bool {
 }
 
 // IsKnown 判断给定 model ID 是否在注册表内（大小写不敏感、忽略首尾空白）。
+// 命中重路由规则的别名模型同样算已知（例如 gpt-image-2.5 → gpt-image-2.5-sunburst）。
 // 用于请求入口的 model 兜底：未注册的 model 会被换成默认值，
 // 避免把"不支持的模型"推到上游账号。
 func IsKnown(modelID string) bool {
-	id := strings.ToLower(strings.TrimSpace(modelID))
+	id := strings.ToLower(CanonicalModel(modelID))
 	if id == "" {
 		return false
 	}

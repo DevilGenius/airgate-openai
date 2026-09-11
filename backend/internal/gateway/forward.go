@@ -456,57 +456,23 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 	targetURL := buildAPIKeyURL(account, reqPath)
 	isImageReq := isImagesRequest(reqPath)
 	isImageEdit := isImagesEditRequest(reqPath)
-	reqContentType := req.Headers.Get("Content-Type")
-	isMultipart := isMultipartContentType(reqContentType)
-	imagesRespOpts := imagesResponseOptions{IsEdit: isImageEdit}
-	if isImageReq && len(req.Body) > 0 && (!isImageEdit || isMultipart) {
-		imagesRespOpts = imagesResponseOptionsFromRequestBody(req.Body, reqContentType, isImageEdit)
-	}
-	if isImageEdit && len(req.Body) > 0 && !isMultipart {
-		body, contentType, _, err := buildAPIKeyImagesEditMultipartBodyWithRequest(req.Body, reqContentType, ctx)
-		if err != nil {
-			if errors.Is(err, errImageProcessingBusy) {
-				return imageProcessingBusyOutcome(time.Since(start)), nil
-			}
-			errBody := jsonError(err.Error())
-			return sdk.ForwardOutcome{
-				Kind: sdk.OutcomeClientError,
-				Upstream: sdk.UpstreamResponse{
-					StatusCode: http.StatusBadRequest,
-					Headers:    http.Header{"Content-Type": []string{"application/json"}},
-					Body:       errBody,
-				},
-				Reason:   err.Error(),
-				Duration: time.Since(start),
-			}, nil
+	// 图片请求的预处理（含 gpt-image-2.5 → gpt-image-2.5-sunburst 模型重路由）全部在图片模块里，
+	// 这里只负责把它的错误映射成客户端可见的响应。
+	imagesRespOpts, imagePrepErr := prepareAPIKeyImageRequest(ctx, req, reqPath)
+	if imagePrepErr != nil {
+		if errors.Is(imagePrepErr, errImageProcessingBusy) {
+			return imageProcessingBusyOutcome(time.Since(start)), nil
 		}
-		req.Body = body
-		req.Headers.Set("Content-Type", contentType)
-		imagesRespOpts = imagesResponseOptionsFromRequestBody(body, contentType, true)
-	} else if isImageEdit && len(req.Body) > 0 && isMultipart && req.Stream {
-		body, contentType, err := stripMultipartFields(req.Body, reqContentType, "stream", "partial_images")
-		if err != nil {
-			errBody := jsonError(err.Error())
-			return sdk.ForwardOutcome{
-				Kind: sdk.OutcomeClientError,
-				Upstream: sdk.UpstreamResponse{
-					StatusCode: http.StatusBadRequest,
-					Headers:    http.Header{"Content-Type": []string{"application/json"}},
-					Body:       errBody,
-				},
-				Reason:   err.Error(),
-				Duration: time.Since(start),
-			}, nil
-		}
-		req.Body = body
-		req.Headers.Set("Content-Type", contentType)
-		imagesRespOpts = imagesResponseOptionsFromRequestBody(body, contentType, true)
-	} else if isImageReq && len(req.Body) > 0 && !isMultipart {
-		for _, field := range []string{"stream", "partial_images"} {
-			if patched, err := sjson.DeleteBytes(req.Body, field); err == nil {
-				req.Body = patched
-			}
-		}
+		return sdk.ForwardOutcome{
+			Kind: sdk.OutcomeClientError,
+			Upstream: sdk.UpstreamResponse{
+				StatusCode: http.StatusBadRequest,
+				Headers:    http.Header{"Content-Type": []string{"application/json"}},
+				Body:       jsonError(imagePrepErr.Error()),
+			},
+			Reason:   imagePrepErr.Error(),
+			Duration: time.Since(start),
+		}, nil
 	}
 
 	// 重启恢复：有上游异步 task_id 的 images 请求直接 poll，不再重复发起上游请求

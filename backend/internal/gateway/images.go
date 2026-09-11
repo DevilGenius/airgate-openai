@@ -373,8 +373,10 @@ func shouldRetryImageFallback(outcome sdk.ForwardOutcome, err error) bool {
 	return !isImageSafetyRejectionText(reason)
 }
 
+// calculateGPTImageOutputTokensForImages 按 gpt-image 系列的分档 token 计算器估算出图
+// token（gpt-image-2 / 2.5 / 1 / 1.5 共用；其它模型返回 0，交给上游 usage 回显兜底）。
 func calculateGPTImageOutputTokensForImages(modelName, size, quality string, numImages int) int {
-	if numImages <= 0 || !isGPTImageTwoModel(modelName) {
+	if numImages <= 0 || !isGPTImageModel(modelName) {
 		return 0
 	}
 	if _, _, ok := parseImageSize(size); !ok {
@@ -504,7 +506,7 @@ func (h *imagesSilentHandler) OnRawEvent(eventType string, data []byte) {
 
 // estimatePromptTokens 对用户 prompt 做粗略 token 估算。
 // 不引入 tokenizer 依赖：按 rune 数 / 3 向上取整，中英混合 prompt 都接近 OpenAI
-// 实际分词数量级。gpt-image-1.5 input 单价 $5/1M，即便误差 50% 每千字也只有
+// 实际分词数量级。gpt-image 系列 input 单价 $5/1M，即便误差 50% 每千字也只有
 // 几分钱差异，对总价（图像 output 主导）影响可忽略。
 func estimatePromptTokens(prompt string) int {
 	runes := len([]rune(prompt))
@@ -1207,11 +1209,11 @@ func imageAPIConstraintLines(req *imagesRequest, isEdit, hasRegionAnnotation boo
 	}
 	if isEdit {
 		lines = append(lines, "Image 1 is the edit target; preserve its framing, identity, geometry, lighting, and all unrequested details.")
-		// gpt-image-2 始终用 high fidelity 处理输入图，input_fidelity 是 no-op；
+		// gpt-image 系列（2 / 2.5 等）始终用 high fidelity 处理输入图，input_fidelity 是 no-op；
 		// 写进 constraints 反而是噪声，可能让 chat 模型输出无效约束词。
 		// SKILL.md: "gpt-image-2 always uses high fidelity for image inputs;
 		// do not set input_fidelity with this model."
-		if !isGPTImageTwoModel(req.Model) {
+		if !isGPTImageModel(req.Model) {
 			if fidelity := cleanImageConstraintValue(req.InputFidelity); fidelity != "" {
 				lines = append(lines, "Preserve the input image with "+fidelity+" fidelity.")
 			}
@@ -1223,14 +1225,18 @@ func imageAPIConstraintLines(req *imagesRequest, isEdit, hasRegionAnnotation boo
 	return lines
 }
 
-// isGPTImageTwoModel 判断 model 是否走 gpt-image-2 链路。
-// 空 model 视为 gpt-image-2，因为客户端不指定时上游默认升到 gpt-image-2。
-func isGPTImageTwoModel(model string) bool {
+// isGPTImageModel 判断 model 是否属于 gpt-image 系列（gpt-image-2、gpt-image-2.5-*、
+// 以及历史的 gpt-image-1 / 1.5）。
+//
+// 空 model 视为该系列：客户端不指定时上游会落到最新的 gpt-image 模型。
+// 前缀与 Core 侧的家族判定保持一致（usagemodel.ImagePrefix、scheduler.ModelFamily 都用
+// "gpt-image"），避免两边对同一批模型给出不同结论。
+func isGPTImageModel(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
 	if m == "" {
 		return true
 	}
-	return strings.HasPrefix(m, "gpt-image-2")
+	return strings.HasPrefix(m, "gpt-image")
 }
 
 // imageActualSizeFromBase64 从图像 base64 数据里解码 header 拿实际宽高。
@@ -1281,9 +1287,9 @@ func imagePriceForSize(size string) float64 {
 // validateImageSize 在 OAuth → image_generation tool 路径上预校验 size，
 // 把上游会拒的请求挡在 OAuth/PoW/SSE 整套链路之前，省一次配额 + 30s 延迟。
 //
-// 校验范围限定 gpt-image-2（含空 model，默认走 2）；显式 gpt-image-1 / 1.5
-// 跳过：DALL-E 系列约束完全不同（只接受固定 size 列表），现有 normalize+clamp
-// 已经够用。
+// 校验范围是整个 gpt-image 系列（含空 model，默认走最新 gpt-image 模型），
+// 与 isGPTImageModel 的前缀判定一致；DALL-E 等其它系列约束完全不同（只接受固定 size
+// 列表），不在校验范围内，交给 normalize + clamp 兜底。
 //
 // 硬约束（gpt-image-2 SKILL.md）：
 //   - size = "" 或 "auto" → 允许（由上游决定）
@@ -1296,7 +1302,7 @@ func validateImageSize(size, model string) error {
 	if s == "" || s == "auto" {
 		return nil
 	}
-	if !isGPTImageTwoModel(model) {
+	if !isGPTImageModel(model) {
 		return nil
 	}
 	width, height, ok := parseImageSize(s)
@@ -1328,6 +1334,56 @@ func validateImageSize(size, model string) error {
 
 func cleanImageConstraintValue(value string) string {
 	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+}
+
+// prepareAPIKeyImageRequest 是 API Key 直通路径上图片请求的唯一预处理入口，按顺序做三件事：
+//  1. 模型重路由（裸名 gpt-image-2.5 → gpt-image-2.5-sunburst），必须在解析/重建 body 之前；
+//  2. body 归一化：/v1/images/edits 的 JSON 转 multipart、剥离 stream / partial_images；
+//  3. 解析响应计费选项（size / quality 等）。
+//
+// 非图片请求直接返回零值选项，不做任何改写。
+func prepareAPIKeyImageRequest(ctx context.Context, req *sdk.ForwardRequest, reqPath string) (imagesResponseOptions, error) {
+	isImageEdit := isImagesEditRequest(reqPath)
+	opts := imagesResponseOptions{IsEdit: isImageEdit}
+	if req == nil || !isImagesRequest(reqPath) {
+		return opts, nil
+	}
+	if err := applyImageRequestModelReroute(ctx, req); err != nil {
+		return opts, err
+	}
+	if len(req.Body) == 0 {
+		return opts, nil
+	}
+
+	contentType := req.Headers.Get("Content-Type")
+	isMultipart := isMultipartContentType(contentType)
+	if !isImageEdit || isMultipart {
+		opts = imagesResponseOptionsFromRequestBody(req.Body, contentType, isImageEdit)
+	}
+	if isImageEdit && !isMultipart {
+		body, nextContentType, _, err := buildAPIKeyImagesEditMultipartBodyWithRequest(req.Body, contentType, ctx)
+		if err != nil {
+			return opts, err
+		}
+		req.Body = body
+		req.Headers.Set("Content-Type", nextContentType)
+		opts = imagesResponseOptionsFromRequestBody(body, nextContentType, true)
+	} else if isImageEdit && isMultipart && req.Stream {
+		body, nextContentType, err := stripMultipartFields(req.Body, contentType, "stream", "partial_images")
+		if err != nil {
+			return opts, err
+		}
+		req.Body = body
+		req.Headers.Set("Content-Type", nextContentType)
+		opts = imagesResponseOptionsFromRequestBody(body, nextContentType, true)
+	} else if !isMultipart {
+		for _, field := range []string{"stream", "partial_images"} {
+			if patched, err := sjson.DeleteBytes(req.Body, field); err == nil {
+				req.Body = patched
+			}
+		}
+	}
+	return opts, nil
 }
 
 func buildEditRegionAnnotation(req *imagesRequest, contexts ...context.Context) (string, error) {
@@ -1828,6 +1884,12 @@ func (g *OpenAIGateway) forwardImagesViaResponsesTool(ctx context.Context, req *
 func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context, req *sdk.ForwardRequest, targetURL string) (sdk.ForwardOutcome, error) {
 	start := time.Now()
 	account := req.Account
+
+	// 图片模型重路由必须早于请求体解析：下面的 parseImagesRequest 结果决定计费模型
+	// （imageGenerationBillingModel）与 prompt 里的 "Use requested image model X" 约束。
+	if err := applyImageRequestModelReroute(ctx, req); err != nil {
+		return imageModelRerouteFailureOutcome(err), nil
+	}
 
 	session := resolveOpenAISession(req.Headers, req.Body, account.ID)
 	if session.StateError != nil {
@@ -2815,7 +2877,7 @@ func buildImagesErrorBodyWithCode(status int, code, message string) []byte {
 // 若从 body 读到空串就回退到请求侧传入的 fallbackModel，否则 fillCost 会因
 // 查不到定价而把 InputCost / OutputCost 置零，账单会失真。
 //
-// 计费字段复用 parseUsage：gpt-image-1 / gpt-image-1.5 返回的
+// 计费字段复用 parseUsage：gpt-image 系列返回的
 // usage.input_tokens / usage.output_tokens / usage.input_tokens_details.cached_tokens
 // 与 Responses API 字段同构，parseUsage 已经处理了 cached token 扣减。
 type imagesResponseOptions struct {
@@ -2866,7 +2928,7 @@ func handleImagesResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 	summary := summarizeImagesResponseForBilling(body, opts.BillingSize, opts.ForceBillingSize)
 	body = applyImagesResponseMetadata(body, opts, summary)
 	imageOutputTokens := calculateGPTImageOutputTokensForImages(modelName, summary.BillingSize, opts.RequestQuality, summary.NumImages)
-	if !isGPTImageTwoModel(modelName) {
+	if !isGPTImageModel(modelName) {
 		opts.RequestImageInputTokens = 0
 	}
 	body = applyImagesResponseUsage(body, opts, imageOutputTokens)

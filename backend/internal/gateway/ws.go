@@ -60,8 +60,8 @@ type WSResult struct {
 	CacheCreationTokens   int
 	ReasoningOutputTokens int
 	// ToolImageInputTokens / ToolImageOutputTokens 来自 response.usage.tool_usage.image_gen
-	// 或 response.completed 的 tool_usage 字段。按 gpt-image-1.5 单价单独计费，
-	// 因为主 model（通常是 gpt-5.6-luna）与图像工具内部模型的单价可能不同。
+	// 或 response.completed 的 tool_usage 字段。按图像工具模型（imageToolCostModel）的单价
+	// 单独计费，因为主 model（通常是 gpt-5.6-luna）与图像工具内部模型的单价可能不同。
 	ToolImageInputTokens  int
 	ToolImageOutputTokens int
 	// ImageGenCalls 捕获 Responses API 返回的 image_generation_call output items，
@@ -71,7 +71,7 @@ type WSResult struct {
 	ImageGenCallFailures    []ImageGenCallFailure
 	ImageGenCallDiagnostics []string
 	// ToolImageModel 是 response.tools[0].model —— 上游实际为 image_generation
-	// 工具选用的内部模型（客户端请求 gpt-image-2 时可能被静默降级为 gpt-image-1.5）。
+	// 工具选用的内部模型（可能与客户端请求的模型名不同，上游会换成自己当前使用的图像模型）。
 	ToolImageModel    string
 	CompletedEventRaw []byte
 	FailedEventRaw    []byte
@@ -97,7 +97,7 @@ type ImageGenCall struct {
 	OutputFormat   string
 	Background     string
 	RevisedPrompt  string
-	Model          string // 上游实际使用的图像模型（如 gpt-image-1.5）
+	Model          string // 上游实际使用的图像模型（如 gpt-image-2）
 }
 
 type ImageGenCallFailure struct {
@@ -543,8 +543,8 @@ func mergeResponseMetadata(result *WSResult, response map[string]any) {
 		result.Model = model
 	}
 	// 从 response.tools[] 里扫出 image_generation 工具的实际 model 字段。
-	// 上游会把生效后的 tool 配置回写到 response.tools 里（客户端传的 gpt-image-2
-	// 会被替换为上游真正使用的值，比如 gpt-image-1.5）。
+	// 上游会把生效后的 tool 配置回写到 response.tools 里（客户端传的模型名
+	// 会被替换为上游真正使用的值，比如 gpt-image-2）。
 	if tools, ok := response["tools"].([]any); ok {
 		for _, t := range tools {
 			tm, ok := t.(map[string]any)
@@ -692,7 +692,7 @@ func extractUsageFromResponseMap(result *WSResult, resp map[string]any) {
 		)
 	}
 	// ChatGPT OAuth 响应把 image_generation tool 的用量放在 response.tool_usage.image_gen，
-	// 与主 usage 分开上报。这里提取出来让计费层按 gpt-image-1.5 单价额外计费。
+	// 与主 usage 分开上报。这里提取出来让计费层按图像工具模型单价额外计费。
 	if toolUsage, ok := resp["tool_usage"].(map[string]any); ok {
 		if img, ok := toolUsage["image_gen"].(map[string]any); ok {
 			result.ToolImageInputTokens = JsonInt(img, "input_tokens")

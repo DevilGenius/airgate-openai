@@ -209,6 +209,7 @@ func TestApplyWebReverseSizeHint(t *testing.T) {
 // TestHandleImagesResponse_TokenAttribution 覆盖官方响应格式：
 //   - usage.input_tokens / output_tokens 落入 Outcome.Usage
 //   - cached tokens 从 input 中扣减，避免重复计费
+//   - gpt-image 系列的 output_tokens 改用插件内 token 计算器估算（按请求 size 分档）
 //   - API Key Images 按请求 size 分档计费
 func TestHandleImagesResponse_TokenAttribution(t *testing.T) {
 	body := `{
@@ -245,8 +246,10 @@ func TestHandleImagesResponse_TokenAttribution(t *testing.T) {
 	if got := usageMetricInt(u, usageMetricInputTokens); got != 40 {
 		t.Errorf("input_tokens = %d, want 40 (50 - 10 cached)", got)
 	}
-	if got := usageMetricInt(u, usageMetricOutputTokens); got != 4160 {
-		t.Errorf("output_tokens = %d, want 4160", got)
+	// gpt-image 系列的 output_tokens 用插件内 token 计算器估算：2048x2048 medium = 3568/张，
+	// 覆盖上游回显的 4160（上游 usage 仅在该模型不在系列内时兜底）。
+	if got := usageMetricInt(u, usageMetricOutputTokens); got != 3568 {
+		t.Errorf("output_tokens = %d, want 3568", got)
 	}
 	if got := usageMetricInt(u, usageMetricCachedInputTokens); got != 10 {
 		t.Errorf("cached_input_tokens = %d, want 10", got)
@@ -255,8 +258,9 @@ func TestHandleImagesResponse_TokenAttribution(t *testing.T) {
 	if got := u.InputCost; !almostEqual(got, 0.0002, 1e-9) {
 		t.Errorf("input cost = %v, want token cost 0.0002", got)
 	}
-	if !almostEqual(u.AccountCost, 0.125005, 1e-9) {
-		t.Errorf("AccountCost = %v, want token cost 0.125005", u.AccountCost)
+	// 0.0002(input) + 0.000005(cached) + 3568 × $30/1M(output)
+	if !almostEqual(u.AccountCost, 0.107245, 1e-9) {
+		t.Errorf("AccountCost = %v, want 0.107245", u.AccountCost)
 	}
 	if got, want := usageImageUnitPrice(u), "0.2"; got != want {
 		t.Errorf("image unit_price = %q, want %q", got, want)
@@ -452,7 +456,8 @@ func TestHandleImagesResponse_APIKeyBillingUsesRequestSize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleImagesResponse returned err: %v", err)
 	}
-	if got, want := outcome.Usage.AccountCost, 0.00305; !almostEqual(got, want, 1e-9) {
+	// 2 张 3840x2160 medium：每张 3336 出图 token，共 6672 → token 成本 10×$5/1M + 6672×$30/1M。
+	if got, want := outcome.Usage.AccountCost, 0.20021; !almostEqual(got, want, 1e-9) {
 		t.Fatalf("AccountCost = %v, want %v (token standard cost)", got, want)
 	}
 	if got, want := usageImageUnitPrice(outcome.Usage), "0.4"; got != want {
@@ -1543,7 +1548,6 @@ func TestBuildImagesToolCreateMsg_Edit_JSON(t *testing.T) {
 	prompt := content.Get("0.text").String()
 	for _, want := range []string{
 		"Image 1 is the edit target; preserve its framing, identity, geometry, lighting, and all unrequested details.",
-		"Preserve the input image with high fidelity.",
 		"Image 2 is a region annotation derived from the edit mask; change only the red marked area in Image 1 and keep everything outside that region unchanged.",
 	} {
 		if !strings.Contains(prompt, want) {
@@ -1552,6 +1556,14 @@ func TestBuildImagesToolCreateMsg_Edit_JSON(t *testing.T) {
 		if !strings.Contains(gjson.GetBytes(msg, "instructions").String(), want) {
 			t.Errorf("instructions missing edit constraint %q", want)
 		}
+	}
+	// gpt-image 系列统一跳过 input_fidelity 约束（含 gpt-image-1.5）：该系列始终 high
+	// fidelity 处理输入图，写进 constraints 只会是噪声。
+	if strings.Contains(prompt, "fidelity") {
+		t.Errorf("gpt-image 系列不应写入 input_fidelity 约束: %q", prompt)
+	}
+	if strings.Contains(gjson.GetBytes(msg, "instructions").String(), "fidelity") {
+		t.Errorf("instructions 不应写入 input_fidelity 约束")
 	}
 	tool := gjson.GetBytes(msg, "tools.0")
 	if tool.Get("output_format").String() != "png" {
@@ -2445,8 +2457,8 @@ func TestForwardImagesViaResponsesTool_EmptyPrompt(t *testing.T) {
 	}
 }
 
-// TestValidateImageSize 覆盖 gpt-image-2 size 硬约束的全部分支。
-// 包括：空/auto 透传、显式 1.5 跳过、16 倍数对齐、3:1 比例、
+// TestValidateImageSize 覆盖 gpt-image 系列 size 硬约束的全部分支。
+// 包括：空/auto 透传、gpt-image-1 / 1.5 同样受约束、16 倍数对齐、3:1 比例、
 // 总像素 [655360, 8294400] 范围、3840 边长上限。
 func TestValidateImageSize(t *testing.T) {
 	cases := []struct {
@@ -2460,15 +2472,19 @@ func TestValidateImageSize(t *testing.T) {
 		{"auto size", "auto", "gpt-image-2", false},
 		{"AUTO uppercase", "AUTO", "", false},
 
-		// 跳过：显式 gpt-image-1 / 1.5 不应用 SKILL 严格约束
-		{"gpt-image-1.5 skips strict check", "1000x1000", "gpt-image-1.5", false},
-		{"gpt-image-1 skips strict check", "999x999", "gpt-image-1", false},
+		// gpt-image 系列统一应用严格约束（含历史的 gpt-image-1 / 1.5）
+		{"gpt-image-1.5 strict check", "1000x1000", "gpt-image-1.5", true}, // 1000 不是 16 的倍数
+		{"gpt-image-1 strict check", "999x999", "gpt-image-1", true},       // 999 不是 16 的倍数
+		{"gpt-image-1.5 aligned ok", "1024x1024", "gpt-image-1.5", false},
+
+		// 非 gpt-image 系列（如 DALL-E）不受这套约束
+		{"dall-e skips strict check", "1000x1000", "dall-e-3", false},
 
 		// gpt-image-2 / 空 model：合规
 		{"square 1024 ok", "1024x1024", "gpt-image-2", false},
 		{"landscape 1536x1024 ok", "1536x1024", "gpt-image-2", false},
 		{"4K landscape ok", "3840x2160", "gpt-image-2", false},
-		{"empty model treats as gpt-image-2 ok", "1024x1024", "", false},
+		{"empty model treats as gpt-image ok", "1024x1024", "", false},
 
 		// 格式错
 		{"malformed size", "1024", "gpt-image-2", true},
@@ -2502,6 +2518,32 @@ func TestValidateImageSize(t *testing.T) {
 				t.Errorf("validateImageSize(%q, %q) = %v, want nil", tc.size, tc.model, err)
 			}
 		})
+	}
+}
+
+// TestIsGPTImageModelCoversFamily 固定 gpt-image 系列判定的边界：
+// 空 model 与所有 gpt-image* 名字都算系列内（gpt-image-2.5-* 不必再单独加分支），
+// 与 Core 侧 usagemodel.ImagePrefix / scheduler.ModelFamily 的前缀保持一致。
+func TestIsGPTImageModelCoversFamily(t *testing.T) {
+	inFamily := []string{
+		"",
+		"gpt-image-2",
+		"gpt-image-2.5-sunburst",
+		"gpt-image-2.5-flare",
+		"gpt-image-1",
+		"gpt-image-1.5",
+		" GPT-Image-2.5-Sunburst ",
+	}
+	for _, model := range inFamily {
+		if !isGPTImageModel(model) {
+			t.Fatalf("isGPTImageModel(%q) = false, want true", model)
+		}
+	}
+	outOfFamily := []string{"dall-e-3", "gpt-5.5", "image-2.5", "openai/gpt-image-2"}
+	for _, model := range outOfFamily {
+		if isGPTImageModel(model) {
+			t.Fatalf("isGPTImageModel(%q) = true, want false", model)
+		}
 	}
 }
 

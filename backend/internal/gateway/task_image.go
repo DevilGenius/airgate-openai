@@ -68,6 +68,8 @@ func buildImageTaskInput(req *sdk.ForwardRequest, reqPath string, isEdit bool) (
 	if model == "" {
 		model = req.Model
 	}
+	// 图片模型重路由：任务 input / attributes 与随后构建的请求体统一用实际上游模型名。
+	model = canonicalImageModel(model)
 
 	// input 只含纯业务参数
 	input := map[string]any{

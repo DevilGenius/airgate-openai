@@ -893,7 +893,7 @@ type openaiUsage struct {
 	cacheCreationTokens   int
 	reasoningOutputTokens int
 	// image_generation tool 的用量，从 response.tool_usage.image_gen 提取。
-	// 按 gpt-image-1.5 单价单独计费，与主 model 的单价隔离。
+	// 按图像工具模型（imageToolCostModel）的单价单独计费，与主 model 的单价隔离。
 	toolImageInputTokens  int
 	toolImageOutputTokens int
 	imageGenCallCount     int
