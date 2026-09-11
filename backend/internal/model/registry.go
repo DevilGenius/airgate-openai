@@ -144,9 +144,9 @@ var registry = map[string]Spec{
 	// 上游把 gpt-image-2.5 拆成 sunburst / flare 两个变体；裸名 gpt-image-2.5 由
 	// imageModelReroutes 统一路由到 sunburst，客户端要另一变体时直接请求 -flare。
 	// 图像条目计费口径一致（input 5 / cached 0.5 / output 30 / 每张 $0.20），调价只改这里。
-	"gpt-image-2":             imgSpec("GPT Image 2", 5.0, 0.5, 30.0, 0.20),
-	"gpt-image-2.5-sunburst":  imgSpec("GPT Image 2.5 Sunburst", 5.0, 0.5, 30.0, 0.20),
-	"gpt-image-2.5-flare":     imgSpec("GPT Image 2.5 Flare", 5.0, 0.5, 30.0, 0.20),
+	"gpt-image-2":            imgSpec("GPT Image 2", 5.0, 0.5, 30.0, 0.20),
+	"gpt-image-2.5-sunburst": imgSpec("GPT Image 2.5 Sunburst", 5.0, 0.5, 30.0, 0.20),
+	"gpt-image-2.5-flare":    imgSpec("GPT Image 2.5 Flare", 5.0, 0.5, 30.0, 0.20),
 }
 
 // imageModelReroutes 客户端模型名 → 实际上游模型名（key 必须是小写规范形式）。

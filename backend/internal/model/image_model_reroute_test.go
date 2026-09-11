@@ -5,7 +5,7 @@ import "testing"
 func TestImageTwoPointFiveVariantsAreRegistered(t *testing.T) {
 	want := map[string]string{
 		"gpt-image-2.5-sunburst": "GPT Image 2.5 Sunburst",
-		"gpt-image-2.5-flare":     "GPT Image 2.5 Flare",
+		"gpt-image-2.5-flare":    "GPT Image 2.5 Flare",
 	}
 	for id, name := range want {
 		spec, ok := registry[id]
