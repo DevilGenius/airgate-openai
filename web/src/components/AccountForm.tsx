@@ -41,6 +41,8 @@ const inputStyle: React.CSSProperties = {
   fontSize: '0.875rem',
   color: cssVar('text'),
   outline: 'none',
+  fontVariantLigatures: 'none',
+  fontFeatureSettings: '"liga" 0, "calt" 0',
   transition: 'border-color 0.2s, box-shadow 0.2s',
 };
 
