@@ -28,6 +28,8 @@ const maxErrorResponseBodyBytes = 1 << 20
 //	403 → AccountUnavailable（明确账号禁用 / workspace 失活仍升级为 AccountDead）
 //	402 + deactivated_workspace → AccountDead
 //	402 + WebSocket 握手 Payment Required → AccountDead
+//	402 / 403 + 余额或配额耗尽（结构化 code 或纯文本）→ AccountQuotaExhausted
+//	  （Core 语义：可 failover 换号重试，并把该账号直接 disabled）
 //	400 + 消息含限流关键词 → AccountRateLimited（部分上游用 400 返回 usage_limit_reached）
 //	400 + 消息含 disabled/deactivated → AccountDead
 //	overloaded 语义 → FamilyTransient（走 Core 的 family 级短退避）
@@ -84,7 +86,8 @@ func classifyHTTPFailureResponse(statusCode int, body []byte, message string) sd
 			return sdk.OutcomeClientError
 		}
 	}
-	if (statusCode == http.StatusPaymentRequired || statusCode == http.StatusForbidden) && hasQuotaExhaustionCode(body) {
+	if (statusCode == http.StatusPaymentRequired || statusCode == http.StatusForbidden) &&
+		(hasQuotaExhaustionCode(body) || isBalanceExhaustion(message, body)) {
 		return sdk.OutcomeAccountQuotaExhausted
 	}
 	return classifyHTTPFailure(statusCode, message)
@@ -99,21 +102,98 @@ func hasQuotaExhaustionCode(body []byte) bool {
 	return false
 }
 
+// isQuotaExhaustionCode 判断结构化错误码是否表示额度/余额已经耗尽。
+// 必须同时命中"额度主体"（quota / balance / credit）与"耗尽语义"
+// （insufficient / exhausted / exceeded / depleted），
+// 这样 quota_information_unavailable 之类的非耗尽错误码不会被误判为耗尽。
 func isQuotaExhaustionCode(code string) bool {
 	tokens := strings.FieldsFunc(strings.ToLower(strings.TrimSpace(code)), func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 	})
-	hasQuota := false
+	hasSubject := false
 	hasExhaustion := false
 	for _, token := range tokens {
 		switch token {
-		case "quota":
-			hasQuota = true
+		case "quota", "balance", "credit", "credits":
+			hasSubject = true
 		case "insufficient", "exhausted", "exceeded", "depleted":
 			hasExhaustion = true
 		}
 	}
-	return hasQuota && hasExhaustion
+	return hasSubject && hasExhaustion
+}
+
+// balanceExhaustionScanLimit 限制对上游错误正文的回退扫描长度。
+// 余额提示都是短句，而错误正文上限是 1 MiB（readLimitedErrorBody），
+// 为它做整份拷贝既慢又制造大量瞬时垃圾。
+const balanceExhaustionScanLimit = 4 << 10
+
+// isBalanceExhaustion 判断上游错误是否表示余额已经耗尽。
+// 先看调用方已提取的 message（各错误路径都会填，通常是正文本身或其截断），
+// 命中即返回；未命中再扫正文前缀，兜住 message 为空或未取到正文的错误路径。
+func isBalanceExhaustion(message string, body []byte) bool {
+	if isBalanceExhaustionText(message) {
+		return true
+	}
+	if len(body) == 0 {
+		return false
+	}
+	if len(body) > balanceExhaustionScanLimit {
+		body = body[:balanceExhaustionScanLimit]
+	}
+	return isBalanceExhaustionText(string(body))
+}
+
+// isBalanceExhaustionText 判断一段文本是否表示余额已经耗尽。
+// 部分上游（尤其预付费中转）不返回结构化 code，只在 402 / 403 里回纯文本，例如：
+//
+//	Account balance is exhausted. Please recharge or redeem a card before retrying.
+//
+// 耗尽语义要求与余额主体相邻出现，避免把 "insufficient permissions for the
+// balance endpoint" 这类无关 403 误判为余额耗尽。
+// 这里刻意不认裸 quota：纯文本的 quota exceeded 仍由 isTemporaryRateLimitText
+// 归入 AccountRateLimited，保持与既有 429 / 400 usage limit 路径一致。
+func isBalanceExhaustionText(text string) bool {
+	combined := strings.ToLower(text)
+	if combined == "" {
+		return false
+	}
+	for _, signal := range []string{
+		"insufficient balance",
+		"insufficient_balance",
+		"insufficient credit",
+		"insufficient_credit",
+		"insufficient credits",
+		"balance is exhausted",
+		"balance has been exhausted",
+		"balance exhausted",
+		"balance is insufficient",
+		"balance is too low",
+		"balance too low",
+		"balance exceeded",
+		"balance depleted",
+		"no balance remaining",
+		"credit is exhausted",
+		"credit has been exhausted",
+		"credit exhausted",
+		"credit is insufficient",
+		"credit is too low",
+		"credit exceeded",
+		"credit depleted",
+		"no credits remaining",
+		"no credit remaining",
+	} {
+		if strings.Contains(combined, signal) {
+			return true
+		}
+	}
+	if !strings.Contains(combined, "balance") && !strings.Contains(combined, "credit") {
+		return false
+	}
+	return strings.Contains(combined, "recharge") ||
+		strings.Contains(combined, "redeem") ||
+		strings.Contains(combined, "top up") ||
+		strings.Contains(combined, "add funds")
 }
 
 func isTemporaryRateLimitText(parts ...string) bool {

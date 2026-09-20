@@ -386,6 +386,62 @@ func TestClassifyHTTPFailureResponseMatchesQuotaExhaustionCodesOnly(t *testing.T
 	}
 }
 
+// 上游余额耗尽：403 + 结构化 code。
+// Core 对 AccountQuotaExhausted 的语义是"可换号重试 + 直接把该账号 disabled"，
+// 因此这里必须落在 QuotaExhausted，而不是 AccountUnavailable（只降级不禁用）。
+func TestFailureOutcomeClassifiesInsufficientBalance403(t *testing.T) {
+	body := []byte(`{"code":"INSUFFICIENT_BALANCE","message":"Insufficient account balance"}`)
+	outcome := failureOutcome(http.StatusForbidden, body, nil, string(body), 0)
+
+	if outcome.Kind != sdk.OutcomeAccountQuotaExhausted {
+		t.Fatalf("kind = %v, want AccountQuotaExhausted", outcome.Kind)
+	}
+	if !outcome.Kind.ShouldFailover() {
+		t.Fatal("expected AccountQuotaExhausted to allow failover retry")
+	}
+}
+
+// 上游余额耗尽：402 + 纯文本（无结构化 code）。
+// 走 forward.go 的真实取值方式（gjson error.message 为空时截断原文）。
+func TestFailureOutcomeClassifiesBalanceExhaustedText402(t *testing.T) {
+	body := []byte("Account balance is exhausted. Please recharge or redeem a card before retrying.")
+	outcome := failureOutcome(http.StatusPaymentRequired, body, nil, truncate(string(body), 200), 0)
+
+	if outcome.Kind != sdk.OutcomeAccountQuotaExhausted {
+		t.Fatalf("kind = %v, want AccountQuotaExhausted", outcome.Kind)
+	}
+	if !outcome.Kind.ShouldFailover() {
+		t.Fatal("expected AccountQuotaExhausted to allow failover retry")
+	}
+	if !outcome.Kind.IsAccountFault() {
+		t.Fatal("expected AccountQuotaExhausted to be an account fault")
+	}
+}
+
+// 回归：提到 balance 但与余额耗尽无关的 403 不能被误判为耗尽（否则会误禁用账号）。
+func TestClassifyHTTPFailureResponseKeepsUnrelatedBalanceEndpoint403AsUnavailable(t *testing.T) {
+	const msg = "Insufficient permissions for the balance endpoint"
+	if got := classifyHTTPFailureResponse(http.StatusForbidden, []byte(msg), msg); got != sdk.OutcomeAccountUnavailable {
+		t.Fatalf("kind = %v, want AccountUnavailable", got)
+	}
+}
+
+// 回归：纯文本 quota exceeded 仍按限流处理，不升级为禁用。
+func TestClassifyHTTPFailureResponseKeepsPlainTextQuotaExceededAsRateLimited(t *testing.T) {
+	const msg = "quota exceeded, please slow down"
+	if got := classifyHTTPFailureResponse(http.StatusForbidden, []byte(msg), msg); got != sdk.OutcomeAccountRateLimited {
+		t.Fatalf("kind = %v, want AccountRateLimited", got)
+	}
+}
+
+// 回归：402 上既有的 workspace 失活判定优先于余额耗尽文本判定。
+func TestClassifyHTTPFailureResponseKeepsDeactivatedWorkspace402AsAccountDead(t *testing.T) {
+	body := []byte(`{"detail":{"code":"deactivated_workspace"}}`)
+	if got := classifyHTTPFailureResponse(http.StatusPaymentRequired, body, string(body)); got != sdk.OutcomeAccountDead {
+		t.Fatalf("kind = %v, want AccountDead", got)
+	}
+}
+
 func TestClassifyHTTPFailureTreatsDisabled400AsAccountDead(t *testing.T) {
 	got := classifyHTTPFailure(400, "Organization disabled due to policy violation")
 	if got != sdk.OutcomeAccountDead {
