@@ -70,12 +70,6 @@ var (
 		"gpt-5.5",
 		"AIRGATE_MODEL_DEFAULT_FALLBACK",
 	)
-	// sparkTargetModel 简单操作加速模型（Read/Grep/Glob 结果处理时自动路由）
-	// 空字符串表示禁用 Spark 路由
-	sparkTargetModel = resolveRoleTargetModel(
-		"gpt-5.3-codex-spark",
-		"AIRGATE_MODEL_SPARK",
-	)
 	// codexDefaultModel Codex CLI 透传路径的兜底模型。
 	// 当客户端请求体里 model 字段为空、null 或字面量 "None" 时使用这个值，
 	// 默认使用 gpt-5.5，也可通过 AIRGATE_CODEX_DEFAULT_MODEL 覆盖。

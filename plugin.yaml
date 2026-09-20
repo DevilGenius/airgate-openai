@@ -129,22 +129,6 @@ gateway:
       path: /responses
       description: Responses API WebSocket（无 /v1 前缀）
   models:
-    - id: gpt-5.3-codex-spark
-      name: GPT 5.3 Codex Spark
-      context_window: 128000
-      max_output_tokens: 128000
-      capabilities:
-        - chat
-        - reasoning
-      input_price: 1.75
-      output_price: 14
-      cached_input_price: 0.175
-      input_price_priority: 3.5
-      output_price_priority: 28
-      cached_input_price_priority: 0.35
-      input_price_flex: 0.875
-      output_price_flex: 7
-      cached_input_price_flex: 0.0875
     - id: gpt-5.5
       name: GPT 5.5
       context_window: 272000

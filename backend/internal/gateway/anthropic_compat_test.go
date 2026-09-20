@@ -545,6 +545,9 @@ func TestConvertAnthropicRequestToResponsesHonorsDisableParallelToolUse(t *testi
 }
 
 func TestForwardAnthropicMessageUsesDispatchPlanModel(t *testing.T) {
+	// gpt-5.3-codex-spark 退役后 Spark 路由常量已一并移除；
+	// 这里只验证 DispatchPlan 指定的模型被原样透传给上游。
+	const dispatchModel = "gpt-5.6-luna"
 	var models []string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -553,12 +556,12 @@ func TestForwardAnthropicMessageUsesDispatchPlanModel(t *testing.T) {
 		}
 		model := gjson.GetBytes(body, "model").String()
 		models = append(models, model)
-		if model != sparkTargetModel {
-			t.Fatalf("upstream model = %q, want Spark %q", model, sparkTargetModel)
+		if model != dispatchModel {
+			t.Fatalf("upstream model = %q, want dispatch plan model %q", model, dispatchModel)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = fmt.Fprint(w, `data: {"type":"response.output_text.delta","delta":"ok"}`+"\n")
-		_, _ = fmt.Fprint(w, `data: {"type":"response.completed","response":{"id":"resp_dispatch_plan","model":"`+sparkTargetModel+`","usage":{"input_tokens":3,"output_tokens":1}}}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.completed","response":{"id":"resp_dispatch_plan","model":"`+dispatchModel+`","usage":{"input_tokens":3,"output_tokens":1}}}`+"\n\n")
 	}))
 	defer ts.Close()
 
@@ -571,7 +574,7 @@ func TestForwardAnthropicMessageUsesDispatchPlanModel(t *testing.T) {
 		}},
 		Writer:       w,
 		Body:         body,
-		DispatchPlan: sdk.DispatchPlan{SchedulingModel: sparkTargetModel, WireModel: sparkTargetModel},
+		DispatchPlan: sdk.DispatchPlan{SchedulingModel: dispatchModel, WireModel: dispatchModel},
 	}
 	gateway := &OpenAIGateway{transportPool: NewTransportPool()}
 	outcome, err := gateway.forwardAnthropicMessage(context.Background(), req)

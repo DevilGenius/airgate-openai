@@ -134,7 +134,8 @@ var registry = map[string]Spec{
 	// ── Codex 5.x ──
 	// gpt-5.3-codex 已失效，保留历史配置但不再注册。
 	// "gpt-5.3-codex": std("GPT 5.3 Codex", 272000, 128000, 1.75, 0.175, 14.0),
-	"gpt-5.3-codex-spark": std("GPT 5.3 Codex Spark", 128000, 128000, 1.75, 0.175, 14.0),
+	// gpt-5.3-codex-spark 已失效，保留历史配置但不再注册。
+	// "gpt-5.3-codex-spark": std("GPT 5.3 Codex Spark", 128000, 128000, 1.75, 0.175, 14.0),
 
 	// ── GPT 基础系列 ──
 	// gpt-5.2 已失效，保留历史配置但不再注册。
@@ -178,7 +179,7 @@ var DefaultSpec = registry["gpt-5.5"]
 // Lookup 查询模型元数据。未命中注册表时按关键字推断到最接近的系列，仍无法匹配再落 DefaultSpec。
 //
 // 这避免了"客户端请求未知模型 → Spec 全 0 → cost=0 免费使用"的坑：只要能看出系列
-// （mini / codex / image / gpt-5 等），就按对应系列定价；彻底不认识的兜底到 GPT-5.5 标准价。
+// （mini / image / gpt-5 等），就按对应系列定价；彻底不认识的兜底到 GPT-5.5 标准价。
 func Lookup(modelID string) Spec {
 	id := strings.ToLower(CanonicalModel(modelID))
 	if spec, ok := registry[id]; ok {
@@ -195,10 +196,10 @@ func fallbackByKeyword(id string) (Spec, bool) {
 	if id == "" {
 		return Spec{}, false
 	}
-	// 顺序敏感：先细分（codex / mini / image）后粗分（gpt-5 / gpt-4）
+	// 顺序敏感：先细分（mini / image）后粗分（gpt-5 / gpt-4）
+	// 注：codex 分支随 gpt-5.3-codex-spark 退役一并移除——注册表已无 codex 模型，
+	// 保留该分支会返回零值 Spec（等价于免费），codex 请求改由下面的 gpt-5 分支兜底。
 	switch {
-	case strings.Contains(id, "codex"):
-		return registry["gpt-5.3-codex-spark"], true
 	case strings.Contains(id, "image"):
 		return registry["gpt-image-2"], true
 	case strings.Contains(id, "mini") || strings.Contains(id, "nano"):
