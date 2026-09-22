@@ -46,7 +46,7 @@ func TestConvertModelsIncludesGPT6FullPricing(t *testing.T) {
 	}{
 		{"gpt-6-astra", 1050000, 10, 1, 12.5, 50},
 		{"gpt-6-sol", 1050000, 2, 0.2, 2.5, 10},
-		{"gpt-6-luna", 372000, 0.1, 0.01, 0.125, 0.5},
+		{"gpt-6-luna", 1050000, 0.1, 0.01, 0.125, 0.5},
 	}
 	for _, tc := range cases {
 		item, ok := byID[tc.model]

@@ -59,7 +59,7 @@ func TestLookup_KnownModelUnchanged(t *testing.T) {
 		}{
 			{model: "gpt-6-astra", input: 10.0, cached: 1.0, cacheCreation: 12.5, output: 50.0, contextWindow: 1050000},
 			{model: "gpt-6-sol", input: 2.0, cached: 0.2, cacheCreation: 2.5, output: 10.0, contextWindow: 1050000},
-			{model: "gpt-6-luna", input: 0.1, cached: 0.01, cacheCreation: 0.125, output: 0.5, contextWindow: 372000},
+			{model: "gpt-6-luna", input: 0.1, cached: 0.01, cacheCreation: 0.125, output: 0.5, contextWindow: 1050000},
 		}
 		for _, tc := range cases {
 			spec := Lookup(tc.model)
