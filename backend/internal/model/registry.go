@@ -123,6 +123,8 @@ func withLongCtx(s Spec) Spec {
 var registry = map[string]Spec{
 	// ── GPT-6 ──
 	"gpt-6-astra": withLongCtx(withCacheCreationPrice(std("GPT-6-Astra", 1050000, 128000, 10.0, 1.0, 50.0), 12.5)),
+	"gpt-6-sol":   withLongCtx(withCacheCreationPrice(std("GPT-6-Sol", 1050000, 128000, 2.0, 0.2, 10.0), 2.5)),
+	"gpt-6-luna":  withLongCtx(withCacheCreationPrice(std("GPT-6-Luna", 1050000, 128000, 0.1, 0.01, 0.5), 0.125)),
 
 	"gpt-5.5": withPriorityMultiplier(std("GPT 5.5", 272000, 128000, 5.0, 0.5, 30.0), 2.5),
 

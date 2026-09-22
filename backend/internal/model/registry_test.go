@@ -48,6 +48,42 @@ func TestLookup_ByKeyword(t *testing.T) {
 
 // TestLookup_KnownModelUnchanged 已注册模型不受关键词兜底影响。
 func TestLookup_KnownModelUnchanged(t *testing.T) {
+	t.Run("gpt-6", func(t *testing.T) {
+		cases := []struct {
+			model         string
+			input         float64
+			cached        float64
+			cacheCreation float64
+			output        float64
+			contextWindow int
+		}{
+			{model: "gpt-6-astra", input: 10.0, cached: 1.0, cacheCreation: 12.5, output: 50.0, contextWindow: 1050000},
+			{model: "gpt-6-sol", input: 2.0, cached: 0.2, cacheCreation: 2.5, output: 10.0, contextWindow: 1050000},
+			{model: "gpt-6-luna", input: 0.1, cached: 0.01, cacheCreation: 0.125, output: 0.5, contextWindow: 372000},
+		}
+		for _, tc := range cases {
+			spec := Lookup(tc.model)
+			if spec.InputPrice != tc.input || spec.CachedPrice != tc.cached || spec.CacheCreationPrice != tc.cacheCreation || spec.OutputPrice != tc.output {
+				t.Errorf("%s 定价变化: In=%v Cached=%v CacheCreation=%v Out=%v", tc.model, spec.InputPrice, spec.CachedPrice, spec.CacheCreationPrice, spec.OutputPrice)
+			}
+			if spec.ContextWindow != tc.contextWindow {
+				t.Errorf("%s ContextWindow = %v, want %v", tc.model, spec.ContextWindow, tc.contextWindow)
+			}
+			if spec.MaxOutputTokens != 128000 {
+				t.Errorf("%s MaxOutputTokens = %v, want 128000", tc.model, spec.MaxOutputTokens)
+			}
+			if spec.LongContextThreshold != 272000 {
+				t.Errorf("%s LongContextThreshold = %v, want 272000", tc.model, spec.LongContextThreshold)
+			}
+			if spec.LongContextInputMultiplier != 2 || spec.LongContextCachedMultiplier != 2 || spec.LongContextCacheCreationMultiplier != 2 || spec.LongContextOutputMultiplier != 1.5 {
+				t.Errorf("%s 长上下文倍率变化: In=%v Cached=%v CacheCreation=%v Out=%v", tc.model, spec.LongContextInputMultiplier, spec.LongContextCachedMultiplier, spec.LongContextCacheCreationMultiplier, spec.LongContextOutputMultiplier)
+			}
+			if spec.CacheCreationPricePriority != tc.cacheCreation*2 || spec.CacheCreationPriceFlex != tc.cacheCreation*0.5 {
+				t.Errorf("%s 缓存写入档位价格变化: Priority=%v Flex=%v", tc.model, spec.CacheCreationPricePriority, spec.CacheCreationPriceFlex)
+			}
+		}
+	})
+
 	t.Run("gpt-6-astra", func(t *testing.T) {
 		spec := Lookup("gpt-6-astra")
 		if spec.InputPrice != 10.0 || spec.CachedPrice != 1.0 || spec.CacheCreationPrice != 12.5 || spec.OutputPrice != 50.0 {

@@ -62,6 +62,8 @@ func TestFillUsageCostLongContextPricing(t *testing.T) {
 		longOutput         float64
 	}{
 		{"gpt-6-astra", 10, 1, 12.5, 50, 20, 2, 25, 75},
+		{"gpt-6-sol", 2, 0.2, 2.5, 10, 4, 0.4, 5, 15},
+		{"gpt-6-luna", 0.1, 0.01, 0.125, 0.5, 0.2, 0.02, 0.25, 0.75},
 		{"gpt-5.6-sol", 5, 0.5, 6.25, 30, 10, 1, 12.5, 45},
 		{"gpt-5.6-terra", 2, 0.2, 2.5, 12, 4, 0.4, 5, 18},
 		{"gpt-5.6-luna", 1, 0.1, 1.25, 6, 2, 0.2, 2.5, 9},
