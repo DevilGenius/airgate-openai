@@ -147,6 +147,10 @@ func shouldUseImagesWebReverse(account *sdk.Account, model string) bool {
 // /v1/images/edits 目前不支持（网页端需要 attach image 的入口，协议结构不同，
 // 后续若要支持单独开一个 forwardImagesEditsViaWebReverse 入口）。
 func (g *OpenAIGateway) forwardImagesViaWebReverse(ctx context.Context, req *sdk.ForwardRequest) (sdk.ForwardOutcome, error) {
+	return forwardImageResponse(ctx, req, g.generateImagesViaWebReverse)
+}
+
+func (g *OpenAIGateway) generateImagesViaWebReverse(ctx context.Context, req *sdk.ForwardRequest) (sdk.ForwardOutcome, error) {
 	start := time.Now()
 	account := req.Account
 
@@ -155,13 +159,13 @@ func (g *OpenAIGateway) forwardImagesViaWebReverse(ctx context.Context, req *sdk
 
 	imgReq, err := parseImagesRequest(req.Body, req.Headers.Get("Content-Type"), isEdit)
 	if err != nil {
-		return webReverseImagesError(start, http.StatusBadRequest, req.Writer,
+		return webReverseImagesError(start, http.StatusBadRequest,
 			fmt.Sprintf("解析 Images 请求失败: %v", err))
 	}
 	// Web 逆向必然走 gpt-image-2（imagesWebReverseModel），统一启用严格 size 校验，
 	// 提前挡住上游 chatgpt.com 必拒的请求，避免浪费一次 PoW + 30s 轮询。
 	if err := validateImageSize(imgReq.Size, imagesWebReverseModel); err != nil {
-		return webReverseImagesError(start, http.StatusBadRequest, req.Writer, err.Error())
+		return webReverseImagesError(start, http.StatusBadRequest, err.Error())
 	}
 	g.logger.Debug("Images WebReverse request",
 		"path", reqPath,
@@ -180,13 +184,13 @@ func (g *OpenAIGateway) forwardImagesViaWebReverse(ctx context.Context, req *sdk
 	if isEdit && len(imgReq.Images) > 0 {
 		imageInputs, err = decodeImageRefs(ctx, imgReq.Images)
 		if err != nil {
-			return webReverseImagesError(start, http.StatusBadRequest, req.Writer,
+			return webReverseImagesError(start, http.StatusBadRequest,
 				fmt.Sprintf("解码参考图片失败: %v", err))
 		}
 	}
 
 	if !isOpenAIOAuthCredentials(account.Credentials) {
-		return webReverseImagesError(start, http.StatusUnauthorized, req.Writer, "OAuth/Agent Identity 账号缺少有效凭证")
+		return webReverseImagesError(start, http.StatusUnauthorized, "OAuth/Agent Identity 账号缺少有效凭证")
 	}
 	var proxyURL *url.URL
 	if account.ProxyURL != "" {
@@ -212,63 +216,32 @@ func (g *OpenAIGateway) forwardImagesViaWebReverse(ctx context.Context, req *sdk
 	client := imgen.NewClientWithAuth(authProvider, proxyURL)
 	defer client.Close()
 
-	var sseKA *ssePingKeepAlive
-	if req.Stream {
-		sseKA = startSSEPingKeepAlive(req.Writer)
-	}
-
 	prompt := applyWebReverseSizeHint(imgReq.Prompt, imgReq.Size)
 	imgRes, err := client.GenerateImage(ctx, prompt, imageInputs)
 	if err != nil {
 		var authErr *imgen.AuthorizationError
 		if errors.As(err, &authErr) {
-			if sseKA != nil {
-				sseKA.Stop()
-				g.logger.Warn("Images WebReverse 认证构建失败，已脱敏响应",
-					"model", imgReq.Model, "error", authErr)
-				writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
-			}
+
 			return webReverseAuthError(start, authErr.Err)
 		}
 		if imgRes == nil || len(imgRes.Images) == 0 {
 			if isImageSafetyRejectionText(err.Error()) {
 				upstreamReason := err.Error()
-				if sseKA != nil {
-					sseKA.Stop()
-					g.logger.Warn("Images WebReverse 安全拒绝，已归一化客户端响应",
-						"model", imgReq.Model, "error", err)
-					writeImageInvalidRequestSSEIfStarted(req.Writer, sseKA)
-				}
+
 				outcome := imageSafetyClientOutcome(upstreamReason)
 				outcome.Duration = time.Since(start)
 				outcome.Usage = newTokenUsage(imagesWebReverseModel, "", 0, 0, 0, 0, 0, 0)
 				return outcome, nil
 			}
 			if isInvalidImageInputText(err.Error()) {
-				if sseKA != nil {
-					sseKA.Stop()
-					g.logger.Warn("Images WebReverse 输入图片无效，已归一化客户端响应",
-						"model", imgReq.Model, "error", err)
-					writeImageClientErrorSSEIfStarted(
-						req.Writer,
-						sseKA,
-						http.StatusBadRequest,
-						invalidImageInputCode,
-						invalidImageInputMessage,
-					)
-				}
+
 				outcome := invalidImageInputClientOutcome(err.Error())
 				outcome.Duration = time.Since(start)
 				outcome.Usage = newTokenUsage(imagesWebReverseModel, "", 0, 0, 0, 0, 0, 0)
 				return outcome, nil
 			}
 			status := classifyWebReverseError(err)
-			if sseKA != nil {
-				sseKA.Stop()
-				g.logger.Warn("Images WebReverse 流式请求失败，已脱敏响应",
-					"model", imgReq.Model, "status_code", status, "error", err)
-				writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
-			}
+
 			outcome := failureOutcome(status, nil, nil, err.Error(), parseRetryDelay(err.Error()))
 			applyImageRateLimitPolicy(&outcome)
 			outcome.Duration = time.Since(start)
@@ -291,10 +264,6 @@ func (g *OpenAIGateway) forwardImagesViaWebReverse(ctx context.Context, req *sdk
 	)
 
 	respBody := buildWebReverseImagesResponse(imgRes, inputEstimate.TextTokens, inputEstimate.ImageTokens, 0)
-	if sseKA != nil {
-		sseKA.Stop()
-		writeImagesRESTSSE(req.Writer, respBody, isEdit)
-	}
 
 	elapsed := time.Since(start)
 	usage := newTokenUsage(imagesWebReverseModel, "", inputEstimate.Total(), 0, 0, 0, 0, elapsed.Milliseconds())
@@ -316,12 +285,10 @@ func (g *OpenAIGateway) forwardImagesViaWebReverse(ctx context.Context, req *sdk
 		Usage:    usage,
 		Duration: elapsed,
 	}
-	if sseKA != nil {
-		outcome.Upstream.Headers = http.Header{"Content-Type": []string{"text/event-stream"}}
-	} else {
-		outcome.Upstream.Body = respBody
-		outcome.Upstream.Headers = http.Header{"Content-Type": []string{"application/json"}}
-	}
+
+	outcome.Upstream.Body = respBody
+	outcome.Upstream.Headers = http.Header{"Content-Type": []string{"application/json"}}
+
 	return outcome, nil
 }
 
@@ -393,7 +360,7 @@ func buildWebReverseImagesResponse(res *imgen.Result, textInputTokens, imageInpu
 
 // webReverseImagesError 把 WebReverse 阶段的错误打包为 Outcome。
 // 400 类客户端错误直接透传；账号 / 上游类错误保留 err，让 core 继续脱敏和 failover。
-func webReverseImagesError(start time.Time, status int, _ http.ResponseWriter, msg string) (sdk.ForwardOutcome, error) {
+func webReverseImagesError(start time.Time, status int, msg string) (sdk.ForwardOutcome, error) {
 	body := buildImagesErrorBody(status, msg)
 	outcome := failureOutcome(status, body, http.Header{"Content-Type": []string{"application/json"}}, msg, parseRetryDelay(msg))
 	applyImageRateLimitPolicy(&outcome)

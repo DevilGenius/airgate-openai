@@ -13,7 +13,7 @@ import (
 )
 
 func TestWebReverseImagesErrorClientStatusReturnsNilErr(t *testing.T) {
-	outcome, err := webReverseImagesError(time.Now(), http.StatusBadRequest, nil, "图片尺寸不合法")
+	outcome, err := webReverseImagesError(time.Now(), http.StatusBadRequest, "图片尺寸不合法")
 	if err != nil {
 		t.Fatalf("expected nil err for client status, got %v", err)
 	}
@@ -29,7 +29,7 @@ func TestWebReverseImagesErrorClientStatusReturnsNilErr(t *testing.T) {
 }
 
 func TestWebReverseImagesErrorAccountStatusKeepsErr(t *testing.T) {
-	outcome, err := webReverseImagesError(time.Now(), http.StatusUnauthorized, nil, "OAuth 账号缺少 access_token")
+	outcome, err := webReverseImagesError(time.Now(), http.StatusUnauthorized, "OAuth 账号缺少 access_token")
 	if err == nil {
 		t.Fatalf("expected err for account status")
 	}

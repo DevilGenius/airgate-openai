@@ -181,6 +181,10 @@ streamLoop:
 					break
 				}
 				eventType := streamDiagnosticEventType(data)
+				if isResponsesTerminalEvent(eventType) && !gjson.ValidBytes(eventData) {
+					streamErr = fmt.Errorf("上游流式终止事件 JSON 不完整")
+					break streamLoop
+				}
 				timing.observe(eventType, eventData)
 				if id := responseIDFromSSEData(data); id != "" {
 					responseID = id
@@ -203,6 +207,10 @@ streamLoop:
 							writeSSEFailureError(w, streamErr)
 						}
 						break streamLoop
+					}
+					if eventType == "response.incomplete" {
+						completed = true // max_output_tokens is a normal terminal result.
+						diagnostics.completionEvent = eventType
 					}
 				case "response.completed", "response.done":
 					completed = true
@@ -233,20 +241,23 @@ streamLoop:
 		if suppressCurrentLine {
 			continue
 		}
-
-		if !ok || data == "" || data == "[DONE]" {
-			if err := writeSSELine(w, resp.StatusCode, forwardLine, &streamStarted); err != nil {
-				streamErr = fmt.Errorf("写入客户端 SSE 失败: %w", err)
-				break
-			}
-			continue
+		if completed {
+			// Complete the SSE event ourselves instead of waiting for EOF (or
+			// another upstream read). Its delimiter and usage reach Core together.
+			sdk.BeginStreamCompletion(w)
+			forwardLine += "\n"
 		}
+
 		if err := writeSSELine(w, resp.StatusCode, forwardLine, &streamStarted); err != nil {
 			streamErr = fmt.Errorf("写入客户端 SSE 失败: %w", err)
 			break
 		}
+		if completed {
+			_ = resp.Body.Close()
+			break
+		}
 	}
-	if err := scanner.Err(); err != nil && streamErr == nil {
+	if err := scanner.Err(); err != nil && streamErr == nil && !completed {
 		streamErr = fmt.Errorf("读取上游 SSE 失败: %w", err)
 		if errors.Is(err, bufio.ErrTooLong) {
 			budget.limit.trip()
@@ -495,6 +506,7 @@ func writeSanitizedSSEError(w http.ResponseWriter) {
 }
 
 func writeSSEFailureError(w http.ResponseWriter, err error) {
+	sdk.BeginStreamCompletion(w)
 	var failure *responsesFailureError
 	if errors.As(err, &failure) && (isInvalidImageInputFailure(failure) || failure.Kind == responsesFailureKindEncryptedContent) {
 		body := failure.openAIErrorBody(failure.Code)
@@ -899,12 +911,24 @@ func parseResponsesFailureEvent(eventType string, data []byte) error {
 		}
 	case "response.incomplete":
 		reason := gjson.GetBytes(data, "response.incomplete_details.reason").String()
+		if reason == "max_output_tokens" {
+			return nil
+		}
 		if reason == "" {
 			reason = "unknown"
 		}
 		return fmt.Errorf("上游返回不完整响应: %s", reason)
 	}
 	return nil
+}
+
+func isResponsesTerminalEvent(eventType string) bool {
+	switch eventType {
+	case "response.completed", "response.done", "response.incomplete", "response.failed", "error":
+		return true
+	default:
+		return false
+	}
 }
 
 // openaiUsage 非流式响应的 usage 解析结果

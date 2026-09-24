@@ -118,6 +118,8 @@ func (w *limitedResponseWriter) Flush() {
 	}
 }
 
+func (w *limitedResponseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 func readResponseBody(resp *http.Response) ([]byte, error) {
 	var limit *responseLimit
 	if resp.Request != nil {

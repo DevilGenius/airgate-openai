@@ -145,24 +145,6 @@ func normalizeImageUpstreamError(statusCode int, body []byte, headers http.Heade
 	}, imageSafetyInvalidRequestMessage, true
 }
 
-func writeImageInvalidRequestSSEIfStarted(w http.ResponseWriter, ka *ssePingKeepAlive) {
-	writeImageClientErrorSSEIfStarted(
-		w,
-		ka,
-		http.StatusBadRequest,
-		imageSafetyInvalidRequestCode,
-		imageSafetyInvalidRequestMessage,
-	)
-}
-
-func writeImageClientErrorSSEIfStarted(w http.ResponseWriter, ka *ssePingKeepAlive, statusCode int, code, message string) {
-	if ka == nil || !ka.Wrote() {
-		return
-	}
-	writeSSEData(w, buildImagesErrorBodyWithCode(statusCode, code, message))
-	writeSSEDone(w)
-}
-
 func invalidImageInputClientOutcome(upstreamReason string) sdk.ForwardOutcome {
 	body := buildImagesErrorBodyWithCode(http.StatusBadRequest, invalidImageInputCode, invalidImageInputMessage)
 	return sdk.ForwardOutcome{
@@ -179,22 +161,22 @@ func invalidImageInputClientOutcome(upstreamReason string) sdk.ForwardOutcome {
 	}
 }
 
-func writeImageOutcomeErrorSSEIfStarted(w http.ResponseWriter, ka *ssePingKeepAlive, outcome sdk.ForwardOutcome) {
+func writeImageOutcomeErrorSSE(w http.ResponseWriter, outcome sdk.ForwardOutcome) error {
+	sdk.BeginStreamCompletion(w)
+	var body []byte
 	if isNormalizedImageSafetyOutcome(outcome) {
-		writeImageInvalidRequestSSEIfStarted(w, ka)
-		return
+		body = buildImagesErrorBodyWithCode(http.StatusBadRequest, imageSafetyInvalidRequestCode, imageSafetyInvalidRequestMessage)
+	} else if isNormalizedInvalidImageInputOutcome(outcome) {
+		body = buildImagesErrorBodyWithCode(http.StatusBadRequest, invalidImageInputCode, invalidImageInputMessage)
+	} else if outcome.Upstream.StatusCode == http.StatusRequestEntityTooLarge {
+		return writeSSEError(w, imageTooLargeSSEErrorMessage)
+	} else {
+		return writeSSEError(w, sanitizedImageSSEErrorMessage)
 	}
-	if isNormalizedInvalidImageInputOutcome(outcome) {
-		writeImageClientErrorSSEIfStarted(
-			w,
-			ka,
-			http.StatusBadRequest,
-			invalidImageInputCode,
-			invalidImageInputMessage,
-		)
-		return
+	if err := writeSSEData(w, body); err != nil {
+		return err
 	}
-	writeSSEErrorIfStarted(w, ka, sanitizedImageSSEErrorMessage)
+	return writeSSEDone(w)
 }
 
 // maxEditInputImageBytes 图生图（/images/edits）参考图单张上限。
@@ -1882,6 +1864,12 @@ func (g *OpenAIGateway) forwardImagesViaResponsesTool(ctx context.Context, req *
 }
 
 func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context, req *sdk.ForwardRequest, targetURL string) (sdk.ForwardOutcome, error) {
+	return forwardImageResponse(ctx, req, func(ctx context.Context, work *sdk.ForwardRequest) (sdk.ForwardOutcome, error) {
+		return g.generateImagesViaResponsesTool(ctx, work, targetURL)
+	})
+}
+
+func (g *OpenAIGateway) generateImagesViaResponsesTool(ctx context.Context, req *sdk.ForwardRequest, targetURL string) (sdk.ForwardOutcome, error) {
 	start := time.Now()
 	account := req.Account
 
@@ -1924,7 +1912,6 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 		"size", imgReq.Size,
 		"n", imgReq.N,
 	)
-	var sseKA *ssePingKeepAlive
 	var handler *imagesSilentHandler
 	var wsResult WSResult
 	var inputEstimate imagesInputTokenEstimate
@@ -2075,10 +2062,6 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 			return outcome, fmt.Errorf("%s", reason)
 		}
 
-		if req.Stream && sseKA == nil {
-			sseKA = startSSEPingKeepAlive(req.Writer)
-		}
-
 		handler = &imagesSilentHandler{accountID: account.ID, timing: newResponseEventTiming(start)}
 		wsResult = ReceiveWSResponse(ctx, conn, handler)
 		if req.TraceFinalError && len(wsResult.FailedEventRaw) > 0 {
@@ -2190,12 +2173,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 		if failure, ok := normalizedImageSafetyFailureFromError(wsResult.Err); ok {
 			upstreamReason := wsResult.Err.Error()
 			body := buildImagesErrorBodyWithCode(failure.StatusCode, failure.Code, failure.Message)
-			if sseKA != nil {
-				sseKA.Stop()
-				g.logger.Warn("Images OAuth 上游安全拒绝，已归一化客户端响应",
-					"path", reqPath, "model", imgReq.Model, "reason", wsResult.Err)
-				writeImageInvalidRequestSSEIfStarted(req.Writer, sseKA)
-			}
+
 			return sdk.ForwardOutcome{
 				Kind:           sdk.OutcomeClientError,
 				SafetyRejected: true,
@@ -2213,26 +2191,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 			upstreamFailureMessage := failure.upstreamReason()
 			if failure.shouldReturnClientError() {
 				body := buildImagesErrorBodyWithCode(failure.StatusCode, failure.Code, failure.Message)
-				if sseKA != nil {
-					sseKA.Stop()
-					g.logger.Warn("Images OAuth 上游返回客户端错误，已脱敏响应",
-						"path", reqPath, "model", imgReq.Model, "status_code", failure.StatusCode, "code", failure.Code, "reason", upstreamFailureMessage)
-					if isInvalidImageInputFailure(failure) {
-						writeImageClientErrorSSEIfStarted(
-							req.Writer,
-							sseKA,
-							failure.StatusCode,
-							failure.Code,
-							failure.Message,
-						)
-					} else {
-						clientMsg := sanitizedImageSSEErrorMessage
-						if failure.StatusCode == http.StatusRequestEntityTooLarge {
-							clientMsg = imageTooLargeSSEErrorMessage
-						}
-						writeSSEErrorIfStarted(req.Writer, sseKA, clientMsg)
-					}
-				}
+
 				outcome := sdk.ForwardOutcome{
 					Kind:          sdk.OutcomeClientError,
 					FailoverScope: failure.failoverScopeForKind(sdk.OutcomeClientError),
@@ -2249,13 +2208,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 			// 用 *responsesFailureError 自带的分类驱动 Outcome：
 			// rate_limited 走 AccountRateLimited（带 RetryAfter），server 等仍归 UpstreamTransient。
 			// 之前这里直接拍成 UpstreamTransient/502，导致 Core 把账号丢进 softExclude 被反复重试。
-			if sseKA != nil {
-				sseKA.Stop()
-				g.logger.Warn("Images OAuth 流式请求失败，已脱敏响应",
-					"path", reqPath, "model", imgReq.Model, "status_code", failure.StatusCode,
-					"kind", failure.Kind, "retry_after", failure.RetryAfter, "error", wsResult.Err)
-				writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
-			}
+
 			errBody := failure.openAIErrorBody(failure.codeOrKind())
 			outcome := sdk.ForwardOutcome{
 				Kind:          failure.outcomeKind(),
@@ -2269,12 +2222,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 			return outcome, wsResult.Err
 		}
 		// 兜底：网络层 / 解析失败 等无 *responsesFailureError 的情况，保留 UpstreamTransient/502。
-		if sseKA != nil {
-			sseKA.Stop()
-			g.logger.Warn("Images OAuth 流式请求失败，已脱敏响应",
-				"path", reqPath, "model", imgReq.Model, "error", wsResult.Err)
-			writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
-		}
+
 		outcome := sdk.ForwardOutcome{
 			Kind:     sdk.OutcomeUpstreamTransient,
 			Upstream: sdk.UpstreamResponse{StatusCode: http.StatusBadGateway},
@@ -2292,17 +2240,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 		if failure := classifyImageGenCallFailures(wsResult.ImageGenCallFailures, reason); failure != nil && failure.shouldReturnClientError() {
 			imageSafetyRejected := isNormalizedImageSafetyFailure(failure)
 			body := buildImagesErrorBodyWithCode(failure.StatusCode, failure.Code, failure.Message)
-			if sseKA != nil {
-				sseKA.Stop()
-				g.logger.Warn("Images OAuth 图像工具返回客户端错误，已脱敏响应",
-					"path", reqPath, "model", imgReq.Model, "status_code", failure.StatusCode,
-					"code", failure.Code, "reason", reason)
-				if imageSafetyRejected {
-					writeImageInvalidRequestSSEIfStarted(req.Writer, sseKA)
-				} else {
-					writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
-				}
-			}
+
 			outcome := sdk.ForwardOutcome{
 				Kind:           sdk.OutcomeClientError,
 				SafetyRejected: imageSafetyRejected,
@@ -2317,12 +2255,7 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 			return outcome, nil
 		}
 		body := buildImagesErrorBody(http.StatusBadGateway, "上游未返回图像结果")
-		if sseKA != nil {
-			sseKA.Stop()
-			g.logger.Warn("Images OAuth 未返回图像结果，已脱敏响应",
-				"path", reqPath, "model", imgReq.Model, "reason", reason)
-			writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
-		}
+
 		outcome := sdk.ForwardOutcome{
 			Kind: sdk.OutcomeUpstreamTransient,
 			Upstream: sdk.UpstreamResponse{
@@ -2400,24 +2333,15 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 		RequestOutputFormat:     imgReq.OutputFormat,
 		RequestImageInputTokens: inputEstimate.ImageTokens,
 	})
-	if len(respBody) > sdk.MaxBufferedResponseBytes {
-		responseLimitFor(ctx).trip()
-		return sdk.ForwardOutcome{Usage: usage, Duration: elapsed}, errResponseTooLarge
-	}
 	outcome := sdk.ForwardOutcome{
 		Kind:     sdk.OutcomeSuccess,
 		Upstream: sdk.UpstreamResponse{StatusCode: http.StatusOK},
 		Usage:    usage,
 		Duration: elapsed,
 	}
-	if sseKA != nil {
-		sseKA.Stop()
-		writeImagesRESTSSE(req.Writer, respBody, isEdit)
-		outcome.Upstream.Headers = http.Header{"Content-Type": []string{"text/event-stream"}}
-	} else {
-		outcome.Upstream.Body = respBody
-		outcome.Upstream.Headers = http.Header{"Content-Type": []string{"application/json"}}
-	}
+
+	outcome.Upstream.Body = respBody
+	outcome.Upstream.Headers = http.Header{"Content-Type": []string{"application/json"}}
 
 	// 图片尺寸写入 Usage 标准字段和 metadata，后台费用明细可用它解释 1K/2K/4K 分档。
 	setUsageTokens(usage, inputTokens, imageOutputTokens, 0, 0, 0)
@@ -2895,26 +2819,19 @@ type imagesResponseOptions struct {
 	ForceBillingSize        bool
 }
 
-func handleImagesResponse(resp *http.Response, w http.ResponseWriter, sseKA *ssePingKeepAlive, start time.Time, fallbackModel string, options ...imagesResponseOptions) (sdk.ForwardOutcome, error) {
-	return handleImagesResponseWithLogger(nil, resp, w, sseKA, start, fallbackModel, options...)
+func handleImagesResponse(resp *http.Response, start time.Time, fallbackModel string, options ...imagesResponseOptions) (sdk.ForwardOutcome, error) {
+	return handleImagesResponseWithLogger(nil, resp, start, fallbackModel, options...)
 }
 
-func (g *OpenAIGateway) handleImagesResponse(resp *http.Response, w http.ResponseWriter, sseKA *ssePingKeepAlive, start time.Time, fallbackModel string, options ...imagesResponseOptions) (sdk.ForwardOutcome, error) {
-	return handleImagesResponseWithLogger(g.logger, resp, w, sseKA, start, fallbackModel, options...)
+func (g *OpenAIGateway) handleImagesResponse(resp *http.Response, start time.Time, fallbackModel string, options ...imagesResponseOptions) (sdk.ForwardOutcome, error) {
+	return handleImagesResponseWithLogger(g.logger, resp, start, fallbackModel, options...)
 }
 
-func handleImagesResponseWithLogger(logger *slog.Logger, resp *http.Response, w http.ResponseWriter, sseKA *ssePingKeepAlive, start time.Time, fallbackModel string, options ...imagesResponseOptions) (sdk.ForwardOutcome, error) {
+func handleImagesResponseWithLogger(logger *slog.Logger, resp *http.Response, start time.Time, fallbackModel string, options ...imagesResponseOptions) (sdk.ForwardOutcome, error) {
 	body, err := readResponseBody(resp)
 	if err != nil {
 		reason := fmt.Sprintf("读取 Images 响应失败: %v", err)
-		if sseKA != nil {
-			sseKA.Stop()
-			if logger != nil {
-				logger.Warn("Images APIKey 响应读取失败，已脱敏响应", "model", fallbackModel, "error", err)
-			}
-			writeSSEErrorIfStarted(w, sseKA, sanitizedImageSSEErrorMessage)
-		}
-		return transientOutcome(reason), fmt.Errorf("%s", reason)
+		return transientOutcome(reason), fmt.Errorf("读取 Images 响应失败: %w", err)
 	}
 
 	opts := imagesResponseOptions{}
@@ -2943,17 +2860,6 @@ func handleImagesResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 		headers.Set("Content-Length", strconv.Itoa(len(body)))
 	}
 
-	if sseKA != nil {
-		sseKA.Stop()
-		writeImagesRESTSSE(w, body, opts.IsEdit)
-	} else if w != nil {
-		if ct := resp.Header.Get("Content-Type"); ct != "" {
-			w.Header().Set("Content-Type", ct)
-		}
-		w.WriteHeader(resp.StatusCode)
-		_, _ = w.Write(body)
-	}
-
 	logger.Debug("images_native_result_returned",
 		"request_model", fallbackModel,
 		sdk.LogFieldModel, modelName,
@@ -2972,11 +2878,7 @@ func handleImagesResponseWithLogger(logger *slog.Logger, resp *http.Response, w 
 		Usage:    usage,
 		Duration: elapsed,
 	}
-	if sseKA != nil {
-		outcome.Upstream.Headers = http.Header{"Content-Type": []string{"text/event-stream"}}
-	} else {
-		outcome.Upstream.Body = body
-	}
+	outcome.Upstream.Body = body
 	return outcome, nil
 }
 

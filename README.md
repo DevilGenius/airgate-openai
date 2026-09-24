@@ -85,20 +85,6 @@ AirGate OpenAI 不是又一个"OpenAI 转发服务"，而是 [airgate-core](http
 
 ## 🚦 路由
 
-响应正文（包括 JSON/base64 编码、HTTP 解压后的内容）和流式聚合结果上限为 96 MiB。
-SDK 完整响应消息上限为 112 MiB，Core 与插件的 gRPC 单消息上限为 128 MiB；
-升级时需先更新 SDK 和 Core，再更新插件。Core 多模态接口的请求体上限为 96 MiB。
-本地开发通过 Go workspace 使用同目录的 SDK，独立发布前需先发布并更新 SDK 依赖版本。
-
-SSE 单事件和 WebSocket 单消息允许 112 MiB。流式响应接收、发送的累计流量分别限制为
-384 MiB，可通过插件配置 `stream_response_limit_mib` 调整（112–4096，未设置或无效时使用 384）。
-该流量预算包括重复快照和图片预览，不增加 96 MiB 的正文／聚合上限；同一输出项按 ID 或索引更新，
-旧图片预览被替换。输出前的控制事件暂存仍限制为 1 MiB，gRPC 输出继续按 256 KiB 分块。
-
-流量检查只做字节计数，不额外解析每个 delta 或维护输出项的影子状态。
-96 MiB 在实际缓存增长和最终正文序列化后检查；直通流不重建正文，使用单事件及累计流量上限。
-普通事件小于正文上限时，无需为大小检查再次扫描 JSON。
-
 由 `metadata.go` 声明、`Routes()` 返回，core 启动时自动注册到网关：
 
 | 方法 | 路径 | 说明 |
@@ -113,6 +99,11 @@ SSE 单事件和 WebSocket 单消息允许 112 MiB。流式响应接收、发送
 | WS   | `/v1/responses` | Responses API（WebSocket）|
 
 另外提供不带 `/v1` 前缀的别名路由（`POST /responses`、`POST /chat/completions`、`POST /messages`、`GET /models`、`WS /responses` 等），方便客户端直接填站点根地址。
+
+## 请求与响应限制
+
+- 多模态接口请求体、响应正文上限为 **96 MiB**，图片按 Base64 编码后的大小计入正文。
+- 流式累计接收和发送上限默认为各 **384 MiB**。可通过插件配置 `stream_response_limit_mib` 调整为 112–4096 MiB；未设置或无效时使用默认值。该配置不改变正文上限。
 
 ## 🔑 账号类型
 

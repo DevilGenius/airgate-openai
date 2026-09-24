@@ -448,6 +448,16 @@ func buildLocalModelsResponse() sdk.ForwardOutcome {
 // ──────────────────────────────────────────────────────
 
 func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardRequest, reqServiceTier string) (sdk.ForwardOutcome, error) {
+	_, path := resolveAPIKeyRoute(req)
+	if isImagesRequest(path) {
+		return forwardImageResponse(ctx, req, func(ctx context.Context, work *sdk.ForwardRequest) (sdk.ForwardOutcome, error) {
+			return g.forwardAPIKeyRequest(ctx, work, reqServiceTier)
+		})
+	}
+	return g.forwardAPIKeyRequest(ctx, req, reqServiceTier)
+}
+
+func (g *OpenAIGateway) forwardAPIKeyRequest(ctx context.Context, req *sdk.ForwardRequest, reqServiceTier string) (sdk.ForwardOutcome, error) {
 	start := time.Now()
 	account := req.Account
 	logger := sdk.LoggerFromContext(ctx)
@@ -489,7 +499,7 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 					Header:     http.Header{"Content-Type": []string{"application/json"}},
 					Body:       io.NopCloser(bytes.NewReader(finalBody)),
 				}
-				return g.handleImagesResponse(mockResp, req.Writer, nil, start, req.Model, imagesRespOpts)
+				return g.handleImagesResponse(mockResp, start, req.Model, imagesRespOpts)
 			}
 			if _, ok := normalizedImageSafetyFailureFromError(pollErr); ok {
 				upstreamReason := pollErr.Error()
@@ -519,11 +529,6 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 		}
 	}
 
-	var sseKA *ssePingKeepAlive
-	if isImagesRequest(reqPath) && req.Stream {
-		sseKA = startSSEPingKeepAlive(req.Writer)
-	}
-
 	attempts := []imageSizeAttempt{{}}
 	if isImageReq {
 		attempts = imageSizeAttemptsForRequest(imagesRespOpts.RequestSize)
@@ -549,10 +554,7 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 	for idx, attempt := range attempts {
 		attemptBody, attemptContentType, err := imagesRequestBodyForAttempt(baseBody, baseHeaders.Get("Content-Type"), isImageEdit, attempt)
 		if err != nil {
-			if sseKA != nil {
-				sseKA.Stop()
-				writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
-			}
+
 			errBody := jsonError(err.Error())
 			return sdk.ForwardOutcome{
 				Kind: sdk.OutcomeClientError,
@@ -575,7 +577,7 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 			attemptOpts = imagesResponseOptionsForAttempt(attemptOpts, attempt)
 		}
 		finalAttempt := idx == len(attempts)-1
-		outcome, err := g.forwardAPIKeyAttempt(ctx, req, reqMethod, reqPath, targetURL, attemptBody, attemptHeaders, attemptOpts, sseKA, start, reqServiceTier, finalAttempt, client)
+		outcome, err := g.forwardAPIKeyAttempt(ctx, req, reqMethod, reqPath, targetURL, attemptBody, attemptHeaders, attemptOpts, start, reqServiceTier, client)
 		if !isImageReq && err == nil {
 			delegatedRecoveryApplied := delegatedContinuationRecoveryApplied(attemptBody, baseHeaders)
 			if !recoveredPreviousResponse && outcomeIsPreviousResponseNotFound(outcome) {
@@ -587,7 +589,7 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 						sdk.LogFieldPath, reqPath,
 						"account_type", "apikey",
 					)
-					outcome, err = g.forwardAPIKeyAttempt(ctx, req, reqMethod, reqPath, targetURL, retryBody, attemptHeaders, attemptOpts, sseKA, start, reqServiceTier, true, client)
+					outcome, err = g.forwardAPIKeyAttempt(ctx, req, reqMethod, reqPath, targetURL, retryBody, attemptHeaders, attemptOpts, start, reqServiceTier, client)
 				}
 			} else if !recoveredFunctionCallOutput && outcomeIsFunctionCallOutputWithoutCall(outcome) {
 				if retryBody, ok := functionCallOutputRecoveryBody(attemptBody); ok {
@@ -598,7 +600,7 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 						sdk.LogFieldPath, reqPath,
 						"account_type", "apikey",
 					)
-					outcome, err = g.forwardAPIKeyAttempt(ctx, req, reqMethod, reqPath, targetURL, retryBody, attemptHeaders, attemptOpts, sseKA, start, reqServiceTier, true, client)
+					outcome, err = g.forwardAPIKeyAttempt(ctx, req, reqMethod, reqPath, targetURL, retryBody, attemptHeaders, attemptOpts, start, reqServiceTier, client)
 				}
 			} else if airgateContinuationRecoveryRequested(baseHeaders) && !delegatedRecoveryApplied && outcomeIsContextTooLarge(outcome) {
 				logger.Warn("delegated_full_replay_context_too_large_not_recoverable",
@@ -613,10 +615,7 @@ func (g *OpenAIGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardReque
 			return outcome, err
 		}
 		if !shouldRetryImageFallback(outcome, err) {
-			if sseKA != nil {
-				sseKA.Stop()
-				writeImageOutcomeErrorSSEIfStarted(req.Writer, sseKA, outcome)
-			}
+
 			return outcome, err
 		}
 		logger.Warn("images_4k_downgrade_retry",
@@ -640,10 +639,8 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 	body []byte,
 	headers http.Header,
 	imagesRespOpts imagesResponseOptions,
-	sseKA *ssePingKeepAlive,
 	start time.Time,
 	reqServiceTier string,
-	finalAttempt bool,
 	client *http.Client,
 ) (sdk.ForwardOutcome, error) {
 	account := req.Account
@@ -699,24 +696,13 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 					sdk.LogFieldDurationMs, dur.Milliseconds(),
 					sdk.LogFieldError, err,
 				)
-				if sseKA != nil && finalAttempt {
-					sseKA.Stop()
-					writeImageInvalidRequestSSEIfStarted(req.Writer, sseKA)
-				}
+
 				outcome := imageSafetyClientOutcome(upstreamReason)
 				outcome.Duration = dur
 				return outcome, nil
 			}
 		}
-		if sseKA != nil && finalAttempt {
-			sseKA.Stop()
-			logger.Warn("images_apikey_stream_failed_redacted",
-				sdk.LogFieldPath, reqPath,
-				sdk.LogFieldModel, req.Model,
-				sdk.LogFieldError, err,
-			)
-			writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
-		}
+
 		logger.Warn("upstream_request_failed",
 			sdk.LogFieldAccountID, account.ID,
 			sdk.LogFieldModel, req.Model,
@@ -759,28 +745,7 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 				errDetail,
 			)
 		}
-		if sseKA != nil && finalAttempt {
-			sseKA.Stop()
-			logger.Warn("images_apikey_upstream_error_redacted",
-				sdk.LogFieldPath, reqPath,
-				sdk.LogFieldModel, req.Model,
-				sdk.LogFieldStatus, resp.StatusCode,
-				sdk.LogFieldReason, errDetail,
-			)
-			if imageSafetyRejected {
-				writeImageInvalidRequestSSEIfStarted(req.Writer, sseKA)
-			} else if invalidImageInput {
-				writeImageClientErrorSSEIfStarted(
-					req.Writer,
-					sseKA,
-					http.StatusBadRequest,
-					invalidImageInputCode,
-					invalidImageInputMessage,
-				)
-			} else {
-				writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
-			}
-		}
+
 		logger.Warn("upstream_request_non_2xx",
 			sdk.LogFieldAccountID, account.ID,
 			sdk.LogFieldModel, req.Model,
@@ -826,10 +791,7 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 		_ = resp.Body.Close()
 		if readErr != nil {
 			reason := fmt.Sprintf("读取 Images 响应失败: %v", readErr)
-			if sseKA != nil && finalAttempt {
-				sseKA.Stop()
-				writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
-			}
+
 			return transientOutcome(reason), fmt.Errorf("%s", reason)
 		}
 
@@ -860,38 +822,23 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 					upstreamReason := pollErr.Error()
 					outcome := imageSafetyClientOutcome(upstreamReason)
 					outcome.Duration = time.Since(start)
-					if sseKA != nil && finalAttempt {
-						sseKA.Stop()
-						writeImageInvalidRequestSSEIfStarted(req.Writer, sseKA)
-					}
+
 					return outcome, nil
 				}
 				if isInvalidImageInputText(pollErr.Error()) {
 					outcome := invalidImageInputClientOutcome(pollErr.Error())
 					outcome.Duration = time.Since(start)
-					if sseKA != nil && finalAttempt {
-						sseKA.Stop()
-						writeImageClientErrorSSEIfStarted(
-							req.Writer,
-							sseKA,
-							http.StatusBadRequest,
-							invalidImageInputCode,
-							invalidImageInputMessage,
-						)
-					}
+
 					return outcome, nil
 				}
 				reason := fmt.Sprintf("异步图片任务轮询失败: %v", pollErr)
-				if sseKA != nil && finalAttempt {
-					sseKA.Stop()
-					writeSSEErrorIfStarted(req.Writer, sseKA, sanitizedImageSSEErrorMessage)
-				}
+
 				return transientOutcome(reason), fmt.Errorf("%s", reason)
 			}
 			body = finalBody
 		}
 		resp.Body = io.NopCloser(bytes.NewReader(body))
-		return g.handleImagesResponse(resp, req.Writer, sseKA, start, req.Model, imagesRespOpts)
+		return g.handleImagesResponse(resp, start, req.Model, imagesRespOpts)
 	}
 
 	if req.Stream && req.Writer != nil {
@@ -1540,6 +1487,9 @@ func (s *sseEventWriter) OnRawEvent(eventType string, data []byte) {
 		}
 		s.pendingEvents = nil
 		s.pendingBytes = 0
+	}
+	if terminalSuccessEvent || terminalErrorEvent {
+		sdk.BeginStreamCompletion(s.w)
 	}
 	written, err := fmt.Fprint(s.w, formatted)
 	if written > 0 {

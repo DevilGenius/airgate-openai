@@ -168,6 +168,9 @@ func (s *chatCompletionsStreamWriter) OnRawEvent(eventType string, data []byte) 
 	if len(chunks) == 0 {
 		return
 	}
+	if isResponsesTerminalEvent(eventType) {
+		sdk.BeginStreamCompletion(s.w)
+	}
 	if !s.writeChunks(chunks) {
 		return
 	}
@@ -180,6 +183,7 @@ func (s *chatCompletionsStreamWriter) writeClientError(failure *responsesFailure
 	if s == nil || s.w == nil || failure == nil || !s.wrote {
 		return
 	}
+	sdk.BeginStreamCompletion(s.w)
 	body := openAIErrorJSON("invalid_request_error", failure.Code, failure.Message)
 	if _, err := fmt.Fprintf(s.w, "data: %s\n\n", body); err != nil {
 		return

@@ -932,6 +932,10 @@ func translateResponsesSSEToAnthropicSSE(
 				compactIdleTimer.Reset(compactEventIdleTimeout)
 			}
 			eventType := streamDiagnosticEventType(data)
+			if isResponsesTerminalEvent(eventType) && !gjson.Valid(data) {
+				streamErr = fmt.Errorf("上游流式终止事件 JSON 不完整")
+				goto done
+			}
 			timing.observe(eventType, []byte(data))
 			if eventType != "response.output_text.delta" &&
 				eventType != "response.reasoning_summary_text.delta" &&
@@ -1022,6 +1026,9 @@ func translateResponsesSSEToAnthropicSSE(
 		}
 
 		output := ""
+		if terminalEventReceived || streamErr != nil {
+			sdk.BeginStreamCompletion(w)
+		}
 		if !skipCurrentOutput {
 			output = convertResponsesEventToAnthropic(line, originalRequest, state, model)
 		}
@@ -1053,16 +1060,17 @@ func translateResponsesSSEToAnthropicSSE(
 			}
 		}
 
-		// 错误事件已输出给客户端，现在终止流
-		if streamErr != nil {
+		// A terminal event includes usage; EOF is not part of completion.
+		if terminalEventReceived || streamErr != nil {
+			_ = resp.Body.Close()
 			goto done
 		}
 	}
 
 done:
-	if compactIdleTimedOut.Load() {
+	if compactIdleTimedOut.Load() && !terminalEventReceived {
 		streamErr = fmt.Errorf("compact summary upstream SSE idle timeout after %s", compactEventIdleTimeout)
-	} else if err := scanner.Err(); err != nil && streamErr == nil {
+	} else if err := scanner.Err(); err != nil && streamErr == nil && !terminalEventReceived {
 		streamErr = fmt.Errorf("读取上游 SSE 失败: %w", err)
 		if errors.Is(err, bufio.ErrTooLong) {
 			streamErr = budget.exceeded()

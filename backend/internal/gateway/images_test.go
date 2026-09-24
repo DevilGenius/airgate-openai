@@ -227,9 +227,7 @@ func TestHandleImagesResponse_TokenAttribution(t *testing.T) {
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body:       ioNopCloserFromString(body),
 	}
-	w := httptest.NewRecorder()
-
-	outcome, err := handleImagesResponse(resp, w, nil, time.Now(), "gpt-image-1.5", imagesResponseOptions{BillingSize: "2048x2048"})
+	outcome, err := handleImagesResponse(resp, time.Now(), "gpt-image-1.5", imagesResponseOptions{BillingSize: "2048x2048"})
 	if err != nil {
 		t.Fatalf("handleImagesResponse returned err: %v", err)
 	}
@@ -266,10 +264,10 @@ func TestHandleImagesResponse_TokenAttribution(t *testing.T) {
 		t.Errorf("image unit_price = %q, want %q", got, want)
 	}
 
-	if w.Code != http.StatusOK {
-		t.Errorf("writer status = %d, want 200", w.Code)
+	if outcome.Upstream.StatusCode != http.StatusOK {
+		t.Errorf("response status = %d, want 200", outcome.Upstream.StatusCode)
 	}
-	gotBody, _ := io.ReadAll(w.Result().Body)
+	gotBody := outcome.Upstream.Body
 	if got := gjson.GetBytes(gotBody, "quality").String(); got != "medium" {
 		t.Errorf("response quality = %q, want medium", got)
 	}
@@ -290,28 +288,11 @@ func TestWriteSSEPingUsesOpenAIStyleEvent(t *testing.T) {
 	}
 }
 
-func TestStartSSEPingKeepAliveDoesNotCommitImmediately(t *testing.T) {
-	w := httptest.NewRecorder()
-	sseKA := startSSEPingKeepAlive(w)
-	sseKA.Stop()
-
-	if sseKA.Wrote() {
-		t.Fatalf("首个 ping 前不应标记流已写入")
-	}
-	if body := w.Body.String(); body != "" {
-		t.Fatalf("body = %q，首个 ping 前应为空", body)
-	}
-	if got := w.Header().Get("Content-Type"); got != "text/event-stream" {
-		t.Fatalf("Content-Type = %q, want text/event-stream", got)
-	}
-}
-
 func TestWriteImageOutcomeErrorSSEUsesNormalizedSafetyError(t *testing.T) {
 	w := httptest.NewRecorder()
-	sseKA := &ssePingKeepAlive{w: w}
-	sseKA.wrote.Store(true)
-
-	writeImageOutcomeErrorSSEIfStarted(w, sseKA, imageSafetyClientOutcome())
+	if err := writeImageOutcomeErrorSSE(w, imageSafetyClientOutcome()); err != nil {
+		t.Fatal(err)
+	}
 
 	body := w.Body.String()
 	if !strings.Contains(body, `"code":"`+imageSafetyInvalidRequestCode+`"`) {
@@ -330,8 +311,6 @@ func TestWriteImageOutcomeErrorSSEUsesNormalizedSafetyError(t *testing.T) {
 
 func TestWriteImageOutcomeErrorSSEUsesInvalidImageInputError(t *testing.T) {
 	w := httptest.NewRecorder()
-	sseKA := &ssePingKeepAlive{w: w}
-	sseKA.wrote.Store(true)
 	body := buildImagesErrorBodyWithCode(http.StatusBadRequest, invalidImageInputCode, invalidImageInputMessage)
 	outcome := sdk.ForwardOutcome{
 		Kind: sdk.OutcomeClientError,
@@ -344,7 +323,9 @@ func TestWriteImageOutcomeErrorSSEUsesInvalidImageInputError(t *testing.T) {
 		t.Fatal("invalid image input should not use image size fallback")
 	}
 
-	writeImageOutcomeErrorSSEIfStarted(w, sseKA, outcome)
+	if err := writeImageOutcomeErrorSSE(w, outcome); err != nil {
+		t.Fatal(err)
+	}
 
 	got := w.Body.String()
 	if !strings.Contains(got, `"code":"`+invalidImageInputCode+`"`) || !strings.Contains(got, invalidImageInputMessage) {
@@ -363,9 +344,9 @@ func TestHandleImagesResponse_StreamReturnsOfficialCompletedEvent(t *testing.T) 
 		Body:       ioNopCloserFromString(body),
 	}
 	w := httptest.NewRecorder()
-	sseKA := startSSEPingKeepAlive(w)
-
-	outcome, err := handleImagesResponse(resp, w, sseKA, time.Now(), "gpt-image-1")
+	outcome, err := forwardImageResponse(t.Context(), &sdk.ForwardRequest{Stream: true, Writer: w, Headers: http.Header{"X-Forwarded-Path": {"/v1/images/generations"}}}, func(context.Context, *sdk.ForwardRequest) (sdk.ForwardOutcome, error) {
+		return handleImagesResponse(resp, time.Now(), "gpt-image-1")
+	})
 	if err != nil {
 		t.Fatalf("handleImagesResponse returned err: %v", err)
 	}
@@ -419,9 +400,9 @@ func TestHandleImagesResponse_StreamReturnsOfficialEditCompletedEvent(t *testing
 		Body:       ioNopCloserFromString(body),
 	}
 	w := httptest.NewRecorder()
-	sseKA := startSSEPingKeepAlive(w)
-
-	outcome, err := handleImagesResponse(resp, w, sseKA, time.Now(), "gpt-image-2", imagesResponseOptions{IsEdit: true})
+	outcome, err := forwardImageResponse(t.Context(), &sdk.ForwardRequest{Stream: true, Writer: w, Headers: http.Header{"X-Forwarded-Path": {"/v1/images/edits"}}}, func(context.Context, *sdk.ForwardRequest) (sdk.ForwardOutcome, error) {
+		return handleImagesResponse(resp, time.Now(), "gpt-image-2", imagesResponseOptions{IsEdit: true})
+	})
 	if err != nil {
 		t.Fatalf("handleImagesResponse returned err: %v", err)
 	}
@@ -452,7 +433,7 @@ func TestHandleImagesResponse_APIKeyBillingUsesRequestSize(t *testing.T) {
 		Body:       ioNopCloserFromString(body),
 	}
 
-	outcome, err := handleImagesResponse(resp, nil, nil, time.Now(), "gpt-image-1.5", imagesResponseOptions{BillingSize: "3840x2160"})
+	outcome, err := handleImagesResponse(resp, time.Now(), "gpt-image-1.5", imagesResponseOptions{BillingSize: "3840x2160"})
 	if err != nil {
 		t.Fatalf("handleImagesResponse returned err: %v", err)
 	}
@@ -473,7 +454,7 @@ func TestHandleImagesResponse_NonStreamReturnsBodyWithoutWriter(t *testing.T) {
 		Body:       ioNopCloserFromString(body),
 	}
 
-	outcome, err := handleImagesResponse(resp, nil, nil, time.Now(), "gpt-image-1")
+	outcome, err := handleImagesResponse(resp, time.Now(), "gpt-image-1")
 	if err != nil {
 		t.Fatalf("handleImagesResponse returned err: %v", err)
 	}
@@ -502,7 +483,7 @@ func TestHandleImagesResponse_RequestQualityOverridesResponseEcho(t *testing.T) 
 		Body: ioNopCloserFromString(body),
 	}
 
-	outcome, err := handleImagesResponse(resp, nil, nil, time.Now(), "gpt-image-2", imagesResponseOptions{RequestQuality: "high"})
+	outcome, err := handleImagesResponse(resp, time.Now(), "gpt-image-2", imagesResponseOptions{RequestQuality: "high"})
 	if err != nil {
 		t.Fatalf("handleImagesResponse returned err: %v", err)
 	}
@@ -537,7 +518,7 @@ func TestHandleImagesResponse_DefaultQualityEchoesMedium(t *testing.T) {
 		Body:       ioNopCloserFromString(body),
 	}
 
-	outcome, err := handleImagesResponse(resp, nil, nil, time.Now(), "gpt-image-2")
+	outcome, err := handleImagesResponse(resp, time.Now(), "gpt-image-2")
 	if err != nil {
 		t.Fatalf("handleImagesResponse returned err: %v", err)
 	}
@@ -557,7 +538,7 @@ func TestHandleImagesResponse_AutoQualityEchoesMedium(t *testing.T) {
 		Body:       ioNopCloserFromString(body),
 	}
 
-	outcome, err := handleImagesResponse(resp, nil, nil, time.Now(), "gpt-image-2", imagesResponseOptions{RequestQuality: "auto"})
+	outcome, err := handleImagesResponse(resp, time.Now(), "gpt-image-2", imagesResponseOptions{RequestQuality: "auto"})
 	if err != nil {
 		t.Fatalf("handleImagesResponse returned err: %v", err)
 	}
@@ -577,7 +558,7 @@ func TestHandleImagesResponse_GPTImageAddsCalculatedOutputTokens(t *testing.T) {
 		Body:       ioNopCloserFromString(body),
 	}
 
-	outcome, err := handleImagesResponse(resp, nil, nil, time.Now(), "gpt-image-2", imagesResponseOptions{
+	outcome, err := handleImagesResponse(resp, time.Now(), "gpt-image-2", imagesResponseOptions{
 		BillingSize:    "3840x2160",
 		RequestQuality: "low",
 	})
@@ -620,7 +601,7 @@ func TestHandleImagesResponse_GPTImageAddsCalculatedInputImageTokens(t *testing.
 		Body:       ioNopCloserFromString(body),
 	}
 
-	outcome, err := handleImagesResponse(resp, nil, nil, time.Now(), "gpt-image-2", imagesResponseOptions{
+	outcome, err := handleImagesResponse(resp, time.Now(), "gpt-image-2", imagesResponseOptions{
 		RequestImageInputTokens: 7024,
 	})
 	if err != nil {
@@ -663,7 +644,7 @@ func TestHandleImagesResponse_FallbackModelWhenBodyLacksModel(t *testing.T) {
 		Body:       ioNopCloserFromString(body),
 	}
 
-	outcome, err := handleImagesResponse(resp, nil, nil, time.Now(), "gpt-image-1")
+	outcome, err := handleImagesResponse(resp, time.Now(), "gpt-image-1")
 	if err != nil {
 		t.Fatalf("handleImagesResponse returned err: %v", err)
 	}
