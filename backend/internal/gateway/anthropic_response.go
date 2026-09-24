@@ -56,7 +56,6 @@ type anthropicToolBlock struct {
 	BlockIndex  int
 	CallID      string
 	Name        string
-	Args        string
 	HadDelta    bool
 	Started     bool
 }
@@ -243,7 +242,6 @@ func convertResponsesEventToAnthropic(rawLine []byte, originalRequest []byte, st
 		if block == nil {
 			return ""
 		}
-		block.Args += delta
 		block.HadDelta = true
 		return startAnthropicToolBlock(state, block) + emitToolArgumentsDelta(block.BlockIndex, delta)
 
@@ -253,9 +251,6 @@ func convertResponsesEventToAnthropic(rawLine []byte, originalRequest []byte, st
 			return ""
 		}
 		args := root.Get("arguments").String()
-		if args == "" {
-			args = block.Args
-		}
 		if args != "" && !block.HadDelta {
 			block.HadDelta = true
 			return startAnthropicToolBlock(state, block) + emitToolArgumentsDelta(block.BlockIndex, args)
@@ -894,6 +889,7 @@ func translateResponsesSSEToAnthropicSSE(
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), upstreamSSEMaxLineBytes)
+	budget := streamResponseBudget{limit: responseLimitFor(ctx)}
 
 	var streamErr error
 	timing := newResponseEventTiming(start)
@@ -913,12 +909,25 @@ func translateResponsesSSEToAnthropicSSE(
 		}
 
 		line := scanner.Bytes()
+		data, hasData := extractSSEData(string(line))
+		if err := budget.take(len(data), len(line)+1); err != nil {
+			streamErr = err
+			_ = resp.Body.Close()
+			goto done
+		}
 		if len(line) == 0 {
 			continue
 		}
 
 		// 记录结构性事件
-		if data, ok := extractSSEData(string(line)); ok && data != "" && data != "[DONE]" {
+		if hasData && data != "" && data != "[DONE]" {
+			if len(data) > sdk.MaxBufferedResponseBytes {
+				if err := checkResponseEvent([]byte(data)); err != nil {
+					streamErr = budget.exceeded()
+					_ = resp.Body.Close()
+					goto done
+				}
+			}
 			if compactIdleTimer != nil && !compactIdleTimedOut.Load() {
 				compactIdleTimer.Reset(compactEventIdleTimeout)
 			}
@@ -1017,6 +1026,11 @@ func translateResponsesSSEToAnthropicSSE(
 			output = convertResponsesEventToAnthropic(line, originalRequest, state, model)
 		}
 		if output != "" {
+			if len(output) > maxResponseEventBytes {
+				streamErr = budget.exceeded()
+				_ = resp.Body.Close()
+				goto done
+			}
 			// 大事件诊断：翻译后的单条输出超阈值时打印源 type 与长度。
 			if len(output) >= largeSSEEventThreshold {
 				srcType := ""
@@ -1029,7 +1043,11 @@ func translateResponsesSSEToAnthropicSSE(
 				)
 			}
 			outputWritten = true
-			_, _ = fmt.Fprint(w, output)
+			if _, err := fmt.Fprint(w, output); err != nil {
+				streamErr = err
+				_ = resp.Body.Close()
+				goto done
+			}
 			if flusher != nil {
 				flusher.Flush()
 			}
@@ -1046,6 +1064,10 @@ done:
 		streamErr = fmt.Errorf("compact summary upstream SSE idle timeout after %s", compactEventIdleTimeout)
 	} else if err := scanner.Err(); err != nil && streamErr == nil {
 		streamErr = fmt.Errorf("读取上游 SSE 失败: %w", err)
+		if errors.Is(err, bufio.ErrTooLong) {
+			streamErr = budget.exceeded()
+			_ = resp.Body.Close()
+		}
 	}
 	if streamErr == nil && !terminalEventReceived {
 		streamErr = fmt.Errorf("上游 SSE 在完成事件前结束")

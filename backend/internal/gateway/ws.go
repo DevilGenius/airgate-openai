@@ -15,6 +15,8 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/tidwall/gjson"
+
+	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
 const (
@@ -29,7 +31,7 @@ const (
 	webSocketWriteTimeout        = 30 * time.Second
 	webSocketControlWriteTimeout = 10 * time.Second
 	webSocketKeepAliveInterval   = 30 * time.Second
-	webSocketReadLimitBytes      = 16 << 20
+	webSocketReadLimitBytes      = maxResponseEventBytes
 )
 
 // WSConfig WebSocket 连接配置
@@ -83,6 +85,7 @@ type WSResult struct {
 	LastEventType     string
 
 	imageGenCallIndex map[string]int
+	retainedBytes     int // text, reasoning, tool payloads and current image results
 }
 
 // ImageGenCall 对应 Responses API 输出项中 type="image_generation_call" 的一条记录。
@@ -366,7 +369,7 @@ func receiveWSResponse(ctx context.Context, conn *websocket.Conn, handler WSEven
 		}
 
 		var ev map[string]any
-		if err := budget.take(gjson.GetBytes(msg, "type").String(), msg); err != nil {
+		if err := budget.take(len(msg), len(msg)); err != nil {
 			result.Err = err
 			_ = conn.Close()
 			break
@@ -388,6 +391,12 @@ func receiveWSResponse(ctx context.Context, conn *websocket.Conn, handler WSEven
 		}
 
 		msg = outputItems.apply(eventType, msg)
+		if outputItems.err != nil {
+			result.Err = outputItems.err
+			budget.limit.trip()
+			_ = conn.Close()
+			break
+		}
 
 		// 在转发终止事件前补齐 output，供流式快照和非流式 JSON 共用。
 		if handler != nil {
@@ -410,7 +419,9 @@ func receiveWSResponse(ctx context.Context, conn *websocket.Conn, handler WSEven
 
 		case "response.output_text.delta":
 			if delta, ok := ev["delta"].(string); ok {
-				textBuilder.WriteString(delta)
+				if !result.appendText(&textBuilder, delta) {
+					break
+				}
 				if handler != nil {
 					handler.OnTextDelta(delta)
 				}
@@ -418,20 +429,22 @@ func receiveWSResponse(ctx context.Context, conn *websocket.Conn, handler WSEven
 
 		case "response.reasoning_summary_text.delta":
 			if delta, ok := ev["delta"].(string); ok {
-				reasoningBuilder.WriteString(delta)
+				if !result.appendText(&reasoningBuilder, delta) {
+					break
+				}
 				if handler != nil {
 					handler.OnReasoningDelta(delta)
 				}
 			}
 
 		case "response.output_item.done":
-			if item, ok := ev["item"].(map[string]any); ok {
+			if item, ok := responseOutputItem(ev); ok {
 				appendToolUseBlock(&result, item)
 				collectImageGenCall(&result, item)
 			}
 
 		case "response.output_item.added":
-			if item, ok := ev["item"].(map[string]any); ok {
+			if item, ok := responseOutputItem(ev); ok {
 				collectImageGenCallMetadata(&result, item)
 			}
 
@@ -510,8 +523,15 @@ func receiveWSResponse(ctx context.Context, conn *websocket.Conn, handler WSEven
 				}
 			}
 		}
+		if result.Err != nil {
+			break
+		}
 	}
 
+	if errors.Is(result.Err, errResponseTooLarge) {
+		budget.limit.trip()
+		_ = conn.Close()
+	}
 	finalizeWSResult(&result, &textBuilder, &reasoningBuilder, start)
 	return result
 }
@@ -562,12 +582,71 @@ func mergeResponseMetadata(result *WSResult, response map[string]any) {
 	}
 }
 
+// output_index belongs to the event envelope. Carry it into the collected item
+// so an ID-less image preview can be replaced by the identified final result.
+func responseOutputItem(event map[string]any) (map[string]any, bool) {
+	item, ok := event["item"].(map[string]any)
+	if ok && item != nil {
+		if index, exists := event["output_index"]; exists {
+			item["output_index"] = index
+		}
+	}
+	return item, ok
+}
+
+// Reserve only when a buffer actually grows. Replacing an image or tool result
+// releases its previous payload without replaying protocol events in a second map.
+func (r *WSResult) reserveBytes(delta int) bool {
+	if r.Err != nil {
+		return false
+	}
+	if delta > sdk.MaxBufferedResponseBytes-r.retainedBytes {
+		r.Err = errResponseTooLarge
+		return false
+	}
+	r.retainedBytes += delta
+	return true
+}
+
+func (r *WSResult) appendText(dst *strings.Builder, text string) bool {
+	if !r.reserveBytes(len(text)) {
+		return false
+	}
+	dst.WriteString(text)
+	return true
+}
+
+func (b ToolUseBlock) payloadBytes() int {
+	size := len(b.Type) + len(b.ID) + len(b.Input)
+	if b.Name != nil {
+		size += len(*b.Name)
+	}
+	return size
+}
+
+func (c ImageGenCall) payloadBytes() int {
+	return len(c.ID) + len(c.Status) + len(c.Result) + len(c.Size) + len(c.Quality) +
+		len(c.OutputFormat) + len(c.Background) + len(c.RevisedPrompt) + len(c.Model)
+}
+
 func appendToolUseBlock(result *WSResult, item map[string]any) {
 	block := buildToolUseBlock(item)
 	if block == nil {
 		return
 	}
-	result.ToolUses = append(result.ToolUses, *block)
+	if block.ID != "" {
+		for index := range result.ToolUses {
+			if result.ToolUses[index].ID == block.ID {
+				if result.reserveBytes(block.payloadBytes() - result.ToolUses[index].payloadBytes()) {
+					result.ToolUses[index] = *block
+				}
+				return
+			}
+		}
+	}
+	if result.reserveBytes(block.payloadBytes()) {
+		result.ToolUses = append(result.ToolUses, *block)
+	}
 }
 
 func buildToolUseBlock(item map[string]any) *ToolUseBlock {
@@ -759,7 +838,7 @@ func collectImageGenCallPartial(result *WSResult, ev map[string]any) {
 		OutputIndex:    jsonInt(ev["output_index"]),
 		HasOutputIndex: hasJSONKey(ev, "output_index"),
 		Status:         firstNonEmptyString(jsonString(ev["status"]), "in_progress"),
-		Result:         firstNonEmptyString(jsonString(ev["partial_image"]), jsonString(ev["result"])),
+		Result:         firstNonEmptyString(jsonString(ev["partial_image"]), jsonString(ev["partial_image_b64"]), jsonString(ev["result"])),
 		Size:           jsonString(ev["size"]),
 		Quality:        jsonString(ev["quality"]),
 		OutputFormat:   jsonString(ev["output_format"]),
@@ -781,8 +860,16 @@ func upsertImageGenCall(result *WSResult, call ImageGenCall) {
 		result.imageGenCallIndex = map[string]int{}
 	}
 	if idx, ok := findImageGenCallIndex(result, call); ok {
-		mergeImageGenCall(&result.ImageGenCalls[idx], call)
+		merged := result.ImageGenCalls[idx]
+		mergeImageGenCall(&merged, call)
+		if !result.reserveBytes(merged.payloadBytes() - result.ImageGenCalls[idx].payloadBytes()) {
+			return
+		}
+		result.ImageGenCalls[idx] = merged
 		registerImageGenCallKeys(result, result.ImageGenCalls[idx], idx)
+		return
+	}
+	if !result.reserveBytes(call.payloadBytes()) {
 		return
 	}
 	result.ImageGenCalls = append(result.ImageGenCalls, call)

@@ -92,6 +92,7 @@ type chatCompletionsStreamWriter struct {
 
 	timing responseEventTiming
 	wrote  bool
+	err    error
 
 	accountID  int64
 	sessionKey string
@@ -124,6 +125,7 @@ func newChatCompletionsStreamWriter(
 }
 
 func (s *chatCompletionsStreamWriter) OnTextDelta(string)      {}
+func (s *chatCompletionsStreamWriter) Err() error              { return s.err }
 func (s *chatCompletionsStreamWriter) OnReasoningDelta(string) {}
 
 func (s *chatCompletionsStreamWriter) OnRateLimits(usedPercent float64) {
@@ -136,7 +138,7 @@ func (s *chatCompletionsStreamWriter) OnRateLimits(usedPercent float64) {
 }
 
 func (s *chatCompletionsStreamWriter) OnRawEvent(eventType string, data []byte) {
-	if s.w == nil || eventType == "" {
+	if s.w == nil || eventType == "" || s.err != nil {
 		return
 	}
 	s.timing.observe(eventType, data)
@@ -198,7 +200,12 @@ func (s *chatCompletionsStreamWriter) writeChunks(chunks [][]byte) bool {
 		s.sentRole = true
 	}
 	for _, chunk := range chunks {
+		if len(chunk) > maxResponseEventBytes {
+			s.err = errResponseTooLarge
+			return false
+		}
 		if _, err := fmt.Fprintf(s.w, "data: %s\n\n", chunk); err != nil {
+			s.err = err
 			return false
 		}
 	}

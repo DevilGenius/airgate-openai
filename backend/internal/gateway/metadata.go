@@ -40,6 +40,13 @@ func BuildPluginInfo() sdk.PluginInfo {
 		Type:        sdk.PluginTypeGateway,
 		ConfigSchema: []sdk.ConfigField{
 			{
+				Key:         streamResponseLimitConfigKey,
+				Label:       "流式响应累计上限（MiB）",
+				Type:        "int",
+				Default:     "384",
+				Description: "每次响应的接收和发送流量分别计量，包含图片预览和重复快照。范围 112–4096，未设置或无效时使用 384；最终正文上限仍为 96 MiB。",
+			},
+			{
 				Key:   accountPoolAdjustmentPlansConfigKey,
 				Label: "号池调整",
 				Type:  "multiselect",

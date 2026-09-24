@@ -5,10 +5,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 	"sync/atomic"
 
-	"github.com/tidwall/gjson"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -17,16 +15,26 @@ import (
 
 var errResponseTooLarge = errors.New("上游响应超过大小限制")
 
+const (
+	maxResponseEventBytes        = sdk.MaxResponseMessageBytes
+	defaultStreamResponseBytes   = 384 << 20
+	maxPendingControlBytes       = 1 << 20
+	streamResponseLimitConfigKey = "stream_response_limit_mib"
+)
+
 type responseLimitKey struct{}
 type responseLimit struct {
-	exceeded atomic.Bool
-	cancel   context.CancelCauseFunc
+	exceeded    atomic.Bool
+	cancel      context.CancelCauseFunc
+	streamBytes int
 }
 
 func (l *responseLimit) trip() {
 	if l != nil {
 		l.exceeded.Store(true)
-		l.cancel(errResponseTooLarge)
+		if l.cancel != nil {
+			l.cancel(errResponseTooLarge)
+		}
 	}
 }
 func responseLimitFor(ctx context.Context) *responseLimit {
@@ -47,12 +55,12 @@ func responseRequestContext(resp *http.Response) context.Context {
 func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (sdk.ForwardOutcome, error) {
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	limit := &responseLimit{cancel: cancel}
+	limit := &responseLimit{cancel: cancel, streamBytes: g.streamResponseLimitBytes()}
 	ctx = context.WithValue(ctx, responseLimitKey{}, limit)
 	copy := *req
 	var writer *limitedResponseWriter
 	if req.Writer != nil {
-		writer = &limitedResponseWriter{ResponseWriter: req.Writer, limit: limit}
+		writer = &limitedResponseWriter{ResponseWriter: req.Writer, limit: limit, stream: req.Stream}
 		copy.Writer = writer
 	}
 	outcome, err := g.forwardWithinResponseLimit(ctx, &copy)
@@ -74,13 +82,18 @@ func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (s
 
 type limitedResponseWriter struct {
 	http.ResponseWriter
-	limit *responseLimit
-	bytes atomic.Int64
-	wrote atomic.Bool
+	limit  *responseLimit
+	stream bool
+	bytes  atomic.Int64
+	wrote  atomic.Bool
 }
 
 func (w *limitedResponseWriter) Write(p []byte) (int, error) {
-	if w.bytes.Add(int64(len(p))) > sdk.MaxBufferedResponseBytes {
+	maxBytes := sdk.MaxBufferedResponseBytes
+	if w.stream {
+		maxBytes = w.limit.streamLimitBytes()
+	}
+	if w.bytes.Add(int64(len(p))) > int64(maxBytes) {
 		w.limit.trip()
 		return 0, errResponseTooLarge
 	}
@@ -128,34 +141,22 @@ type failedResponseReader struct{ err error }
 
 func (r failedResponseReader) Read([]byte) (int, error) { return 0, r.err }
 
-type streamResponseBudget struct {
-	total, text, reasoning, control, tools, images int
-	limit                                          *responseLimit
+func (l *responseLimit) streamLimitBytes() int {
+	if l != nil && l.streamBytes > 0 {
+		return l.streamBytes
+	}
+	return defaultStreamResponseBytes
 }
 
-func (b *streamResponseBudget) take(event string, data []byte, wireBytes ...int) error {
-	n := len(data)
-	if len(wireBytes) > 0 {
-		n = wireBytes[0]
+func (g *OpenAIGateway) streamResponseLimitBytes() int {
+	if config := g.pluginConfig(); config != nil {
+		mib := config.GetInt(streamResponseLimitConfigKey)
+		// A stream must fit one full event; bound configuration arithmetic as well.
+		if mib >= maxResponseEventBytes>>20 && mib <= 4096 {
+			return mib << 20
+		}
 	}
-	b.total += max(1, n)
-	switch {
-	case strings.Contains(event, "output_text"):
-		b.text += n
-	case strings.Contains(event, "reasoning"):
-		b.reasoning += n
-	case strings.Contains(event, "image_generation") || gjson.GetBytes(data, "item.type").String() == "image_generation_call":
-		b.images += n
-	case strings.Contains(event, "function_call") || gjson.GetBytes(data, "item.type").String() == "function_call":
-		b.tools += n
-	case event == "" || event == "response.created" || event == "response.in_progress" || event == "codex.rate_limits":
-		b.control += n
-	}
-	if b.total > sdk.MaxBufferedResponseBytes || b.text > 8<<20 || b.reasoning > 8<<20 || b.control > 1<<20 || b.tools > 8<<20 || b.images > 24<<20 {
-		b.limit.trip()
-		return errResponseTooLarge
-	}
-	return nil
+	return defaultStreamResponseBytes
 }
 
 func handlerResponseError(handler WSEventHandler) error {

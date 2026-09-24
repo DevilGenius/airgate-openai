@@ -47,8 +47,8 @@ func TestResponseBodyLimitIncludesDecodedGzip(t *testing.T) {
 
 func TestSSEAggregateAndControlBudgets(t *testing.T) {
 	delta := `data: {"type":"response.output_text.delta","delta":"` + strings.Repeat("a", 8192) + `"}` + "\n\n"
-	result := ParseSSEStream(io.LimitReader(&repeatedEventReader{event: []byte(delta)}, 12<<20), nil)
-	if !errors.Is(result.Err, errResponseTooLarge) || len(result.Text) > 8<<20 {
+	result := ParseSSEStream(io.LimitReader(&repeatedEventReader{event: []byte(delta)}, 100<<20), nil)
+	if !errors.Is(result.Err, errResponseTooLarge) || len(result.Text) > sdk.MaxBufferedResponseBytes {
 		t.Fatal("cumulative text escaped budget")
 	}
 	w := httptest.NewRecorder()

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"sort"
 
+	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
+
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -16,19 +18,27 @@ type completedResponseOutputItem struct {
 
 // responsesOutputAccumulator retains complete output_item.done payloads. Codex
 // can send an empty terminal output even after emitting reasoning ciphertext.
-// The enclosing WS/SSE reader bounds these events with streamResponseBudget.
+// Retained items are bounded independently of cumulative stream traffic.
 type responsesOutputAccumulator struct {
 	items   []completedResponseOutputItem
 	byID    map[string]int
 	byIndex map[int64]int
+	bytes   int
+	err     error
 }
 
 func (a *responsesOutputAccumulator) apply(eventType string, data []byte) []byte {
+	if a.err != nil {
+		return nil
+	}
 	switch eventType {
 	case "response.output_item.done":
 		a.collect(data)
 	case "response.completed", "response.done", "response.incomplete":
-		return a.complete(data)
+		data = a.complete(data)
+	}
+	if a.err == nil {
+		a.err = checkResponseEvent(data)
 	}
 	return data
 }
@@ -50,6 +60,15 @@ func (a *responsesOutputAccumulator) collect(data []byte) {
 	if !exists && entry.index >= 0 {
 		position, exists = a.byIndex[entry.index]
 	}
+	nextBytes := a.bytes + len(entry.raw)
+	if exists {
+		nextBytes -= len(a.items[position].raw)
+	}
+	if nextBytes > sdk.MaxBufferedResponseBytes {
+		a.err = errResponseTooLarge
+		return
+	}
+	a.bytes = nextBytes
 	if exists {
 		previous := a.items[position]
 		delete(a.byID, previous.id)
@@ -121,6 +140,15 @@ func (a *responsesOutputAccumulator) complete(data []byte) []byte {
 		merged = append(merged, item.raw)
 	}
 	merged = append(merged, output[position:]...)
+	encodedBytes := 2 + max(0, len(merged)-1)
+	for _, item := range merged {
+		encodedBytes += len(item)
+	}
+	response := gjson.GetBytes(data, "response")
+	if len(response.Raw)-len(response.Get("output").Raw)+encodedBytes > sdk.MaxBufferedResponseBytes {
+		a.err = errResponseTooLarge
+		return nil
+	}
 	encoded, err := json.Marshal(merged)
 	if err != nil {
 		return data

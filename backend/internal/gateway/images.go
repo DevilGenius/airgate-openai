@@ -2400,6 +2400,10 @@ func (g *OpenAIGateway) forwardImagesViaResponsesToolWithURL(ctx context.Context
 		RequestOutputFormat:     imgReq.OutputFormat,
 		RequestImageInputTokens: inputEstimate.ImageTokens,
 	})
+	if len(respBody) > sdk.MaxBufferedResponseBytes {
+		responseLimitFor(ctx).trip()
+		return sdk.ForwardOutcome{Usage: usage, Duration: elapsed}, errResponseTooLarge
+	}
 	outcome := sdk.ForwardOutcome{
 		Kind:     sdk.OutcomeSuccess,
 		Upstream: sdk.UpstreamResponse{StatusCode: http.StatusOK},

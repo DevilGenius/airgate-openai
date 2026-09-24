@@ -24,7 +24,8 @@ import (
 // upstreamSSEMaxLineBytes 是上游 SSE 单行最大字节数。
 // 上游某些事件（例如 response.output_item.done 携带完整输出 / 大段 reasoning summary）
 // 可能远超 1 MB，过小会触发 bufio.Scanner: token too long 中断流。
-const upstreamSSEMaxLineBytes = 8 * 1024 * 1024
+// Allow the data prefix and CRLF as well as the full event at the boundary.
+const upstreamSSEMaxLineBytes = maxResponseEventBytes + len("data: ") + 2
 
 // largeSSEEventThreshold 触发大事件诊断日志的阈值。
 // 超过这个长度的单行/翻译输出会被打印 type 与长度，便于追踪谁在膨胀。
@@ -154,15 +155,14 @@ func handleStreamResponseWithOptions(
 streamLoop:
 	for scanner.Scan() {
 		line := scanner.Text()
-		budgetData, _ := extractSSEData(line)
-		if err := budget.take(streamDiagnosticEventType(budgetData), []byte(budgetData), len(line)+1); err != nil {
+		data, ok := extractSSEData(line)
+		if err := budget.take(len(data), len(line)+1); err != nil {
 			streamErr = err
 			_ = resp.Body.Close()
 			break
 		}
 		forwardLine := line
 		diagnostics.observeLine(line)
-		data, ok := extractSSEData(line)
 		suppressCurrentLine := false
 		if ok {
 			data = strings.TrimSpace(data)
@@ -175,6 +175,11 @@ streamLoop:
 				diagnostics.completionEvent = "[DONE]"
 			} else if data != "" {
 				eventData := []byte(data)
+				if err := checkResponseEvent(eventData); err != nil {
+					streamErr = budget.exceeded()
+					_ = resp.Body.Close()
+					break
+				}
 				eventType := streamDiagnosticEventType(data)
 				timing.observe(eventType, eventData)
 				if id := responseIDFromSSEData(data); id != "" {
@@ -574,8 +579,8 @@ func ParseSSEStream(reader io.Reader, handler WSEventHandler, contexts ...contex
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		budgetData, _ := extractSSEData(line)
-		if err := budget.take(streamDiagnosticEventType(budgetData), []byte(budgetData), len(line)+1); err != nil {
+		data, ok := extractSSEData(line)
+		if err := budget.take(len(data), len(line)+1); err != nil {
 			result.Err = err
 			if closer, ok := reader.(io.Closer); ok {
 				_ = closer.Close()
@@ -583,7 +588,6 @@ func ParseSSEStream(reader io.Reader, handler WSEventHandler, contexts ...contex
 			break
 		}
 
-		data, ok := extractSSEData(line)
 		if !ok || len(data) == 0 || data == "[DONE]" {
 			continue
 		}
@@ -593,8 +597,19 @@ func ParseSSEStream(reader io.Reader, handler WSEventHandler, contexts ...contex
 			continue
 		}
 
-		eventType := streamDiagnosticEventType(data)
+		eventType := jsonString(ev["type"])
+		if eventType == "" {
+			eventType = streamDiagnosticEventType(data)
+		}
 		data = string(outputItems.apply(eventType, []byte(data)))
+		if outputItems.err != nil {
+			result.Err = outputItems.err
+			budget.limit.trip()
+			if closer, ok := reader.(io.Closer); ok {
+				_ = closer.Close()
+			}
+			break
+		}
 
 		// 在转发终止事件前补齐 output，供流式快照和非流式 JSON 共用。
 		if handler != nil {
@@ -619,7 +634,9 @@ func ParseSSEStream(reader io.Reader, handler WSEventHandler, contexts ...contex
 
 		case "response.output_text.delta":
 			if delta, ok := ev["delta"].(string); ok {
-				textBuilder.WriteString(delta)
+				if !result.appendText(&textBuilder, delta) {
+					break
+				}
 				if handler != nil {
 					handler.OnTextDelta(delta)
 				}
@@ -627,20 +644,22 @@ func ParseSSEStream(reader io.Reader, handler WSEventHandler, contexts ...contex
 
 		case "response.reasoning_summary_text.delta":
 			if delta, ok := ev["delta"].(string); ok {
-				reasoningBuilder.WriteString(delta)
+				if !result.appendText(&reasoningBuilder, delta) {
+					break
+				}
 				if handler != nil {
 					handler.OnReasoningDelta(delta)
 				}
 			}
 
 		case "response.output_item.done":
-			if item, ok := ev["item"].(map[string]any); ok {
+			if item, ok := responseOutputItem(ev); ok {
 				appendToolUseBlock(&result, item)
 				collectImageGenCall(&result, item)
 			}
 
 		case "response.output_item.added":
-			if item, ok := ev["item"].(map[string]any); ok {
+			if item, ok := responseOutputItem(ev); ok {
 				collectImageGenCallMetadata(&result, item)
 			}
 
@@ -712,19 +731,24 @@ func ParseSSEStream(reader io.Reader, handler WSEventHandler, contexts ...contex
 				}
 			}
 		}
+		if result.Err != nil {
+			break
+		}
 	}
 
 	if err := scanner.Err(); err != nil && result.Err == nil {
 		result.Err = fmt.Errorf("读取 SSE 失败: %w", err)
 		if errors.Is(err, bufio.ErrTooLong) {
-			budget.limit.trip()
 			result.Err = errResponseTooLarge
-			if closer, ok := reader.(io.Closer); ok {
-				_ = closer.Close()
-			}
 		}
 	}
 
+	if errors.Is(result.Err, errResponseTooLarge) {
+		budget.limit.trip()
+		if closer, ok := reader.(io.Closer); ok {
+			_ = closer.Close()
+		}
+	}
 	finalizeWSResult(&result, &textBuilder, &reasoningBuilder, start)
 	return result
 }

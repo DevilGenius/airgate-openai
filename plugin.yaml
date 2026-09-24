@@ -9,6 +9,12 @@ type: gateway
 min_core_version: 1.0.0
 dependencies: []
 config:
+  - key: stream_response_limit_mib
+    label: 流式响应累计上限（MiB）
+    type: int
+    default: "384"
+    description: 每次响应的接收和发送流量分别计量，包含图片预览和重复快照。范围 112–4096，未设置或无效时使用 384；最终正文上限仍为 96 MiB。
+    required: false
   - key: account_pool_adjustment_plans
     label: 号池调整
     type: multiselect

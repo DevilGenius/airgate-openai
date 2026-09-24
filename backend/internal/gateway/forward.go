@@ -1477,6 +1477,12 @@ func (s *sseEventWriter) OnRawEvent(eventType string, data []byte) {
 		return
 	}
 	data = normalizeInvalidImageInputEvent(eventType, data)
+	if err := checkResponseEvent(data); err != nil {
+		s.err = err
+		s.pendingEvents = nil
+		s.pendingBytes = 0
+		return
+	}
 	terminalErrorEvent := eventType == "response.failed" || eventType == "error" ||
 		(eventType == "response.incomplete" && gjson.GetBytes(data, "response.incomplete_details.reason").String() != "max_output_tokens")
 	terminalSuccessEvent := eventType == "response.completed" || eventType == "response.done" ||
@@ -1512,7 +1518,7 @@ func (s *sseEventWriter) OnRawEvent(eventType string, data []byte) {
 		// response.created / in_progress 不代表模型已经产生输出。先缓冲这些控制事件；
 		// 若上游随后 overload，整个 attempt 仍可由 Core 丢弃并换账号重试。
 		if !isResponseOutputEvent(eventType, data) && !terminalSuccessEvent {
-			if len(formatted) > (1<<20)-s.pendingBytes {
+			if len(formatted) > maxPendingControlBytes-s.pendingBytes {
 				s.err = errResponseTooLarge
 				s.pendingEvents = nil
 				s.pendingBytes = 0
