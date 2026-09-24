@@ -12,12 +12,13 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/DevilGenius/airgate-sdk/protocol/proto"
-	sdkgrpc "github.com/DevilGenius/airgate-sdk/runtimego/grpc"
-	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
+
+	pb "github.com/DevilGenius/airgate-sdk/protocol/proto"
+	sdkgrpc "github.com/DevilGenius/airgate-sdk/runtimego/grpc"
+	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
 // A server can keep its HTTP connection open after the terminal event. Reading
