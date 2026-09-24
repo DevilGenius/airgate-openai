@@ -155,9 +155,10 @@ func TestOAuthServiceTierUsesSharedBillingPolicy(t *testing.T) {
 				}
 				wireBody := preprocessRequestBody(req.Body, "gpt-5.6-sol", protocol.path)
 				wantWire := tc.requested
-				if wantWire == "" {
+				switch wantWire {
+				case "":
 					wantWire = "default"
-				} else if wantWire == "fast" {
+				case "fast":
 					wantWire = "priority"
 				}
 				if got := gjson.GetBytes(wireBody, "service_tier").String(); got != wantWire {
@@ -235,9 +236,10 @@ func TestOAuthWebSocketServiceTier(t *testing.T) {
 				}
 				wireTier := gjson.GetBytes(wire, "service_tier").String()
 				wantWire := tc.requested
-				if wantWire == "" {
+				switch wantWire {
+				case "":
 					wantWire = "default"
-				} else if wantWire == "fast" {
+				case "fast":
 					wantWire = "priority"
 				}
 				if wireTier != wantWire {
@@ -249,7 +251,7 @@ func TestOAuthWebSocketServiceTier(t *testing.T) {
 					if err != nil {
 						return
 					}
-					defer conn.Close()
+					defer func() { _ = conn.Close() }()
 					for _, line := range strings.Split(frames, "\n") {
 						if data, ok := extractSSEData(line); ok {
 							if err := conn.WriteMessage(websocket.TextMessage, []byte(data)); err != nil {
@@ -261,12 +263,12 @@ func TestOAuthWebSocketServiceTier(t *testing.T) {
 				defer server.Close()
 				conn, response, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
 				if response != nil && response.Body != nil {
-					defer response.Body.Close()
+					defer func() { _ = response.Body.Close() }()
 				}
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				result := ReceiveWSResponse(ctx, conn, nil)
@@ -393,10 +395,11 @@ func serviceTierTestResponse(t *testing.T, protocol serviceTierTestProtocol, rep
 	if !protocol.stream && !protocol.anthropic {
 		return encode(response)
 	}
-	if terminal == "response.failed" {
+	switch terminal {
+	case "response.failed":
 		response["status"] = "failed"
 		response["error"] = map[string]any{"code": "server_error", "message": "test upstream failure"}
-	} else if terminal == "response.incomplete" {
+	case "response.incomplete":
 		response["status"] = "incomplete"
 		response["incomplete_details"] = map[string]any{"reason": "max_output_tokens"}
 	}
