@@ -893,7 +893,7 @@ func translateResponsesSSEToAnthropicSSE(
 
 	var streamErr error
 	timing := newResponseEventTiming(start)
-	serviceTier := firstNonEmptyTier(requestServiceTier)
+	var upstreamServiceTier string
 	skipCurrentOutput := false
 	outputWritten := false
 	responseID := ""
@@ -960,14 +960,14 @@ func translateResponsesSSEToAnthropicSSE(
 				responseID = eventResponseID
 			}
 			// 终止事件集中分发，避免为 safety 单独扫描或判断正常 delta。
+			if tier, reported := upstreamSSEServiceTier(eventType, []byte(data)); reported {
+				upstreamServiceTier = tier
+			}
 			switch eventType {
 			case "response.completed", "response.done":
 				terminalEventReceived = true
 				if session.SessionKey != "" && eventResponseID != "" {
 					updateSessionStateResponseID(session.SessionKey, eventResponseID, session.AccountID)
-				}
-				if serviceTier == "" {
-					serviceTier = firstNonEmptyTier(gjson.Get(data, "response.service_tier").String(), defaultServiceTier)
 				}
 				usageNode := gjson.Get(data, "response.usage")
 				slog.Debug("[Anthropic←Responses] 上游 usage",
@@ -1082,7 +1082,7 @@ done:
 	}
 
 	elapsed := time.Since(start)
-	serviceTier = firstNonEmptyTier(serviceTier, defaultServiceTier)
+	serviceTier := resolveOpenAIUsageServiceTier(firstNonEmptyTier(requestServiceTier, defaultServiceTier), upstreamServiceTier)
 	usage := newTokenUsage(
 		billingModel,
 		serviceTier,

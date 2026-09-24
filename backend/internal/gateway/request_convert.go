@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"encoding/json"
+	"net/http"
 	"strings"
 
 	"github.com/tidwall/gjson"
@@ -18,7 +19,7 @@ var (
 
 func normalizeOpenAIServiceTier(tier string) string {
 	switch strings.ToLower(strings.TrimSpace(tier)) {
-	case "priority":
+	case "priority", "fast":
 		return "priority"
 	case "flex":
 		return "flex"
@@ -28,6 +29,9 @@ func normalizeOpenAIServiceTier(tier string) string {
 }
 
 func normalizeOpenAIWireServiceTier(tier string) string {
+	if strings.EqualFold(strings.TrimSpace(tier), "default") {
+		return "default"
+	}
 	switch normalizeOpenAIServiceTier(tier) {
 	case "priority":
 		return "priority"
@@ -38,25 +42,28 @@ func normalizeOpenAIWireServiceTier(tier string) string {
 	}
 }
 
-func applyOpenAIWireServiceTier(body []byte) []byte {
-	if len(body) == 0 {
+// Core strips client-supplied X-Airgate-* headers before adding trusted group
+// settings. A valid group override wins over the client tier and default.
+func resolveOpenAIRequestServiceTier(body []byte, headers http.Header) string {
+	return firstNonEmptyTier(headers.Get("X-Airgate-Service-Tier"), gjson.GetBytes(body, "service_tier").String(), "default")
+}
+
+func applyOpenAIWireServiceTier(body []byte, headers ...http.Header) []byte {
+	if !gjson.ValidBytes(body) || !gjson.ParseBytes(body).IsObject() {
 		return body
 	}
-	tierNode := gjson.GetBytes(body, "service_tier")
-	if !tierNode.Exists() {
-		return body
+	var trustedHeaders http.Header
+	if len(headers) > 0 {
+		trustedHeaders = headers[0]
 	}
-	if tier := normalizeOpenAIWireServiceTier(tierNode.String()); tier != "" {
-		result, _ := sjson.SetBytes(body, "service_tier", tier)
-		return result
-	}
-	result, _ := sjson.DeleteBytes(body, "service_tier")
+	tier := resolveOpenAIRequestServiceTier(body, trustedHeaders)
+	result, _ := sjson.SetBytes(body, "service_tier", tier)
 	return result
 }
 
 func firstNonEmptyTier(tiers ...string) string {
 	for _, tier := range tiers {
-		if normalized := normalizeOpenAIServiceTier(tier); normalized != "" {
+		if normalized := normalizeOpenAIWireServiceTier(tier); normalized != "" {
 			return normalized
 		}
 	}
@@ -273,6 +280,9 @@ func wrapAsResponsesAPI(body []byte, model string) ([]byte, error) {
 }
 
 func wrapAsResponsesAPIWithTier(body []byte, model string, reqServiceTierOverride string) ([]byte, error) {
+	// Chat conversion creates a new body, so retain the effective tier before
+	// replacing messages with input and potentially losing the original field.
+	reqServiceTierOverride = firstNonEmptyTier(reqServiceTierOverride, gjson.GetBytes(body, "service_tier").String(), "default")
 	// 已是 Responses 格式（有 input 字段），直接补齐默认字段。
 	// input 格式规范化（string → list）已在 forwardHTTP 入口统一完成。
 	if gjson.GetBytes(body, "input").Exists() {
@@ -370,14 +380,9 @@ func ensureResponsesDefaultsWithTier(body []byte, reqServiceTierOverride string)
 		result = modified
 	}
 
-	// 仅在请求或分组明确指定时才传 service_tier
-	if tier := normalizeOpenAIWireServiceTier(gjson.GetBytes(result, "service_tier").String()); tier != "" {
-		result, _ = sjson.SetBytes(result, "service_tier", tier)
-	} else if tier := normalizeOpenAIWireServiceTier(reqServiceTierOverride); tier != "" {
-		result, _ = sjson.SetBytes(result, "service_tier", tier)
-	} else if gjson.GetBytes(result, "service_tier").Exists() {
-		result, _ = sjson.DeleteBytes(result, "service_tier")
-	}
+	// Always send a tier; omission must not let the upstream auto-select priority.
+	tier := firstNonEmptyTier(reqServiceTierOverride, gjson.GetBytes(result, "service_tier").String(), "default")
+	result, _ = sjson.SetBytes(result, "service_tier", tier)
 	if !gjson.GetBytes(result, "text.verbosity").Exists() {
 		result, _ = sjson.SetBytes(result, "text.verbosity", "medium")
 	}

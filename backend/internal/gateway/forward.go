@@ -92,10 +92,7 @@ func (g *OpenAIGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest
 				headers:  req.Headers,
 			})
 		}
-		reqServiceTier = normalizeOpenAIServiceTier(gjson.GetBytes(req.Body, "service_tier").String())
-		if req.Account.Credentials["api_key"] != "" && !isOpenAIOAuthCredentials(req.Account.Credentials) {
-			req.Body = applyOpenAIWireServiceTier(req.Body)
-		}
+		reqServiceTier = resolveOpenAIRequestServiceTier(req.Body, req.Headers)
 	}
 
 	account := req.Account
@@ -1250,7 +1247,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 
 	usage := newTokenUsage(
 		firstNonEmptyString(result.Model, currentModel),
-		normalizeOpenAIServiceTier(gjson.GetBytes(req.Body, "service_tier").String()),
+		resolveOpenAIUsageServiceTier(resolveOpenAIRequestServiceTier(req.Body, req.Headers), result.ServiceTier),
 		result.InputTokens,
 		result.OutputTokens,
 		result.CachedInputTokens,

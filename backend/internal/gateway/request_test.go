@@ -828,19 +828,19 @@ func TestPluginRouteDefinitionsIncludesResponsesCompact(t *testing.T) {
 	}
 }
 
-func TestNormalizeOpenAIServiceTier_FastIsInvalid(t *testing.T) {
-	if got := normalizeOpenAIServiceTier("fast"); got != "" {
-		t.Fatalf("normalizeOpenAIServiceTier(fast) = %q, want empty", got)
+func TestNormalizeOpenAIServiceTier_FastIsPriority(t *testing.T) {
+	if got := normalizeOpenAIServiceTier("fast"); got != "priority" {
+		t.Fatalf("normalizeOpenAIServiceTier(fast) = %q, want priority", got)
 	}
 }
 
-func TestNormalizeOpenAIWireServiceTier_FastIsInvalid(t *testing.T) {
-	if got := normalizeOpenAIWireServiceTier("fast"); got != "" {
-		t.Fatalf("normalizeOpenAIWireServiceTier(fast) = %q, want empty", got)
+func TestNormalizeOpenAIWireServiceTier_FastIsPriority(t *testing.T) {
+	if got := normalizeOpenAIWireServiceTier("fast"); got != "priority" {
+		t.Fatalf("normalizeOpenAIWireServiceTier(fast) = %q, want priority", got)
 	}
 }
 
-func TestEnsureResponsesDefaultsWithTier_FastIgnored(t *testing.T) {
+func TestEnsureResponsesDefaultsWithTier_FastUsesPriority(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.5","input":"hi"}`)
 	result := ensureResponsesDefaultsWithTier(body, "fast")
 
@@ -848,8 +848,8 @@ func TestEnsureResponsesDefaultsWithTier_FastIgnored(t *testing.T) {
 	if err := json.Unmarshal(result, &payload); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
-	if _, ok := payload["service_tier"]; ok {
-		t.Fatalf("service_tier should be omitted for fast, got %v", payload["service_tier"])
+	if payload["service_tier"] != "priority" {
+		t.Fatalf("fast alias should use priority, got %v", payload["service_tier"])
 	}
 }
 
@@ -1426,15 +1426,15 @@ func TestEnsureResponsesDefaultsNoopsWhenNoReasoningFields(t *testing.T) {
 	}
 }
 
-func TestApplyOpenAIWireServiceTier_FastRemoved(t *testing.T) {
+func TestApplyOpenAIWireServiceTier_FastUsesPriority(t *testing.T) {
 	result := applyOpenAIWireServiceTier([]byte(`{"model":"gpt-5.5","input":"hi","service_tier":"fast"}`))
 
 	var payload map[string]any
 	if err := json.Unmarshal(result, &payload); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
-	if _, ok := payload["service_tier"]; ok {
-		t.Fatalf("service_tier should be removed for fast, got %v", payload["service_tier"])
+	if payload["service_tier"] != "priority" {
+		t.Fatalf("fast alias should use priority, got %v", payload["service_tier"])
 	}
 }
 

@@ -200,6 +200,7 @@ func buildAPIKeyURL(account *sdk.Account, reqPath string) string {
 //  4. input 规范化（/v1/responses 的 string input → list，messages → input 转换）
 //  5. Responses API 强制禁用上游存储（store=false）
 //  6. 仅移除已被 Prompt / Cyber 拒绝并缓存的 reasoning encrypted_content
+//  7. 文本请求 service_tier：分组覆盖 > 客户端参数 > default
 func preprocessRequestBody(body []byte, model, reqPath string, headers ...http.Header) []byte {
 	return preprocessRequestBodyWithEncryptedContentState(body, model, reqPath, disabledEncryptedContent, headers...)
 }
@@ -246,7 +247,7 @@ func preprocessRequestBodyWithEncryptedContentState(
 		if modified, err := sjson.DeleteBytes(result, "stream"); err == nil {
 			result = modified
 		}
-		return result
+		return applyOpenAIWireServiceTier(result, trustedHeaders)
 	}
 	hasEncryptedContent := isResponsesRequest && bytes.Contains(result, []byte(`"encrypted_content"`))
 
@@ -257,6 +258,9 @@ func preprocessRequestBodyWithEncryptedContentState(
 			encryptedContentState = disabledEncryptedContent
 		}
 		result = sanitizeResponsesReasoningEncryptedContentKnownPresentWithState(result, encryptedContentState)
+	}
+	if isResponsesRequest || isChatCompletionsPath(reqPath) {
+		result = applyOpenAIWireServiceTier(result, trustedHeaders)
 	}
 	return result
 }
@@ -541,7 +545,7 @@ func (g *OpenAIGateway) buildWSRequest(req *sdk.ForwardRequest, session openAISe
 	}
 	// applyForceInstructions 已在 forwardHTTP 入口统一处理
 	body = applyOpenAIWireReasoningEffort(body, req.Model)
-	return applyOpenAIWireServiceTier(body), nil
+	return applyOpenAIWireServiceTier(body, req.Headers), nil
 }
 
 // applyForceInstructions 若请求头中指定了 X-Airgate-Force-Instructions 则强制覆盖 instructions 字段。
@@ -593,6 +597,7 @@ func normalizeWSRequestBody(body []byte, model string, headers http.Header) ([]b
 	if len(body) == 0 {
 		return body, nil
 	}
+	serviceTier := resolveOpenAIRequestServiceTier(body, headers)
 
 	if gjson.GetBytes(body, "type").String() == "response.create" {
 		opts := responsesNormalizeOptions{
@@ -601,12 +606,12 @@ func normalizeWSRequestBody(body []byte, model string, headers http.Header) ([]b
 			headers:     headers,
 		}
 		result := normalizeResponsesInputWithOptions(body, "/v1/responses", opts)
-		result = ensureResponsesDefaultsWithTier(result, "")
+		result = ensureResponsesDefaultsWithTier(result, serviceTier)
 		result = normalizeResponsesInputWithOptions(result, "/v1/responses", opts)
 		return result, nil
 	}
 
-	wrapped, err := wrapAsResponsesAPI(body, model)
+	wrapped, err := wrapAsResponsesAPIWithTier(body, model, serviceTier)
 	if err != nil {
 		return nil, err
 	}

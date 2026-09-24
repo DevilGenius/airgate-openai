@@ -56,6 +56,7 @@ type WSResult struct {
 	ToolUses              []ToolUseBlock
 	ResponseID            string
 	Model                 string
+	ServiceTier           string // Actual tier from the terminal response; empty means unreported.
 	InputTokens           int
 	OutputTokens          int
 	CachedInputTokens     int
@@ -740,6 +741,7 @@ func JsonInt(m map[string]any, key string) int {
 
 // extractUsageFromResponseMap 从 Responses API response 对象中提取 usage 到 WSResult。
 func extractUsageFromResponseMap(result *WSResult, resp map[string]any) {
+	result.ServiceTier = normalizeOpenAIWireServiceTier(jsonString(resp["service_tier"]))
 	if usage, ok := resp["usage"].(map[string]any); ok {
 		rawInputTokens := JsonInt(usage, "input_tokens")
 		result.OutputTokens = JsonInt(usage, "output_tokens")

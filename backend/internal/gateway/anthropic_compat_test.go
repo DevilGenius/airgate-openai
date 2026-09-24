@@ -681,12 +681,21 @@ func TestExplicitAnthropicRequestServiceTier(t *testing.T) {
 		Body:    []byte(`{"service_tier":"flex"}`),
 	}
 	if got := explicitAnthropicRequestServiceTier(req); got != "priority" {
-		t.Fatalf("显式服务档位 = %q，期望 priority", got)
+		t.Fatalf("分组覆盖服务档位 = %q，期望 priority", got)
 	}
 
 	req.Headers = http.Header{}
 	if got := explicitAnthropicRequestServiceTier(req); got != "flex" {
 		t.Fatalf("请求体服务档位 = %q，期望 flex", got)
+	}
+	req.Headers.Set("X-Airgate-Service-Tier", "priority")
+	req.Body = []byte(`{}`)
+	if got := explicitAnthropicRequestServiceTier(req); got != "priority" {
+		t.Fatalf("未传 service_tier 时分组覆盖 = %q，期望 priority", got)
+	}
+	req.Headers.Del("X-Airgate-Service-Tier")
+	if got := explicitAnthropicRequestServiceTier(req); got != "default" {
+		t.Fatalf("分组和客户端均未设置时服务档位 = %q，期望 default", got)
 	}
 }
 

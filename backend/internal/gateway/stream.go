@@ -132,7 +132,8 @@ func handleStreamResponseWithOptions(
 	w.Header().Set("X-Accel-Buffering", "no")
 	passCodexRateLimitHeaders(resp.Header, w.Header())
 
-	usage := newTokenUsage("", reqServiceTier, 0, 0, 0, 0, 0, 0)
+	usage := newTokenUsage("", "", 0, 0, 0, 0, 0, 0)
+	var upstreamServiceTier string
 	timing := newResponseEventTiming(start)
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), upstreamSSEMaxLineBytes)
@@ -190,6 +191,9 @@ streamLoop:
 					responseID = id
 				}
 				parseSSEUsage(eventData, usage, &toolImageIn, &toolImageOut)
+				if tier, reported := upstreamSSEServiceTier(eventType, eventData); reported {
+					upstreamServiceTier = tier
+				}
 				if options.hideChatCompletionsUsage {
 					filtered, suppress, changed := filterChatCompletionsUsageForClient(eventData)
 					suppressCurrentLine = suppress
@@ -275,6 +279,7 @@ streamLoop:
 	elapsed := time.Since(start)
 	usage.FirstEventMs = timing.firstEventMs
 	usage.FirstTokenMs = timing.firstTokenMs
+	setUsageServiceTier(usage, resolveOpenAIUsageServiceTier(reqServiceTier, upstreamServiceTier))
 	numImages := imageGenCount
 	if numImages <= 0 {
 		numImages = estimateImageCountFromTokens(toolImageOut)
@@ -546,7 +551,7 @@ func handleNonStreamResponse(resp *http.Response, w http.ResponseWriter, start t
 	elapsed := time.Since(start)
 	usage := newTokenUsage(
 		gjson.GetBytes(body, "model").String(),
-		firstNonEmptyTier(reqServiceTier, normalizeOpenAIServiceTier(gjson.GetBytes(body, "service_tier").String())),
+		resolveOpenAIUsageServiceTier(reqServiceTier, gjson.GetBytes(body, "service_tier").String()),
 		parsed.inputTokens,
 		parsed.outputTokens,
 		parsed.cachedInputTokens,
@@ -856,9 +861,6 @@ func parseSSEUsage(data []byte, out *sdk.Usage, toolImageIn, toolImageOut *int) 
 			return
 		}
 		out.Model = resp.Get("model").String()
-		if usageServiceTier(out) == "" {
-			setUsageServiceTier(out, resp.Get("service_tier").String())
-		}
 		usage := resp.Get("usage")
 		if usage.Exists() {
 			rawInputTokens := int(usage.Get("input_tokens").Int())

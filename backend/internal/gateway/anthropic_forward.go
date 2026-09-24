@@ -214,13 +214,9 @@ func finalizeAnthropicResponsesBody(responsesBody []byte, originalBody []byte, s
 
 func explicitAnthropicRequestServiceTier(req *sdk.ForwardRequest) string {
 	if req == nil {
-		return ""
+		return "default"
 	}
-	headerTier := ""
-	if req.Headers != nil {
-		headerTier = req.Headers.Get("X-Airgate-Service-Tier")
-	}
-	return firstNonEmptyTier(headerTier, gjson.GetBytes(req.Body, "service_tier").String())
+	return resolveOpenAIRequestServiceTier(req.Body, req.Headers)
 }
 
 func defaultAnthropicUsageServiceTier(_ *sdk.ForwardRequest) string {
@@ -449,6 +445,7 @@ func (g *OpenAIGateway) buildAnthropicUpstreamRequest(
 		targetURL = buildAPIKeyURL(account, "/v1/responses")
 	}
 
+	responsesBody = applyOpenAIWireServiceTier(responsesBody, req.Headers)
 	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(responsesBody))
 	if err != nil {
 		return nil, err
@@ -564,10 +561,9 @@ func (g *OpenAIGateway) handleAnthropicNonStreamFromResponses(
 	if billingModel == "" {
 		billingModel = gjson.Get(anthropicJSON, "model").String()
 	}
-	serviceTier := firstNonEmptyTier(
-		requestServiceTier,
-		gjson.GetBytes(wsResult.CompletedEventRaw, "response.service_tier").String(),
-		defaultServiceTier,
+	serviceTier := resolveOpenAIUsageServiceTier(
+		firstNonEmptyTier(requestServiceTier, defaultServiceTier),
+		wsResult.ServiceTier,
 	)
 
 	elapsed := time.Since(start)
