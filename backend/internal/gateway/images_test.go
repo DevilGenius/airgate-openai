@@ -281,7 +281,9 @@ func TestHandleImagesResponse_TokenAttribution(t *testing.T) {
 
 func TestWriteSSEPingUsesOpenAIStyleEvent(t *testing.T) {
 	w := httptest.NewRecorder()
-	writeSSEPing(w)
+	if err := writeSSEPing(w); err != nil {
+		t.Fatal(err)
+	}
 
 	if got, want := w.Body.String(), "event: ping\ndata: {}\n\n"; got != want {
 		t.Fatalf("body = %q, want %q", got, want)

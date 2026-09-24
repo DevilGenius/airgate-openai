@@ -29,7 +29,7 @@ type completionBody struct {
 }
 
 func (b *completionBody) Read(p []byte) (int, error) {
-	if b.Reader.Len() == 0 {
+	if b.Len() == 0 {
 		b.readsAfterData++
 		return 0, context.Canceled
 	}

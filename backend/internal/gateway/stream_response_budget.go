@@ -1,8 +1,9 @@
 package gateway
 
 import (
-	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 	"github.com/tidwall/gjson"
+
+	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
 // Count wire bytes only. Buffer owners enforce their own retained-size limits;

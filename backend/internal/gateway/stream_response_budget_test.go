@@ -9,9 +9,10 @@ import (
 	"testing"
 	"time"
 
-	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 	"github.com/gorilla/websocket"
 	"github.com/tidwall/gjson"
+
+	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
 func TestStreamBudgetAllowsBase64Encoded64MiBImage(t *testing.T) {
