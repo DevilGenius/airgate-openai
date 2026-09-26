@@ -190,18 +190,9 @@ func responsesLiteEnabled(reqData map[string]any, opts responsesNormalizeOptions
 	if strings.EqualFold(strings.TrimSpace(jsonString(gjsonPathValue(reqData, codexResponsesLiteMetadataPath))), "true") {
 		return responsesLiteModelSupported(opts.modelOrBody(reqData))
 	}
-	// Some clients lose the transport marker while retaining Lite-only
-	// namespace fields. Recover the protocol mode only for known Lite models.
-	if responsesLiteModelSupported(opts.modelOrBody(reqData)) {
-		if input, ok := reqData["input"].([]any); ok {
-			for _, raw := range input {
-				item, ok := raw.(map[string]any)
-				if ok && hasResponsesItemNamespace(strings.TrimSpace(jsonString(item["type"])), item) {
-					return true
-				}
-			}
-		}
-	}
+	// Namespaces are also valid in ordinary Responses tool history. Only an
+	// explicit transport marker may opt a request into the Lite dialect; model
+	// capabilities and tool shapes must never activate it implicitly.
 	return false
 }
 

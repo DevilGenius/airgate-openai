@@ -2,11 +2,103 @@ package gateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
+
+// Reduced from the 2026-09-26 trace: ordinary namespaced tool history plus
+// web_search must not cause the proxy to activate Responses Lite.
+func TestResponsesPolicyRequiresExplicitLiteOptInAcrossRequestPaths(t *testing.T) {
+	paths := []struct {
+		name string
+		run  func([]byte, http.Header) ([]byte, error)
+	}{
+		{"policy", func(body []byte, headers http.Header) ([]byte, error) {
+			return normalizeResponsesInputWithOptions(body, "/v1/responses", responsesNormalizeOptions{
+				strictCodex: true, finalize: true, model: "gpt-5.6-sol", headers: headers,
+			}), nil
+		}},
+		{"oauth_request", func(body []byte, headers http.Header) ([]byte, error) {
+			return buildResponseCreateWSRequestWithHeaders(body, "gpt-5.6-sol", openAISessionResolution{}, headers)
+		}},
+		{"websocket_message", func(body []byte, headers http.Header) ([]byte, error) {
+			body, err := sjson.SetBytes(body, "type", "response.create")
+			if err != nil {
+				return nil, err
+			}
+			return sanitizeResponsesWebSocketClientMessage(body, responsesNormalizeOptions{strictCodex: true, headers: headers}), nil
+		}},
+	}
+	markers := []struct {
+		name     string
+		header   string
+		metadata string
+		lite     bool
+	}{
+		{name: "absent"},
+		{name: "header_false", header: "false"},
+		{name: "metadata_false", metadata: `,"client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":"false"}`},
+		{name: "metadata_boolean_false", metadata: `,"client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":false}`},
+		{name: "header_true", header: "true", lite: true},
+		{name: "metadata_true", metadata: `,"client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":"true"}`, lite: true},
+	}
+	for _, path := range paths {
+		for _, marker := range markers {
+			for _, continuation := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/continuation=%t", path.name, marker.name, continuation), func(t *testing.T) {
+					previous := ""
+					if continuation {
+						previous = `,"previous_response_id":"resp_previous"`
+					}
+					body := []byte(`{"model":"gpt-5.6-sol","parallel_tool_calls":true,"tool_choice":"auto",
+						"reasoning":{"effort":"xhigh"},
+						"tools":[{"type":"namespace","name":"workspace","tools":[{"type":"function","name":"read","parameters":{"type":"object"}}]},{"type":"web_search","external_web_access":true}],
+						"input":[{"type":"function_call","call_id":"call_1","name":"read","namespace":"workspace","arguments":"{}"},{"type":"function_call_output","call_id":"call_1","output":"ok"}]` + marker.metadata + previous + `}`)
+					headers := make(http.Header)
+					if marker.header != "" {
+						headers.Set("X-OpenAI-Internal-Codex-Responses-Lite", marker.header)
+					}
+					got, err := path.run(body, headers)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if lite := gjson.GetBytes(got, codexResponsesLiteMetadataPath).String() == "true"; lite != marker.lite {
+						t.Fatalf("Lite mode = %t, want %t: %s", lite, marker.lite, got)
+					}
+					parallel := gjson.GetBytes(got, "parallel_tool_calls")
+					if !parallel.Exists() || parallel.Bool() == marker.lite {
+						t.Fatalf("unexpected parallel_tool_calls: %s", got)
+					}
+					if context := gjson.GetBytes(got, "reasoning.context"); context.Exists() != marker.lite {
+						t.Fatalf("unexpected Lite reasoning context: %s", got)
+					}
+					if gjson.GetBytes(got, "tools.1.type").String() != "web_search" || !gjson.GetBytes(got, "tools.1.external_web_access").Bool() {
+						t.Fatalf("web search was changed: %s", got)
+					}
+					if gjson.GetBytes(got, "input.#").Int() != 2 || gjson.GetBytes(got, "input.1.call_id").String() != "call_1" {
+						t.Fatalf("tool history was lost: %s", got)
+					}
+					if gjson.GetBytes(got, "tools.0.name").String() != "workspace" || gjson.GetBytes(got, "tool_choice").String() != "auto" {
+						t.Fatalf("tool declarations or selection changed: %s", got)
+					}
+					// Finalization/replay must not infer Lite on a subsequent pass.
+					var replay map[string]any
+					if err := json.Unmarshal(got, &replay); err != nil {
+						t.Fatal(err)
+					}
+					replay = applyContinuationState(replay, openAISessionResolution{})
+					if lite := responsesLiteEnabled(replay, responsesNormalizeOptions{strictCodex: true}); lite != marker.lite {
+						t.Fatalf("replay changed Lite mode to %t", lite)
+					}
+				})
+			}
+		}
+	}
+}
 
 func TestResponsesPolicyConvertsMessagesBeforeContinuationFinalization(t *testing.T) {
 	body := []byte(`{"type":"response.create","model":"gpt-5.5","previous_response_id":"resp_prev","messages":[{"role":"user","content":"continue"}]}`)
@@ -49,7 +141,7 @@ func TestResponsesPolicyPreservesLiteNamespaceAcrossWebSocketBody(t *testing.T) 
 		finalize:    true,
 		model:       "gpt-5.6-sol",
 		headers: http.Header{
-			"X-OpenAI-Internal-Codex-Responses-Lite": []string{"true"},
+			"X-Openai-Internal-Codex-Responses-Lite": []string{"true"},
 		},
 	})
 
