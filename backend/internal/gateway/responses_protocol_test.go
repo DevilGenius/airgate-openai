@@ -8,9 +8,10 @@ import (
 	"testing"
 	"time"
 
-	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 	"github.com/gorilla/websocket"
 	"github.com/tidwall/gjson"
+
+	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
 func TestResponsesToolControlsSurviveNormalization(t *testing.T) {
