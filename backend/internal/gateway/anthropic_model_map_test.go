@@ -13,11 +13,11 @@ func TestAnthropicDefaultTargetModels(t *testing.T) {
 		gotFallback  string
 		wantFallback string
 	}{
-		{name: "fable", gotPrimary: fableTargetModel, wantPrimary: "gpt-6-astra", gotFallback: fableFallbackModel, wantFallback: "gpt-5.5"},
-		{name: "opus", gotPrimary: opusTargetModel, wantPrimary: "gpt-5.6-sol", gotFallback: opusFallbackModel, wantFallback: "gpt-5.5"},
-		{name: "sonnet", gotPrimary: sonnetTargetModel, wantPrimary: "gpt-5.6-terra", gotFallback: sonnetFallbackModel, wantFallback: "gpt-5.5"},
+		{name: "fable", gotPrimary: fableTargetModel, wantPrimary: "gpt-6-astra", gotFallback: resolveAnthropicModelPolicy("claude-fable-x").FallbackModel, wantFallback: "gpt-5.6-sol"},
+		{name: "opus", gotPrimary: opusTargetModel, wantPrimary: "gpt-5.6-sol", gotFallback: resolveAnthropicModelPolicy("claude-opus-x").FallbackModel, wantFallback: "gpt-5.6-sol"},
+		{name: "sonnet", gotPrimary: sonnetTargetModel, wantPrimary: "gpt-5.6-terra", gotFallback: resolveAnthropicModelPolicy("claude-sonnet-x").FallbackModel, wantFallback: "gpt-5.6-sol"},
 		{name: "haiku", gotPrimary: haikuTargetModel, wantPrimary: "gpt-5.6-luna", gotFallback: resolveAnthropicModelPolicy("claude-haiku-4-5").FallbackModel},
-		{name: "default", gotPrimary: defaultClaudeTargetModel, wantPrimary: "gpt-5.6-sol", gotFallback: defaultClaudeFallbackModel, wantFallback: "gpt-5.5"},
+		{name: "default", gotPrimary: defaultClaudeTargetModel, wantPrimary: "gpt-5.6-sol", gotFallback: resolveAnthropicModelPolicy("claude-unknown").FallbackModel, wantFallback: "gpt-5.6-sol"},
 	}
 
 	for _, tt := range tests {

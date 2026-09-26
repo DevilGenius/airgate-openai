@@ -623,7 +623,7 @@ func normalizeWSRequestBody(body []byte, model string, headers http.Header) ([]b
 // resolveEffectiveModel 决定最终送到上游的 model 字段。
 // 优先级：显式 reqModel > body 里已有的 model > Codex 兜底默认值。
 // 只要候选值不在 model.registry 里（包括空串、"None"、"null"、或者任何不认识的
-// 模型名），就直接换成 codexDefaultModel —— 避免把"不支持的模型"推到上游账号，
+// 模型名），就直接换成 model.DefaultModelID —— 避免把"不支持的模型"推到上游账号，
 // 触发 "The 'None' model is not supported..." 这类错误。
 func resolveEffectiveModel(reqModel string, existing any) string {
 	if model.IsKnown(reqModel) {
@@ -632,7 +632,7 @@ func resolveEffectiveModel(reqModel string, existing any) string {
 	if s, ok := existing.(string); ok && model.IsKnown(s) {
 		return strings.TrimSpace(s)
 	}
-	return codexDefaultModel
+	return model.DefaultModelID
 }
 
 // buildSimulatedWSRequest 模拟客户端模式

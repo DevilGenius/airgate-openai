@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"strings"
+
+	"github.com/DevilGenius/airgate-openai/backend/internal/model"
 )
 
 // ──────────────────────────────────────────────────────
@@ -32,50 +34,27 @@ type anthropicModelPolicy struct {
 var (
 	defaultClaudeTargetModel = normalizeModelID(
 		firstNonEmptyEnv("AIRGATE_DEFAULT_CLAUDE_MODEL"),
-		"gpt-5.6-sol",
+		model.DefaultModelID,
 	)
 	fableTargetModel = resolveRoleTargetModel(
-		"gpt-6-astra",
+		model.DefaultFableModelID,
 		"AIRGATE_MODEL_FABLE",
 		"ANTHROPIC_DEFAULT_FABLE_MODEL",
 	)
-	fableFallbackModel = resolveRoleTargetModel(
-		"gpt-5.5",
-		"AIRGATE_MODEL_FABLE_FALLBACK",
-	)
 	opusTargetModel = resolveRoleTargetModel(
-		"gpt-5.6-sol",
+		model.DefaultOpusModelID,
 		"AIRGATE_MODEL_OPUS",
 		"ANTHROPIC_DEFAULT_OPUS_MODEL",
 	)
-	opusFallbackModel = resolveRoleTargetModel(
-		"gpt-5.5",
-		"AIRGATE_MODEL_OPUS_FALLBACK",
-	)
 	sonnetTargetModel = resolveRoleTargetModel(
-		"gpt-5.6-terra",
+		model.DefaultSonnetModelID,
 		"AIRGATE_MODEL_SONNET",
 		"ANTHROPIC_DEFAULT_SONNET_MODEL",
 	)
-	sonnetFallbackModel = resolveRoleTargetModel(
-		"gpt-5.5",
-		"AIRGATE_MODEL_SONNET_FALLBACK",
-	)
 	haikuTargetModel = resolveRoleTargetModel(
-		"gpt-5.6-luna",
+		model.DefaultHaikuModelID,
 		"AIRGATE_MODEL_HAIKU",
 		"ANTHROPIC_DEFAULT_HAIKU_MODEL",
-	)
-	defaultClaudeFallbackModel = resolveRoleTargetModel(
-		"gpt-5.5",
-		"AIRGATE_MODEL_DEFAULT_FALLBACK",
-	)
-	// codexDefaultModel Codex CLI 透传路径的兜底模型。
-	// 当客户端请求体里 model 字段为空、null 或字面量 "None" 时使用这个值，
-	// 默认使用 gpt-5.5，也可通过 AIRGATE_CODEX_DEFAULT_MODEL 覆盖。
-	codexDefaultModel = resolveRoleTargetModel(
-		"gpt-5.5",
-		"AIRGATE_CODEX_DEFAULT_MODEL",
 	)
 	enableAnthropicContinuation = strings.EqualFold(firstNonEmptyEnv("AIRGATE_ENABLE_ANTHROPIC_CONTINUATION"), "true")
 )
@@ -86,7 +65,7 @@ var anthropicModelPolicies = []anthropicModelPolicy{
 		RuleID:                 "anthropic-fable",
 		ModelPrefixes:          []string{"claude-fable-"},
 		PrimaryModel:           fableTargetModel,
-		FallbackModel:          fableFallbackModel,
+		FallbackModel:          model.DefaultModelID,
 		DefaultReasoningEffort: defaultAnthropicReasoningEffort,
 	},
 	{
@@ -99,21 +78,21 @@ var anthropicModelPolicies = []anthropicModelPolicy{
 		RuleID:                 "anthropic-sonnet",
 		ModelPrefixes:          []string{"claude-sonnet-"},
 		PrimaryModel:           sonnetTargetModel,
-		FallbackModel:          sonnetFallbackModel,
+		FallbackModel:          model.DefaultModelID,
 		DefaultReasoningEffort: defaultAnthropicReasoningEffort,
 	},
 	{
 		RuleID:                 "anthropic-opus",
 		ModelPrefixes:          []string{"claude-opus-"},
 		PrimaryModel:           opusTargetModel,
-		FallbackModel:          opusFallbackModel,
+		FallbackModel:          model.DefaultModelID,
 		DefaultReasoningEffort: defaultAnthropicReasoningEffort,
 	},
 	{
 		RuleID:                 "anthropic-default",
 		ModelPrefixes:          []string{"claude-"},
 		PrimaryModel:           defaultClaudeTargetModel,
-		FallbackModel:          defaultClaudeFallbackModel,
+		FallbackModel:          model.DefaultModelID,
 		DefaultReasoningEffort: defaultAnthropicReasoningEffort,
 	},
 }

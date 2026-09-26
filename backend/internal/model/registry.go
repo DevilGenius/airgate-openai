@@ -122,16 +122,16 @@ func withLongCtx(s Spec) Spec {
 // ─── 新增模型只需在此处加一行 ───
 var registry = map[string]Spec{
 	// ── GPT-6 ──
-	"gpt-6-astra": withLongCtx(withCacheCreationPrice(std("GPT-6-Astra", 1050000, 128000, 10.0, 1.0, 50.0), 12.5)),
-	"gpt-6-sol":   withLongCtx(withCacheCreationPrice(std("GPT-6-Sol", 1050000, 128000, 2.0, 0.2, 10.0), 2.5)),
-	"gpt-6-luna":  withLongCtx(withCacheCreationPrice(std("GPT-6-Luna", 1050000, 128000, 0.1, 0.01, 0.5), 0.125)),
+	GPT6Astra:    withLongCtx(withCacheCreationPrice(std("GPT-6-Astra", 1050000, 128000, 10.0, 1.0, 50.0), 12.5)),
+	"gpt-6-sol":  withLongCtx(withCacheCreationPrice(std("GPT-6-Sol", 1050000, 128000, 2.0, 0.2, 10.0), 2.5)),
+	"gpt-6-luna": withLongCtx(withCacheCreationPrice(std("GPT-6-Luna", 1050000, 128000, 0.1, 0.01, 0.5), 0.125)),
 
 	"gpt-5.5": withPriorityMultiplier(std("GPT 5.5", 272000, 128000, 5.0, 0.5, 30.0), 2.5),
 
 	// ── GPT-5.6 ──
-	"gpt-5.6-sol":   withLongCtx(withCacheCreationPrice(std("GPT-5.6-Sol", 1050000, 128000, 5.0, 0.5, 30.0), 6.25)),
-	"gpt-5.6-terra": withLongCtx(withCacheCreationPrice(std("GPT-5.6-Terra", 372000, 128000, 2.0, 0.2, 12.0), 2.5)),
-	"gpt-5.6-luna":  withLongCtx(withCacheCreationPrice(std("GPT-5.6-Luna", 372000, 128000, 1.0, 0.1, 6.0), 1.25)),
+	GPT56Sol:   withLongCtx(withCacheCreationPrice(std("GPT-5.6-Sol", 1050000, 128000, 5.0, 0.5, 30.0), 6.25)),
+	GPT56Terra: withLongCtx(withCacheCreationPrice(std("GPT-5.6-Terra", 372000, 128000, 2.0, 0.2, 12.0), 2.5)),
+	GPT56Luna:  withLongCtx(withCacheCreationPrice(std("GPT-5.6-Luna", 372000, 128000, 1.0, 0.1, 6.0), 1.25)),
 
 	// ── Codex 5.x ──
 	// gpt-5.3-codex 已失效，保留历史配置但不再注册。
@@ -174,14 +174,10 @@ func CanonicalModel(modelID string) string {
 	return strings.TrimSpace(modelID)
 }
 
-// DefaultSpec 未注册模型的最终兜底值。复用 gpt-5.5 的计价规格，避免返回零价。
-// （0 价格会导致免费流量，之前一个 bug 来源。）
-var DefaultSpec = registry["gpt-5.5"]
-
-// Lookup 查询模型元数据。未命中注册表时按关键字推断到最接近的系列，仍无法匹配再落 DefaultSpec。
+// Lookup resolves registered specifications, then family defaults, then DefaultModelID.
 //
 // 这避免了"客户端请求未知模型 → Spec 全 0 → cost=0 免费使用"的坑：只要能看出系列
-// （mini / image / gpt-5 等），就按对应系列定价；彻底不认识的兜底到 GPT-5.5 标准价。
+// （mini / image / gpt-5 等），就按对应系列定价；彻底不认识的兜底到 GPT-5.6-Sol 标准价。
 func Lookup(modelID string) Spec {
 	id := strings.ToLower(CanonicalModel(modelID))
 	if spec, ok := registry[id]; ok {
@@ -190,7 +186,7 @@ func Lookup(modelID string) Spec {
 	if spec, ok := fallbackByKeyword(id); ok {
 		return spec
 	}
-	return DefaultSpec
+	return registry[DefaultModelID]
 }
 
 // fallbackByKeyword 从模型 ID 关键字推断最接近的已注册系列。未命中返回 (_, false)。
@@ -205,13 +201,13 @@ func fallbackByKeyword(id string) (Spec, bool) {
 	case strings.Contains(id, "image"):
 		return registry["gpt-image-2"], true
 	case strings.Contains(id, "mini") || strings.Contains(id, "nano"):
-		return registry["gpt-5.6-luna"], true
+		return registry[GPT56Luna], true
 	case strings.Contains(id, "gpt-5") || strings.HasPrefix(id, "gpt5") ||
 		strings.Contains(id, "o1") || strings.Contains(id, "o3") || strings.Contains(id, "o4"):
-		return registry["gpt-5.5"], true
+		return registry[DefaultModelID], true
 	case strings.Contains(id, "gpt-4") || strings.HasPrefix(id, "gpt4"):
-		// gpt-4 系列未显式注册，按 gpt-5.5 标准价计。
-		return registry["gpt-5.5"], true
+		// gpt-4 系列未显式注册，按 gpt-5.6-sol 标准价计。
+		return registry[DefaultModelID], true
 	}
 	return Spec{}, false
 }
