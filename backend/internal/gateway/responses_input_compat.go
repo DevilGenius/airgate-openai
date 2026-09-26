@@ -33,8 +33,6 @@ func normalizeTopLevelResponsesTools(reqData map[string]any) bool {
 	tools, changed, valid := normalizeResponsesToolList(rawTools)
 	if !valid {
 		delete(reqData, "tools")
-		delete(reqData, "tool_choice")
-		delete(reqData, "parallel_tool_calls")
 		return true
 	}
 	if !changed {
@@ -42,8 +40,6 @@ func normalizeTopLevelResponsesTools(reqData map[string]any) bool {
 	}
 	if len(tools) == 0 {
 		delete(reqData, "tools")
-		delete(reqData, "tool_choice")
-		delete(reqData, "parallel_tool_calls")
 		return true
 	}
 	reqData["tools"] = tools

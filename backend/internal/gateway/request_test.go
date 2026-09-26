@@ -1571,27 +1571,27 @@ func TestWrapAsResponsesAPIRequiresToolsOnlyWhenToolsPresent(t *testing.T) {
 	}
 }
 
-func TestWrapAsResponsesAPIDropsExplicitToolChoiceWithoutTools(t *testing.T) {
+func TestWrapAsResponsesAPIPreservesExplicitToolChoiceWithoutTools(t *testing.T) {
 	body := []byte(`{"messages":[{"role":"user","content":"hi"}],"tool_choice":"required"}`)
 	result, err := wrapAsResponsesAPI(body, "gpt-5.4")
 	if err != nil {
 		t.Fatalf("wrapAsResponsesAPI: %v", err)
 	}
 
-	if gjson.GetBytes(result, "tool_choice").Exists() {
-		t.Fatalf("tool_choice should be dropped without tools: %s", result)
+	if gjson.GetBytes(result, "tool_choice").String() != "required" {
+		t.Fatalf("explicit tool_choice was lost: %s", result)
 	}
 }
 
-func TestEnsureResponsesDefaultsDropsToolControlWithoutTools(t *testing.T) {
+func TestEnsureResponsesDefaultsPreservesToolControlWithoutTools(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.5","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"parallel_tool_calls":true,"tool_choice":"required"}`)
 	result := ensureResponsesDefaultsWithTier(body, "")
 
-	if gjson.GetBytes(result, "tool_choice").Exists() {
-		t.Fatalf("tool_choice should be removed without tools: %s", result)
+	if gjson.GetBytes(result, "tool_choice").String() != "required" {
+		t.Fatalf("explicit tool_choice was lost: %s", result)
 	}
-	if gjson.GetBytes(result, "parallel_tool_calls").Exists() {
-		t.Fatalf("parallel_tool_calls should be removed without tools: %s", result)
+	if !gjson.GetBytes(result, "parallel_tool_calls").Bool() {
+		t.Fatalf("explicit parallel_tool_calls was lost: %s", result)
 	}
 }
 

@@ -83,19 +83,15 @@ func (g *OpenAIGateway) HandleWebSocket(ctx context.Context, conn sdk.WebSocketC
 
 // handleWSWithOAuth 使用上游 WebSocket 直通（端到端 WS 桥接）
 func (g *OpenAIGateway) handleWSWithOAuth(ctx context.Context, clientConn sdk.WebSocketConn, account *sdk.Account) (*wsDialResult, error) {
-	authHeaders, err := g.buildOpenAIAuthHeaders(ctx, account, false)
-	if err != nil {
-		return nil, err
-	}
 	var clientHeaders http.Header
 	if clientConn != nil && clientConn.ConnectInfo() != nil {
 		clientHeaders = clientConn.ConnectInfo().Headers
 	}
 	fingerprintIDs := g.resolveCodexFingerprintIDs(account, clientHeaders)
-	if fingerprintIDs != nil {
-		passCodexFingerprintCarrierHeaders(clientHeaders, authHeaders)
+	authHeaders, err := g.buildOpenAIWebSocketHeaders(ctx, account, clientHeaders, fingerprintIDs, false)
+	if err != nil {
+		return nil, err
 	}
-	applyCodexFingerprintHeaders(authHeaders, fingerprintIDs)
 	cfg := WSConfig{
 		AccountID:  account.Credentials["chatgpt_account_id"],
 		ProxyURL:   account.ProxyURL,
@@ -106,8 +102,7 @@ func (g *OpenAIGateway) handleWSWithOAuth(ctx context.Context, clientConn sdk.We
 	if err != nil && isOpenAIAgentIdentityAccount(account) && wsResp != nil &&
 		isAgentIdentityTaskInvalidWSError(wsResp.StatusCode, err) {
 		g.invalidateAgentIdentityTask(account, cfg.Headers)
-		if refreshedHeaders, refreshErr := g.buildOpenAIAuthHeaders(ctx, account, true); refreshErr == nil {
-			applyCodexFingerprintHeaders(refreshedHeaders, fingerprintIDs)
+		if refreshedHeaders, refreshErr := g.buildOpenAIWebSocketHeaders(ctx, account, clientHeaders, fingerprintIDs, true); refreshErr == nil {
 			cfg.Headers = refreshedHeaders
 			upstreamConn, wsResp, err = DialWebSocket(ctx, cfg)
 		} else {
@@ -132,9 +127,13 @@ func (g *OpenAIGateway) handleWSWithOAuth(ctx context.Context, clientConn sdk.We
 
 // handleWSWithAPIKey API Key 模式下的 WS 桥接
 func (g *OpenAIGateway) handleWSWithAPIKey(ctx context.Context, clientConn sdk.WebSocketConn, account *sdk.Account) (*wsDialResult, error) {
+	headers, err := g.buildOpenAIWebSocketHeaders(ctx, account, clientConn.ConnectInfo().Headers, nil, false)
+	if err != nil {
+		return nil, err
+	}
 	cfg := WSConfig{
-		Token:    account.Credentials["api_key"],
 		ProxyURL: account.ProxyURL,
+		Headers:  headers,
 	}
 	upstreamConn, wsResp, err := DialWebSocket(ctx, cfg)
 	if err != nil {
@@ -155,6 +154,10 @@ func (g *OpenAIGateway) handleWSWithAPIKey(ctx context.Context, clientConn sdk.W
 
 // bridgeWebSocket 双向桥接客户端和上游的 WebSocket 消息
 func bridgeWebSocket(ctx context.Context, clientConn sdk.WebSocketConn, upstreamConn *websocket.Conn, fingerprintIDs *codexFingerprintIDs, strictCodex bool) error {
+	var clientHeaders http.Header
+	if info := clientConn.ConnectInfo(); info != nil {
+		clientHeaders = info.Headers.Clone()
+	}
 	errCh := make(chan error, 3)
 	var wg sync.WaitGroup
 	var closeOnce sync.Once
@@ -221,7 +224,7 @@ func bridgeWebSocket(ctx context.Context, clientConn sdk.WebSocketConn, upstream
 			if msgType == sdk.WSMessageBinary {
 				wsType = websocket.BinaryMessage
 			} else {
-				data = sanitizeResponsesWebSocketClientMessage(data, responsesNormalizeOptions{strictCodex: strictCodex})
+				data = sanitizeResponsesWebSocketClientMessage(data, responsesNormalizeOptions{strictCodex: strictCodex, headers: clientHeaders})
 				data = applyCodexFingerprintWebSocketMessage(data, fingerprintIDs)
 			}
 			if err := writeWebSocketMessage(upstreamConn, wsType, data); err != nil {

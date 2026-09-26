@@ -322,11 +322,12 @@ func wrapAsResponsesAPIWithTier(body []byte, model string, reqServiceTierOverrid
 		// tool_choice：如果历史中有工具调用记录（处于工具循环中），强制 required
 		// 避免模型在执行阶段只输出文字确认而不调用工具
 		if tc := gjson.GetBytes(body, "tool_choice"); tc.Exists() {
-			if hasTools {
-				wrapped["tool_choice"] = normalizeResponsesToolChoice(tc)
-			}
+			wrapped["tool_choice"] = normalizeResponsesToolChoice(tc)
 		} else if hasTools && messagesHaveToolCalls(gjson.GetBytes(body, "messages").Array()) {
 			wrapped["tool_choice"] = "required"
+		}
+		if parallel := gjson.GetBytes(body, "parallel_tool_calls"); parallel.Exists() {
+			wrapped["parallel_tool_calls"] = parallel.Value()
 		}
 
 		out, err := json.Marshal(wrapped)
@@ -352,8 +353,8 @@ func ensureResponsesDefaultsWithTier(body []byte, reqServiceTierOverride string)
 	if !gjson.GetBytes(result, "instructions").Exists() {
 		result, _ = sjson.SetBytes(result, "instructions", "")
 	}
-	if modified, err := sjson.SetBytes(result, "parallel_tool_calls", true); err == nil {
-		result = modified
+	if !gjson.GetBytes(result, "parallel_tool_calls").Exists() && gjson.GetBytes(result, "tools.#").Int() > 0 {
+		result, _ = sjson.SetBytes(result, "parallel_tool_calls", true)
 	}
 	if hasOpenAIReasoningDefaultsHint(result) {
 		if reasoning := gjson.GetBytes(result, "reasoning"); reasoning.Exists() {
@@ -405,21 +406,6 @@ func ensureResponsesDefaultsWithTier(body []byte, reqServiceTierOverride string)
 		}
 	}
 
-	result = removeResponsesToolControlWithoutTools(result)
-	return result
-}
-
-func removeResponsesToolControlWithoutTools(body []byte) []byte {
-	tools := gjson.GetBytes(body, "tools")
-	if tools.IsArray() && tools.Get("#").Int() > 0 {
-		return body
-	}
-	result := body
-	for _, field := range []string{"tools", "tool_choice", "parallel_tool_calls"} {
-		if gjson.GetBytes(result, field).Exists() {
-			result, _ = sjson.DeleteBytes(result, field)
-		}
-	}
 	return result
 }
 

@@ -11,11 +11,30 @@ import (
 type responsesNormalizeOptions struct {
 	strictCodex bool
 	finalize    bool
-	model       string
 	headers     http.Header
 }
 
 const codexResponsesLiteMetadataPath = "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite"
+
+const codexResponsesLiteHeader = "X-Openai-Internal-Codex-Responses-Lite"
+
+func responsesLiteMarkerEnabled(value any) bool {
+	switch value := value.(type) {
+	case bool:
+		return value
+	case string:
+		return strings.EqualFold(strings.TrimSpace(value), "true")
+	default:
+		return false
+	}
+}
+
+// Protocol headers must survive authentication refresh independently of credentials.
+func passResponsesProtocolHeaders(src, dst http.Header) {
+	if values := src.Values(codexResponsesLiteHeader); len(values) > 0 && dst != nil {
+		dst[codexResponsesLiteHeader] = append([]string(nil), values...)
+	}
+}
 
 // normalizeResponsesRequestMap is the single map-level policy pipeline for
 // Responses input and replay data. It intentionally does not touch status:
@@ -56,7 +75,7 @@ func normalizeResponsesRequestMap(reqData map[string]any, opts responsesNormaliz
 				continue
 			}
 
-			if normalizeResponsesInputItemForPolicy(item, opts, lite) {
+			if normalizeResponsesInputItemForPolicy(item, opts) {
 				changed = true
 			}
 			kept = append(kept, item)
@@ -76,7 +95,7 @@ func normalizeResponsesRequestMap(reqData map[string]any, opts responsesNormaliz
 			}
 		}
 	} else if item, ok := reqData["input"].(map[string]any); ok {
-		if normalizeResponsesInputItemForPolicy(item, opts, lite) {
+		if normalizeResponsesInputItemForPolicy(item, opts) {
 			changed = true
 		}
 	}
@@ -87,7 +106,7 @@ func normalizeResponsesRequestMap(reqData map[string]any, opts responsesNormaliz
 	return changed
 }
 
-func normalizeResponsesInputItemForPolicy(item map[string]any, opts responsesNormalizeOptions, lite bool) bool {
+func normalizeResponsesInputItemForPolicy(item map[string]any, opts responsesNormalizeOptions) bool {
 	if item == nil {
 		return false
 	}
@@ -104,15 +123,6 @@ func normalizeResponsesInputItemForPolicy(item map[string]any, opts responsesNor
 		changed = true
 	}
 
-	itemType := strings.TrimSpace(jsonString(item["type"]))
-	if opts.strictCodex && hasResponsesItemNamespace(itemType, item) {
-		if lite {
-			// Lite carries namespace as a first-class tool-call field.
-		} else {
-			delete(item, "namespace")
-			changed = true
-		}
-	}
 	return changed
 }
 
@@ -132,21 +142,6 @@ func codexReplayItemShouldDrop(reqData map[string]any, itemType string, item map
 		return true
 	case "tool_search_output":
 		return isServerToolSearchOutput(item)
-	default:
-		return false
-	}
-}
-
-func hasResponsesItemNamespace(itemType string, item map[string]any) bool {
-	if item == nil {
-		return false
-	}
-	if _, exists := item["namespace"]; !exists {
-		return false
-	}
-	switch itemType {
-	case "function_call", "custom_tool_call", "mcp_tool_call", "tool_call", "local_shell_call", "tool_search_call":
-		return true
 	default:
 		return false
 	}
@@ -185,22 +180,15 @@ func responsesLiteEnabled(reqData map[string]any, opts responsesNormalizeOptions
 		return false
 	}
 	if opts.headers != nil && strings.EqualFold(strings.TrimSpace(opts.headers.Get("x-openai-internal-codex-responses-lite")), "true") {
-		return responsesLiteModelSupported(opts.modelOrBody(reqData))
+		return true
 	}
-	if strings.EqualFold(strings.TrimSpace(jsonString(gjsonPathValue(reqData, codexResponsesLiteMetadataPath))), "true") {
-		return responsesLiteModelSupported(opts.modelOrBody(reqData))
+	if responsesLiteMarkerEnabled(gjsonPathValue(reqData, codexResponsesLiteMetadataPath)) {
+		return true
 	}
 	// Namespaces are also valid in ordinary Responses tool history. Only an
 	// explicit transport marker may opt a request into the Lite dialect; model
 	// capabilities and tool shapes must never activate it implicitly.
 	return false
-}
-
-func (opts responsesNormalizeOptions) modelOrBody(reqData map[string]any) string {
-	if strings.TrimSpace(opts.model) != "" {
-		return opts.model
-	}
-	return jsonString(reqData["model"])
 }
 
 func gjsonPathValue(reqData map[string]any, path string) any {
@@ -251,28 +239,5 @@ func normalizeResponsesLiteRequest(reqData map[string]any, opts responsesNormali
 		return changed
 	}
 
-	if metadata, ok := reqData["client_metadata"].(map[string]any); ok {
-		if _, exists := metadata["ws_request_header_x_openai_internal_codex_responses_lite"]; exists {
-			delete(metadata, "ws_request_header_x_openai_internal_codex_responses_lite")
-			changed = true
-			if len(metadata) == 0 {
-				delete(reqData, "client_metadata")
-			}
-		}
-	}
 	return changed
-}
-
-func responsesLiteModelSupported(modelID string) bool {
-	id := strings.ToLower(strings.TrimSpace(modelID))
-	if slash := strings.LastIndexByte(id, '/'); slash >= 0 {
-		id = id[slash+1:]
-	}
-	id = strings.TrimSuffix(id, "-openai-compact")
-	switch id {
-	case "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "codex-auto-review":
-		return true
-	default:
-		return false
-	}
 }

@@ -602,7 +602,6 @@ func normalizeWSRequestBody(body []byte, model string, headers http.Header) ([]b
 	if gjson.GetBytes(body, "type").String() == "response.create" {
 		opts := responsesNormalizeOptions{
 			strictCodex: true,
-			model:       model,
 			headers:     headers,
 		}
 		result := normalizeResponsesInputWithOptions(body, "/v1/responses", opts)
@@ -617,7 +616,6 @@ func normalizeWSRequestBody(body []byte, model string, headers http.Header) ([]b
 	}
 	return normalizeResponsesInputWithOptions(wrapped, "/v1/responses", responsesNormalizeOptions{
 		strictCodex: true,
-		model:       model,
 		headers:     headers,
 	}), nil
 }
@@ -676,7 +674,7 @@ func applyContinuationState(reqData map[string]any, session openAISessionResolut
 
 	if previous, ok := reqData["previous_response_id"].(string); ok {
 		if strings.TrimSpace(previous) != "" {
-			normalizeResponsesRequestMap(reqData, responsesNormalizeOptions{strictCodex: true, finalize: true, model: jsonString(reqData["model"])})
+			normalizeResponsesRequestMap(reqData, responsesNormalizeOptions{strictCodex: true, finalize: true})
 			return reqData
 		}
 		delete(reqData, "previous_response_id")
@@ -684,6 +682,6 @@ func applyContinuationState(reqData map[string]any, session openAISessionResolut
 	if requestNeedsPreviousResponseID(reqData) && strings.TrimSpace(session.PreviousRespID) != "" {
 		reqData["previous_response_id"] = strings.TrimSpace(session.PreviousRespID)
 	}
-	normalizeResponsesRequestMap(reqData, responsesNormalizeOptions{strictCodex: true, finalize: true, model: jsonString(reqData["model"])})
+	normalizeResponsesRequestMap(reqData, responsesNormalizeOptions{strictCodex: true, finalize: true})
 	return reqData
 }

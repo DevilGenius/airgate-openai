@@ -211,9 +211,6 @@ func sanitizeResponsesWebSocketClientMessage(message []byte, opts responsesNorma
 	if strings.TrimSpace(gjson.GetBytes(message, "type").String()) != "response.create" {
 		return message
 	}
-	if strings.TrimSpace(opts.model) == "" {
-		opts.model = gjson.GetBytes(message, "model").String()
-	}
 	opts.finalize = true
 	return normalizeResponsesInputWithOptions(message, "/v1/responses", opts)
 }

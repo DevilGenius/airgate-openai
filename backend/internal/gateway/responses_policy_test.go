@@ -19,7 +19,7 @@ func TestResponsesPolicyRequiresExplicitLiteOptInAcrossRequestPaths(t *testing.T
 	}{
 		{"policy", func(body []byte, headers http.Header) ([]byte, error) {
 			return normalizeResponsesInputWithOptions(body, "/v1/responses", responsesNormalizeOptions{
-				strictCodex: true, finalize: true, model: "gpt-5.6-sol", headers: headers,
+				strictCodex: true, finalize: true, headers: headers,
 			}), nil
 		}},
 		{"oauth_request", func(body []byte, headers http.Header) ([]byte, error) {
@@ -139,7 +139,6 @@ func TestResponsesPolicyPreservesLiteNamespaceAcrossWebSocketBody(t *testing.T) 
 	got := normalizeResponsesInputWithOptions(body, "/v1/responses", responsesNormalizeOptions{
 		strictCodex: true,
 		finalize:    true,
-		model:       "gpt-5.6-sol",
 		headers: http.Header{
 			"X-Openai-Internal-Codex-Responses-Lite": []string{"true"},
 		},
@@ -165,7 +164,7 @@ func TestResponsesPolicyPreservesLiteNamespaceAcrossWebSocketBody(t *testing.T) 
 	}
 }
 
-func TestResponsesPolicyRemovesNamespaceForNonLiteCodexModel(t *testing.T) {
+func TestResponsesPolicyPreservesExplicitLiteRegardlessOfModel(t *testing.T) {
 	body := []byte(`{
 		"type":"response.create",
 		"model":"gpt-5.5",
@@ -182,14 +181,13 @@ func TestResponsesPolicyRemovesNamespaceForNonLiteCodexModel(t *testing.T) {
 
 	got := normalizeResponsesInputWithOptions(body, "/v1/responses", responsesNormalizeOptions{
 		strictCodex: true,
-		model:       "gpt-5.5",
 	})
 
-	if gjson.GetBytes(got, "input.0.namespace").Exists() {
-		t.Fatalf("namespace should be removed for non-Lite model: %s", got)
+	if gjson.GetBytes(got, "input.0.namespace").String() != "workspace" {
+		t.Fatalf("namespace was lost: %s", got)
 	}
-	if gjson.GetBytes(got, codexResponsesLiteMetadataPath).Exists() {
-		t.Fatalf("stale Lite marker should be removed: %s", got)
+	if gjson.GetBytes(got, codexResponsesLiteMetadataPath).String() != "true" {
+		t.Fatalf("explicit Lite marker was lost: %s", got)
 	}
 	if status := gjson.GetBytes(got, "input.0.status").String(); status != "completed" {
 		t.Fatalf("status changed unexpectedly: %q; body=%s", status, got)
@@ -212,7 +210,6 @@ func TestResponsesPolicyFiltersStatelessServerOutputs(t *testing.T) {
 	got := normalizeResponsesInputWithOptions(body, "/v1/responses", responsesNormalizeOptions{
 		strictCodex: true,
 		finalize:    true,
-		model:       "gpt-5.6-sol",
 	})
 
 	if count := gjson.GetBytes(got, "input.#").Int(); count != 3 {

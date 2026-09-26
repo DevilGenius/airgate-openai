@@ -88,7 +88,6 @@ func (g *OpenAIGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest
 		if req.Account.Credentials["api_key"] != "" && isResponsesRequestPath(reqPath) {
 			req.Body = normalizeResponsesInputWithOptions(req.Body, reqPath, responsesNormalizeOptions{
 				finalize: true,
-				model:    req.Model,
 				headers:  req.Headers,
 			})
 		}
@@ -934,16 +933,12 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 	}
 	updateSessionStateFromRequest(session, account.ID)
 
-	authHeaders, authErr := g.buildOpenAIAuthHeaders(ctx, account, false)
+	fingerprintIDs := g.resolveCodexFingerprintIDs(account, req.Headers)
+	authHeaders, authErr := g.buildOpenAIWebSocketHeaders(ctx, account, req.Headers, fingerprintIDs, false)
 	if authErr != nil {
 		reason := fmt.Sprintf("构建 OAuth WebSocket 认证头失败: %v", authErr)
 		return accountDeadOutcome(reason), fmt.Errorf("%s", reason)
 	}
-	fingerprintIDs := g.resolveCodexFingerprintIDs(account, req.Headers)
-	if fingerprintIDs != nil {
-		passCodexFingerprintCarrierHeaders(req.Headers, authHeaders)
-	}
-	applyCodexFingerprintHeaders(authHeaders, fingerprintIDs)
 	upstreamReq := *req
 	upstreamReq.Headers = req.Headers.Clone()
 	upstreamReq.Body = applyCodexFingerprintBody(req.Body, fingerprintIDs)
@@ -972,8 +967,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 	if err != nil && isOpenAIAgentIdentityAccount(account) && wsResp != nil &&
 		isAgentIdentityTaskInvalidWSError(wsResp.StatusCode, err) {
 		g.invalidateAgentIdentityTask(account, cfg.Headers)
-		if refreshedHeaders, refreshErr := g.buildOpenAIAuthHeaders(ctx, account, true); refreshErr == nil {
-			applyCodexFingerprintHeaders(refreshedHeaders, fingerprintIDs)
+		if refreshedHeaders, refreshErr := g.buildOpenAIWebSocketHeaders(ctx, account, req.Headers, fingerprintIDs, true); refreshErr == nil {
 			cfg.Headers = refreshedHeaders
 			conn, wsResp, err = DialWebSocket(ctx, cfg)
 		} else {
@@ -1145,8 +1139,7 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 		logger.Warn("agent_identity_task_invalid_retry", sdk.LogFieldAccountID, account.ID)
 		_ = conn.Close()
 		g.invalidateAgentIdentityTask(account, cfg.Headers)
-		if refreshedHeaders, refreshErr := g.buildOpenAIAuthHeaders(ctx, account, true); refreshErr == nil {
-			applyCodexFingerprintHeaders(refreshedHeaders, fingerprintIDs)
+		if refreshedHeaders, refreshErr := g.buildOpenAIWebSocketHeaders(ctx, account, req.Headers, fingerprintIDs, true); refreshErr == nil {
 			cfg.Headers = refreshedHeaders
 			if refreshedConn, _, dialErr := DialWebSocket(ctx, cfg); dialErr == nil {
 				conn = refreshedConn

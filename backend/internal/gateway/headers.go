@@ -16,6 +16,28 @@ import (
 // defaultCodexOriginator 标识 Codex 客户端；ChatGPT 上游的模型部署解析（尤其 GPT-5.6 Luna）依赖此头。
 const defaultCodexOriginator = "codex_cli_rs"
 
+// buildOpenAIWebSocketHeaders rebuilds request headers from their owners on each
+// connection attempt. Client credentials are never copied, and refreshed auth
+// cannot discard protocol or fingerprint headers.
+func (g *OpenAIGateway) buildOpenAIWebSocketHeaders(ctx context.Context, account *sdk.Account, clientHeaders http.Header, fingerprintIDs *codexFingerprintIDs, forceTaskRecovery bool) (http.Header, error) {
+	var headers http.Header
+	if account != nil && account.Credentials["api_key"] != "" {
+		headers = http.Header{"Authorization": {"Bearer " + account.Credentials["api_key"]}}
+	} else {
+		var err error
+		headers, err = g.buildOpenAIAuthHeaders(ctx, account, forceTaskRecovery)
+		if err != nil {
+			return nil, err
+		}
+	}
+	passResponsesProtocolHeaders(clientHeaders, headers)
+	if fingerprintIDs != nil {
+		passCodexFingerprintCarrierHeaders(clientHeaders, headers)
+	}
+	applyCodexFingerprintHeaders(headers, fingerprintIDs)
+	return headers, nil
+}
+
 func resolveCodexOriginator(raw string) string {
 	if originator := strings.TrimSpace(raw); originator != "" {
 		return originator
