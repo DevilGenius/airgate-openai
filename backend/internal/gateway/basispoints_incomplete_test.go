@@ -10,8 +10,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 	"github.com/tidwall/gjson"
+
+	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
 func TestBasispointsIncompletePreservesUsageAndNeverReplays(t *testing.T) {
