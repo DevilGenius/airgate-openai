@@ -323,7 +323,7 @@ func (b *Bridge) rebuildNativeHistoryCall(item object) (object, error) {
 	outer := object{
 		"code": string(code), "summary": "Replay a previously requested client tool",
 		"extended_summary": "The supplied client history contains this tool call; consume its recorded result without repeating it.",
-		"destructive":      false, "references": []any{},
+		"destructive":      false, "references": []any{name},
 	}
 	// Rebuilt calls are examples for subsequent model turns. Use the same raw
 	// transport advertised by today's catalog instead of teaching CUSTOM tools

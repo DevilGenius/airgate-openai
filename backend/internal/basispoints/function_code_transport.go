@@ -70,6 +70,6 @@ func encodeFunctionCodeTransport(name string, args object) (object, error) {
 	}
 	return object{
 		"summary": functionCodeTransportPrefix + name, "code": args["code"],
-		"extended_summary": string(encoded), "destructive": false, "references": []any{},
+		"extended_summary": string(encoded), "destructive": false, "references": []any{name},
 	}, nil
 }

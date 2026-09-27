@@ -85,6 +85,6 @@ func encodeFunctionCmdTransport(name string, args object) (object, error) {
 	}
 	return object{
 		"summary": functionCmdTransportPrefix + name, "code": args["cmd"],
-		"extended_summary": string(encoded), "destructive": false, "references": []any{},
+		"extended_summary": string(encoded), "destructive": false, "references": []any{name},
 	}, nil
 }

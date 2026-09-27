@@ -102,6 +102,9 @@ func (b *Bridge) stream(ctx context.Context, upstream io.ReadCloser, repair Tool
 }
 
 func (b *Bridge) transformWithRepairs(ctx context.Context, reader io.Reader, writer io.Writer, repair ToolRepairFunc, unknown RepairToolCall, summary *StreamSummary) error {
+	localCapture := openLocalArgumentCapture(b.scope)
+	defer localCapture.close()
+	var argumentPadding nativeArgumentPaddingGuard
 	sequence := 0
 	terminal := false
 	var terminalResponse object
@@ -161,6 +164,10 @@ func (b *Bridge) transformWithRepairs(ctx context.Context, reader io.Reader, wri
 			kind = event
 		}
 		summary.observeUpstream(kind, payload, len(data))
+		localCapture.observe(kind, payload)
+		if err := argumentPadding.observe(kind, payload); err != nil {
+			return err
+		}
 		if kind == "response.completed" {
 			if response, ok := payload["response"].(object); !ok || response == nil {
 				return fmt.Errorf("basispoints output is missing its terminal response")
