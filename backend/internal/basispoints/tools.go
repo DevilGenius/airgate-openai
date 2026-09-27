@@ -244,7 +244,7 @@ func (b *Bridge) collectTools(value any, namespace string) ([]any, error) {
 				entry["parameters"] = item["input_schema"]
 			}
 		}
-		definition := fingerprint(item)
+		definition := toolDefinitionFingerprint(item, entry["parameters"])
 		if previous, exists := b.tools[key]; exists {
 			if previous.Definition != definition || previous.Namespace != namespace || previous.Name != name {
 				return nil, fmt.Errorf("conflicting duplicate Basispoints client tool %q", key)
@@ -372,6 +372,7 @@ func (b *Bridge) translateHistory(input []any) ([]any, error) {
 	seenCalls := make(map[string]bool)
 	var trigger any
 	for index, raw := range input {
+		var toolImages object
 		item, ok := raw.(object)
 		if !ok {
 			return nil, fmt.Errorf("invalid Basispoints input item")
@@ -427,13 +428,21 @@ func (b *Bridge) translateHistory(input []any) ([]any, error) {
 				itemID = "fc_" + fingerprint(itemID)
 			}
 			item["id"] = itemID
+			toolImages = separateToolImages(item)
 		case "configuration_update":
 			return nil, fmt.Errorf("basispoints does not support configuration_update; start a new request with the desired effort")
 		}
 		if err := b.validateHistoryContent(item["content"], index, "content"); err != nil {
 			return nil, err
 		}
+		item, err := normalizeHistoryMessage(item, index)
+		if err != nil {
+			return nil, err
+		}
 		result = append(result, item)
+		if toolImages != nil {
+			result = append(result, toolImages)
+		}
 	}
 	if trigger != nil {
 		result = append(result, trigger)

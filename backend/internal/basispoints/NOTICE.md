@@ -19,6 +19,15 @@ Disk image relay and attachment upload are intentionally excluded. Inline
 images and native file IDs route through AirGate's ordinary OAuth transport.
 The gateway owns authentication, HTTP clients, cancellation and usage reporting.
 No automatic tool-regeneration requests are enabled by this integration.
+
+AirGate also adapts Sub2API commits 207f31e4e and fdd3532b8 for history
+attribution, and 8c3776a45 for tool catalog contracts and tool image references.
+These run in the existing stateless PrepareRequest path: history is validated
+before attribution is lowered, current tool declarations win over historical
+discovery annotations, and HTTPS tool images become adjacent attributed messages.
+Native attachments and inline images continue through native OAuth. No upstream
+attachment uploader, persistent catalog dependency or compatibility switch is added.
+
 The production entry point does not use the source's optional replay/catalog
 caches. It reconstructs tool history from the current request, avoiding
 process-local history dependencies and gateway-owned adapter state. Low-level
