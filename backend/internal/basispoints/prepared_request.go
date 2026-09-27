@@ -51,8 +51,10 @@ func (r *PreparedRequest) Body() io.Reader { return bytes.NewReader(r.body) }
 
 // Stream takes ownership of upstream. Closing the returned body cancels protocol
 // translation and closes upstream, including a read or pipe write in progress.
-func (r *PreparedRequest) Stream(ctx context.Context, upstream io.ReadCloser) io.ReadCloser {
-	return r.bridge.StreamWithToolRepair(ctx, upstream, nil)
+// report, when non-nil, receives one content-free summary from the stream goroutine
+// after closing the stream. Reading EOF does not wait for the diagnostic callback.
+func (r *PreparedRequest) Stream(ctx context.Context, upstream io.ReadCloser, report func(StreamSummary)) io.ReadCloser {
+	return r.bridge.stream(ctx, upstream, nil, nil, report)
 }
 
 func requestFallbackReason(body []byte) FallbackReason {

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -98,7 +99,18 @@ func (g *OpenAIGateway) openBasispoints(ctx context.Context, req *sdk.ForwardReq
 		cancel()
 		return nil, true, fmt.Errorf("basispoints returned a non-SSE response")
 	}
-	converted := prepared.Stream(ctx, resp.Body)
+	converted := prepared.Stream(ctx, resp.Body, func(summary basispoints.StreamSummary) {
+		level := slog.LevelDebug
+		if summary.DownstreamTerminal != "response.completed" || summary.ReadOrWriteError {
+			level = slog.LevelWarn
+		}
+		logger := sdk.LoggerFromContext(ctx)
+		if !logger.Enabled(ctx, level) {
+			return
+		}
+		logger.Log(ctx, level, "basispoints_stream_finished",
+			"model", req.Model, "account_id", req.Account.ID, "stream", fmt.Sprintf("%+v", summary))
+	})
 	if req.Stream {
 		converted = newBasispointsKeepaliveBody(ctx, converted, basispointsKeepaliveInterval)
 	}
@@ -176,6 +188,9 @@ func (g *OpenAIGateway) tryBasispointsOAuth(ctx context.Context, req *sdk.Forwar
 	setUsageReasoningEffort(usage, gjson.GetBytes(body, "reasoning.effort").String())
 	setUsageResponseID(usage, result.ResponseID)
 	setUsageMetadata(usage, "oauth_transport", "basispoints")
+	if result.StopReason == "max_output_tokens" {
+		setUsageMetadata(usage, "openai.incomplete_reason", result.StopReason)
+	}
 	fillUsageCost(usage)
 	if result.Err != nil {
 		outputStarted := sse != nil && sse.wrote || chat != nil && chat.wrote
@@ -200,6 +215,16 @@ func (g *OpenAIGateway) tryBasispointsOAuth(ctx context.Context, req *sdk.Forwar
 			outcome.Reason = "client_write_failed"
 		}
 	case sse != nil:
+		if result.StopReason == "max_output_tokens" {
+			// The original response.incomplete was already forwarded. Codex treats
+			// it as an unfinished response, even though HTTP transport succeeded.
+			// Record the terminal failure without replaying, discarding usage, or
+			// appending a second synthetic terminal event. Chat's length result
+			// and non-streaming Responses' incomplete JSON remain valid results.
+			outcome.Kind = sdk.OutcomeStreamAborted
+			outcome.Reason = "response.incomplete: max_output_tokens"
+			return outcome, true, nil
+		}
 		if err := writeSSEDone(req.Writer); err != nil {
 			outcome.Kind = sdk.OutcomeStreamAborted
 			outcome.Reason = "client_write_failed"

@@ -9,6 +9,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"time"
 )
 
 type protocolError struct{ error }
@@ -44,17 +45,17 @@ func (b *Bridge) Stream(upstream io.ReadCloser) io.ReadCloser {
 // StreamWithToolRepair permits bounded native tool-error continuations before
 // dispatch. Closing the stream cancels both the active request and correction.
 func (b *Bridge) StreamWithToolRepair(ctx context.Context, upstream io.ReadCloser, repair ToolRepairFunc) io.ReadCloser {
-	return b.StreamWithRepairs(ctx, upstream, repair, nil)
+	return b.stream(ctx, upstream, repair, nil, nil)
 }
 
 // StreamWithRepair adds only first-turn unknown-target recovery.
 func (b *Bridge) StreamWithRepair(ctx context.Context, upstream io.ReadCloser, repair RepairToolCall) io.ReadCloser {
-	return b.StreamWithRepairs(ctx, upstream, nil, repair)
+	return b.stream(ctx, upstream, nil, repair, nil)
 }
 
-// StreamWithRepairs keeps known-target transport corrections and first-turn
+// stream keeps known-target transport corrections and first-turn
 // unknown-target regeneration separate; neither can dispatch unvalidated tools.
-func (b *Bridge) StreamWithRepairs(ctx context.Context, upstream io.ReadCloser, repair ToolRepairFunc, unknown RepairToolCall) io.ReadCloser {
+func (b *Bridge) stream(ctx context.Context, upstream io.ReadCloser, repair ToolRepairFunc, unknown RepairToolCall, report func(StreamSummary)) io.ReadCloser {
 	ctx, cancel := context.WithCancel(ctx)
 	reader, writer := io.Pipe()
 	body := &streamBody{PipeReader: reader, upstream: upstream, cancel: cancel}
@@ -75,20 +76,32 @@ func (b *Bridge) StreamWithRepairs(ctx context.Context, upstream io.ReadCloser, 
 		}
 	}
 	go func() {
+		start := time.Now()
+		var summary *StreamSummary
+		if report != nil {
+			summary = new(StreamSummary)
+		}
 		defer cancel()
 		stop := context.AfterFunc(ctx, func() {
 			_ = writer.CloseWithError(ctx.Err())
 			_ = body.closeUpstream()
 		})
 		defer stop()
-		err := b.transformWithRepairs(ctx, upstream, writer, continueTool, regenerate)
+		err := b.transformWithRepairs(ctx, upstream, writer, continueTool, regenerate, summary)
 		_ = body.closeUpstream()
+		// Diagnostic output must not delay EOF or retain the caller's request
+		// capacity if the log sink is slow. It uses only this goroutine's counters.
 		_ = writer.CloseWithError(err)
+		if report != nil {
+			summary.DurationMs = time.Since(start).Milliseconds()
+			summary.ReadOrWriteError = err != nil
+			report(*summary)
+		}
 	}()
 	return body
 }
 
-func (b *Bridge) transformWithRepairs(ctx context.Context, reader io.Reader, writer io.Writer, repair ToolRepairFunc, unknown RepairToolCall) error {
+func (b *Bridge) transformWithRepairs(ctx context.Context, reader io.Reader, writer io.Writer, repair ToolRepairFunc, unknown RepairToolCall, summary *StreamSummary) error {
 	sequence := 0
 	terminal := false
 	var terminalResponse object
@@ -104,6 +117,9 @@ func (b *Bridge) transformWithRepairs(ctx context.Context, reader io.Reader, wri
 			return err
 		}
 		_, err = fmt.Fprintf(writer, "event: %s\ndata: %s\n\n", kind, raw)
+		if err == nil {
+			summary.observeDownstream(kind, payload)
+		}
 		return err
 	}
 	emitTool := func(item object, index any) error {
@@ -144,6 +160,7 @@ func (b *Bridge) transformWithRepairs(ctx context.Context, reader io.Reader, wri
 		if kind == "" {
 			kind = event
 		}
+		summary.observeUpstream(kind, payload, len(data))
 		if kind == "response.completed" {
 			if response, ok := payload["response"].(object); !ok || response == nil {
 				return fmt.Errorf("basispoints output is missing its terminal response")

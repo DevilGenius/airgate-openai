@@ -73,7 +73,7 @@ func TestPreparedRequestFullToolHistoryNeedsNoPriorRequest(t *testing.T) {
 				t.Fatalf("initial request: %s", reason)
 			}
 			wire := sse(object{"type": "response.completed", "response": object{"id": "resp_first", "status": "completed", "output": []any{nativeCall(envelope)}}})
-			stream := initial.Stream(context.Background(), io.NopCloser(strings.NewReader(wire)))
+			stream := initial.Stream(context.Background(), io.NopCloser(strings.NewReader(wire)), nil)
 			defer func() { _ = stream.Close() }()
 			var call object
 			if err := readEvents(stream, func(kind string, data []byte) error {
