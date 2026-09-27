@@ -13,8 +13,9 @@ import (
 	"testing"
 	"time"
 
-	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 	"github.com/tidwall/gjson"
+
+	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
 const bpsCompleted = `data: {"type":"response.completed","response":{"id":"resp_bps","model":"gpt-5.6-sol","status":"completed","output":[{"id":"msg_1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"hello"}]}],"usage":{"input_tokens":12,"output_tokens":3,"input_tokens_details":{"cached_tokens":4}}}}

@@ -3,9 +3,10 @@ package basispoints
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/santhosh-tekuri/jsonschema/v6"
 	"strconv"
 	"strings"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 // Compile once per request, preserve json.Number, and never resolve external

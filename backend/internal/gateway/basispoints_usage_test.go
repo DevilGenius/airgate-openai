@@ -12,10 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DevilGenius/airgate-openai/backend/internal/model"
-	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+
+	"github.com/DevilGenius/airgate-openai/backend/internal/model"
+	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
 func TestBasispointsCacheCreationIsExclusiveAcrossProtocols(t *testing.T) {

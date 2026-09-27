@@ -11,11 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DevilGenius/airgate-openai/backend/internal/model"
-	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 	"github.com/gorilla/websocket"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+
+	"github.com/DevilGenius/airgate-openai/backend/internal/model"
+	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
 func TestOAuthAndBasispointsDoNotInferCacheCreation(t *testing.T) {
