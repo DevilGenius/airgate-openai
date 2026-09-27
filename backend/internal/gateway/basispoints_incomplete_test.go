@@ -50,7 +50,7 @@ func TestBasispointsIncompletePreservesUsageAndNeverReplays(t *testing.T) {
 					if !used || err != nil || outcome.Kind != want || outcome.ShouldFailover() || calls.Load() != 1 {
 						t.Fatalf("incorrect terminal outcome: %+v, used=%v err=%v calls=%d", outcome, used, err, calls.Load())
 					}
-					if outcome.Usage == nil || outcome.Usage.OutputTokens != 128000 || outcome.Usage.InputTokens != 8 || outcome.Usage.CachedInputTokens != 4 || usageMetadataText(outcome.Usage, "openai.incomplete_reason") != "max_output_tokens" {
+					if outcome.Usage == nil || outcome.Usage.OutputTokens != 128000 || outcome.Usage.InputTokens != 8 || outcome.Usage.CachedInputTokens != 4 {
 						t.Fatalf("incomplete usage lost: %+v", outcome.Usage)
 					}
 					payload := string(outcome.Upstream.Body)

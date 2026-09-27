@@ -49,7 +49,7 @@ func TestBPSKeepaliveDuringBaselineValidationWait(t *testing.T) {
 			}
 			raw, producer := io.Pipe()
 			defer func() { _ = producer.Close() }()
-			body := newBasispointsKeepaliveBody(ctx, prepared.Stream(ctx, raw, nil), 5*time.Millisecond)
+			body := newBasispointsKeepaliveBody(ctx, prepared.Stream(ctx, raw), 5*time.Millisecond)
 			defer func() { _ = body.Close() }()
 			go func() {
 				_, _ = io.WriteString(producer, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_bps\"}}\n\n")

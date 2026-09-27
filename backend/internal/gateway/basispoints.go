@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -99,18 +98,7 @@ func (g *OpenAIGateway) openBasispoints(ctx context.Context, req *sdk.ForwardReq
 		cancel()
 		return nil, true, fmt.Errorf("basispoints returned a non-SSE response")
 	}
-	converted := prepared.Stream(ctx, resp.Body, func(summary basispoints.StreamSummary) {
-		level := slog.LevelDebug
-		if summary.DownstreamTerminal != "response.completed" || summary.ReadOrWriteError {
-			level = slog.LevelWarn
-		}
-		logger := sdk.LoggerFromContext(ctx)
-		if !logger.Enabled(ctx, level) {
-			return
-		}
-		logger.Log(ctx, level, "basispoints_stream_finished",
-			"model", req.Model, "account_id", req.Account.ID, "stream", fmt.Sprintf("%+v", summary))
-	})
+	converted := prepared.Stream(ctx, resp.Body)
 	if req.Stream {
 		converted = newBasispointsKeepaliveBody(ctx, converted, basispointsKeepaliveInterval)
 	}
@@ -188,9 +176,6 @@ func (g *OpenAIGateway) tryBasispointsOAuth(ctx context.Context, req *sdk.Forwar
 	setUsageReasoningEffort(usage, gjson.GetBytes(body, "reasoning.effort").String())
 	setUsageResponseID(usage, result.ResponseID)
 	setUsageMetadata(usage, "oauth_transport", "basispoints")
-	if result.StopReason == "max_output_tokens" {
-		setUsageMetadata(usage, "openai.incomplete_reason", result.StopReason)
-	}
 	fillUsageCost(usage)
 	if result.Err != nil {
 		outputStarted := sse != nil && sse.wrote || chat != nil && chat.wrote
