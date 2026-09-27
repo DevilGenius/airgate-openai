@@ -63,8 +63,8 @@ func TestBuildPluginInfoAndRoutes(t *testing.T) {
 	}) {
 		t.Fatalf("unexpected account pool adjustment config: %#v", adjustmentConfig)
 	}
-	if !reflect.DeepEqual(info.InstructionPresets, []string{"default", "simple", "nsfw", "cc"}) {
-		t.Fatalf("InstructionPresets = %#v", info.InstructionPresets)
+	if len(info.InstructionPresets) != 0 {
+		t.Fatalf("retired instruction presets still advertised: %#v", info.InstructionPresets)
 	}
 	if info.Metadata["account.oauth_plans"] == "" {
 		t.Fatal("expected oauth plan metadata")

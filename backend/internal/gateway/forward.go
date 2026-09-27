@@ -84,7 +84,6 @@ func (g *OpenAIGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest
 			encryptedContentHashSessionFromContext(ctx),
 			req.Headers,
 		)
-		req.Body = applyForceInstructions(req.Body, req.Headers)
 		if req.Account.Credentials["api_key"] != "" && isResponsesRequestPath(reqPath) {
 			req.Body = normalizeResponsesInputWithOptions(req.Body, reqPath, responsesNormalizeOptions{
 				finalize: true,

@@ -130,7 +130,6 @@ func BuildPluginInfo() sdk.PluginInfo {
 			{Slot: sdk.SlotUsageMetricDetail, EntryFile: "index.js", Title: "OpenAI 计量明细"},
 			{Slot: sdk.SlotUsageCostDetail, EntryFile: "index.js", Title: "OpenAI 费用明细"},
 		},
-		InstructionPresets: []string{"default", "simple", "nsfw", "cc"},
 	}
 }
 

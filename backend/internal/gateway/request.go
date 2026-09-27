@@ -12,7 +12,6 @@ import (
 	"github.com/tidwall/sjson"
 
 	"github.com/DevilGenius/airgate-openai/backend/internal/model"
-	"github.com/DevilGenius/airgate-openai/backend/resources"
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
@@ -543,26 +542,8 @@ func (g *OpenAIGateway) buildWSRequest(req *sdk.ForwardRequest, session openAISe
 	if err != nil {
 		return nil, err
 	}
-	// applyForceInstructions 已在 forwardHTTP 入口统一处理
 	body = applyOpenAIWireReasoningEffort(body, req.Model)
 	return applyOpenAIWireServiceTier(body, req.Headers), nil
-}
-
-// applyForceInstructions 若请求头中指定了 X-Airgate-Force-Instructions 则强制覆盖 instructions 字段。
-// 支持内置别名 "default" / "simple" / "nsfw"，也可直接填入完整 instructions 文本。
-func applyForceInstructions(body []byte, headers http.Header) []byte {
-	if len(body) == 0 || headers == nil {
-		return body
-	}
-	raw := headers.Get("X-Airgate-Force-Instructions")
-	if raw == "" {
-		return body
-	}
-	resolved := resources.ResolveInstructions(raw)
-	if modified, err := sjson.SetBytes(body, "instructions", resolved); err == nil {
-		return modified
-	}
-	return body
 }
 
 // buildCodexWSRequest Codex CLI 透传模式

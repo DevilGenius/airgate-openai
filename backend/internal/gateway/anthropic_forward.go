@@ -260,7 +260,6 @@ func (g *OpenAIGateway) forwardAnthropicResponses(
 ) (sdk.ForwardOutcome, []byte, error) {
 	account := req.Account
 	logger := sdk.LoggerFromContext(ctx)
-	responsesBody = applyForceInstructions(responsesBody, req.Headers)
 	if outcome, used := g.tryBasispointsAnthropic(ctx, req, responsesBody, originalModel, mappedModel, start, w); used {
 		return outcome, nil, nil
 	}
