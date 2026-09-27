@@ -1371,6 +1371,10 @@ func (s *sseEventWriter) OnRawEvent(eventType string, data []byte) {
 	if s.w == nil || eventType == "" || s.err != nil {
 		return
 	}
+	if handled, err := handleBasispointsKeepalive(eventType, s.w, s.wrote, s); handled {
+		s.err = err
+		return
+	}
 	data = normalizeInvalidImageInputEvent(eventType, data)
 	if err := checkResponseEvent(data); err != nil {
 		s.err = err

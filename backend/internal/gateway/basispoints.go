@@ -98,7 +98,11 @@ func (g *OpenAIGateway) openBasispoints(ctx context.Context, req *sdk.ForwardReq
 		cancel()
 		return nil, true, fmt.Errorf("basispoints returned a non-SSE response")
 	}
-	resp.Body = &basispointsBody{ReadCloser: prepared.Stream(ctx, resp.Body), cancel: cancel}
+	converted := prepared.Stream(ctx, resp.Body)
+	if req.Stream {
+		converted = newBasispointsKeepaliveBody(ctx, converted, basispointsKeepaliveInterval)
+	}
+	resp.Body = &basispointsBody{ReadCloser: converted, cancel: cancel}
 	sdk.LoggerFromContext(ctx).Debug("basispoints_request_started", "model", req.Model, "account_id", req.Account.ID)
 	return resp, true, nil
 }

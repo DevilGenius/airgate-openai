@@ -141,6 +141,10 @@ func (s *chatCompletionsStreamWriter) OnRawEvent(eventType string, data []byte) 
 	if s.w == nil || eventType == "" || s.err != nil {
 		return
 	}
+	if handled, err := handleBasispointsKeepalive(eventType, s.w, s.wrote, s); handled {
+		s.err = err
+		return
+	}
 	s.timing.observe(eventType, data)
 	if failure := invalidImageInputFailureFromEvent(eventType, data); failure != nil {
 		s.writeClientError(failure)
@@ -575,7 +579,7 @@ func (h *responsesSilentHandler) OnRateLimits(usedPercent float64) {
 }
 
 func (h *responsesSilentHandler) OnRawEvent(eventType string, data []byte) {
-	if eventType == "" {
+	if eventType == "" || eventType == basispointsKeepaliveEventType {
 		return
 	}
 	h.timing.observe(eventType, data)

@@ -929,10 +929,18 @@ func translateResponsesSSEToAnthropicSSE(
 					goto done
 				}
 			}
+			eventType := streamDiagnosticEventType(data)
+			if handled, err := handleBasispointsKeepalive(eventType, w, outputWritten, anthropicBasispointsKeepalive{}); handled {
+				if err != nil {
+					streamErr = err
+					_ = resp.Body.Close()
+					goto done
+				}
+				continue
+			}
 			if compactIdleTimer != nil && !compactIdleTimedOut.Load() {
 				compactIdleTimer.Reset(compactEventIdleTimeout)
 			}
-			eventType := streamDiagnosticEventType(data)
 			commitOutput = isResponseOutputEvent(eventType, []byte(data))
 			if isResponsesTerminalEvent(eventType) && !gjson.Valid(data) {
 				streamErr = fmt.Errorf("上游流式终止事件 JSON 不完整")
