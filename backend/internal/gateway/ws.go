@@ -745,24 +745,20 @@ func extractUsageFromResponseMap(result *WSResult, resp map[string]any) {
 	if usage, ok := resp["usage"].(map[string]any); ok {
 		rawInputTokens := JsonInt(usage, "input_tokens")
 		result.OutputTokens = JsonInt(usage, "output_tokens")
-		cacheCreationDefined := false
+		result.CachedInputTokens = 0
 		if details, ok := usage["input_tokens_details"].(map[string]any); ok {
 			result.CachedInputTokens = JsonInt(details, "cached_tokens")
-			if _, ok := details["cache_write_tokens"]; ok {
-				result.CacheCreationTokens = max(JsonInt(details, "cache_write_tokens"), 0)
-				cacheCreationDefined = true
-			} else if _, ok := details["cache_creation_tokens"]; ok {
-				result.CacheCreationTokens = JsonInt(details, "cache_creation_tokens")
-				cacheCreationDefined = true
-			}
 		}
-		if !cacheCreationDefined {
-			if _, ok := usage["cache_creation_input_tokens"]; ok {
-				result.CacheCreationTokens = max(JsonInt(usage, "cache_creation_input_tokens"), 0)
-			} else if _, ok := usage["cache_write_input_tokens"]; ok {
-				result.CacheCreationTokens = max(JsonInt(usage, "cache_write_input_tokens"), 0)
+		result.CacheCreationTokens = cacheCreationTokensFromFields(func(path string) (int, bool) {
+			node := usage
+			parts := strings.Split(path, ".")
+			for _, part := range parts[:len(parts)-1] {
+				node, _ = node[part].(map[string]any)
 			}
-		}
+			key := parts[len(parts)-1]
+			_, exists := node[key]
+			return JsonInt(node, key), exists
+		})
 		if details, ok := usage["output_tokens_details"].(map[string]any); ok {
 			result.ReasoningOutputTokens = JsonInt(details, "reasoning_tokens")
 		}

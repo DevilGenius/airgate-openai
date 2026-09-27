@@ -951,22 +951,10 @@ type openaiUsage struct {
 }
 
 func cacheCreationTokensFromUsage(usage gjson.Result) int {
-	if value := usage.Get("input_tokens_details.cache_write_tokens"); value.Exists() {
-		return max(int(value.Int()), 0)
-	}
-	if value := usage.Get("prompt_tokens_details.cache_write_tokens"); value.Exists() {
-		return max(int(value.Int()), 0)
-	}
-	if value := usage.Get("input_tokens_details.cache_creation_tokens"); value.Exists() {
-		return max(int(value.Int()), 0)
-	}
-	if value := usage.Get("cache_creation_input_tokens"); value.Exists() {
-		return max(int(value.Int()), 0)
-	}
-	if value := usage.Get("cache_write_input_tokens"); value.Exists() {
-		return max(int(value.Int()), 0)
-	}
-	return 0
+	return cacheCreationTokensFromFields(func(path string) (int, bool) {
+		value := usage.Get(path)
+		return int(value.Int()), value.Exists()
+	})
 }
 
 // parseUsage 从完整响应体解析 usage

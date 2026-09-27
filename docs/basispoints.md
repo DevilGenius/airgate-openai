@@ -32,6 +32,34 @@ BPS 使用固定 `/basispoints/api/responses` 地址和 Excel 客户端画像。
 BPS 的 response ID 不写入普通 OAuth 续接缓存，失败不改变普通 OAuth 的权益冷却。
 用量使用现有 token 计费，并记录 `oauth_transport=basispoints`。
 
+## 缓存用量与计费口径
+
+BPS Responses 的 `input_tokens` 按包含缓存读取和创建的总输入处理。插件先拆成互斥的三部分，
+再传给 SDK / Core：普通输入 = 总输入 − 缓存读取 − 缓存创建。
+例如总输入 1,000、读取 200、创建 300，则记普通输入 500、读取 200、创建 300。
+三类 token 各按现有模型价格计费一次；Core 汇总分项成本后应用倍率，不再对总输入重复收费。
+本次适配保留缓存创建统计和现有缓存创建单价，不将其清零或额外加到普通输入上。
+
+是否计入缓存创建由**本次上游响应的实际字段**决定，不由 BPS 开关决定。普通 OAuth
+或 BPS 都没有返回创建字段时，创建 token 和创建费用均为 0；未命中的输入仍按普通输入计量，
+不会以 `input_tokens - cached_tokens` 推算成缓存创建。即使模型配置有缓存创建单价，也不会
+在创建 token 为 0 时收费。只有明确返回创建总数或 TTL 创建明细时才记录该项。
+这里的字段支持来自参考实现，不表示所有 BPS 请求都会返回这些字段；尚无本项目的真实
+BPS 原始响应及账单核对证据。
+
+两个上游解析入口共用缓存创建字段优先级：`input_tokens_details.cache_write_tokens`、
+`prompt_tokens_details.cache_write_tokens`、两者的 `cache_creation_tokens` 别名、
+顶层 `cache_creation_input_tokens` / `cache_write_input_tokens` / `cache_write_tokens` / `cache_creation_tokens`。
+同一指标的别名只选一个，显式零值优先；只有总数字段全部缺失时才合计 5m 和 1h TTL 明细，
+不把 TTL 明细再次加到创建总数上。读取和创建被限制在总输入范围内，防止负数和重复计量。
+
+客户端字段遵循各自协议：Responses/Chat 的输入总数包含缓存；Anthropic 的 `input_tokens`
+只包含普通输入，读取和创建另外列出。因此不能把 OpenAI 输入总数与其缓存明细再次相加。
+本地回归覆盖 12 组缓存字段表达（包含缺失/零值）× 3 种协议 × 流式/非流式，以及 Core 分项成本和倍率计算；
+普通 OAuth WebSocket、普通 SSE、Anthropic 转换及 BPS 的无创建字段对照还覆盖缓存读取为
+0、部分命中、全部命中三种情况。
+这些是模拟报文验证，不代表已取得真实 BPS 账单进行核销。
+
 ## 降级决策
 
 主要回退方式是关闭分组开关。为保证开启后不破坏普通请求，仅保留以下同请求兼容处理：
