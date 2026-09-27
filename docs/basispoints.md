@@ -101,6 +101,11 @@ Anthropic Messages 均支持 BPS 的流式和非流式响应。
 上游实际读空闲仍使用 0.2.80 的保护；取消和终态结束读取，保活不能延长已断开的上游。
 读取泵只缓存一个待交付 SSE 帧，按字节线性处理，不扫描对话历史或重复解析累计参数。
 
+三种客户端协议共用 basispointsKeepaliveEncoder 编码接口和 handleBasispointsKeepalive
+提交策略；BPS 与图片 SSE 共用 writeSSEFrame 处理写入、短写错误和 Flush。
+发送间隔、首输出前是否发送、取消与终态由原有控制器负责。WebSocket 使用自身的
+Ping/Pong 控制帧机制，不套用 SSE 编码或 HTTP 提交规则。
+
 回归覆盖持续隐藏思考不被误杀、三种客户端协议保活、首输出前失败仍可重试、取消释放、
 原始帧保留、分片边界和真正上游读空闲退出。保活用于维持等待，不代表上游已生成正文。
 

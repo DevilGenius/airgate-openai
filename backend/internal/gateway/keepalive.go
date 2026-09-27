@@ -12,25 +12,14 @@ import (
 const imageKeepAliveInterval = 30 * time.Second
 
 func writeSSEPing(w http.ResponseWriter) error {
-	return writeImageSSEBytes(w, []byte("event: ping\ndata: {}\n\n"))
+	return writeSSEFrame(w, []byte("event: ping\ndata: {}\n\n"))
 }
 
-func writeImageSSEBytes(w http.ResponseWriter, data []byte) error {
-	n, err := w.Write(data)
-	if err != nil {
-		return err
-	}
-	if n != len(data) {
-		return io.ErrShortWrite
-	}
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
-	}
-	return nil
-}
-
-func writeSSEData(w http.ResponseWriter, data []byte) error {
-	for _, part := range [][]byte{[]byte("data: "), data, []byte("\n\n")} {
+// writeSSEFrame writes the supplied parts in order and flushes only after all
+// writes succeed. Callers retain protocol encoding, commitment and scheduling;
+// this primitive never adds headers, marks completion or starts a goroutine.
+func writeSSEFrame(w http.ResponseWriter, parts ...[]byte) error {
+	for _, part := range parts {
 		n, err := w.Write(part)
 		if err != nil {
 			return err
@@ -45,8 +34,12 @@ func writeSSEData(w http.ResponseWriter, data []byte) error {
 	return nil
 }
 
+func writeSSEData(w http.ResponseWriter, data []byte) error {
+	return writeSSEFrame(w, []byte("data: "), data, []byte("\n\n"))
+}
+
 func writeSSEDone(w http.ResponseWriter) error {
-	return writeImageSSEBytes(w, []byte("data: [DONE]\n\n"))
+	return writeSSEFrame(w, []byte("data: [DONE]\n\n"))
 }
 
 func writeSSEError(w http.ResponseWriter, message string) error {

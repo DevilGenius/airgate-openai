@@ -1,9 +1,6 @@
 package gateway
 
-import (
-	"io"
-	"net/http"
-)
+import "net/http"
 
 // Private control event: upstream/native keepalive behavior remains v0.2.80's.
 const basispointsKeepaliveEventType = "airgate.basispoints.keepalive"
@@ -35,16 +32,5 @@ func handleBasispointsKeepalive(kind string, w http.ResponseWriter, started bool
 	if !started || w == nil {
 		return true, nil
 	}
-	frame := encoder.basispointsKeepalive()
-	n, err := w.Write(frame)
-	if err == nil && n != len(frame) {
-		err = io.ErrShortWrite
-	}
-	if err != nil {
-		return true, err
-	}
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
-	}
-	return true, nil
+	return true, writeSSEFrame(w, encoder.basispointsKeepalive())
 }
