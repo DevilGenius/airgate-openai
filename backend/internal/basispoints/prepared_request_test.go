@@ -74,7 +74,7 @@ func TestPreparedRequestFullToolHistoryNeedsNoPriorRequest(t *testing.T) {
 			}
 			wire := sse(object{"type": "response.completed", "response": object{"id": "resp_first", "status": "completed", "output": []any{nativeCall(envelope)}}})
 			stream := initial.Stream(context.Background(), io.NopCloser(strings.NewReader(wire)))
-			defer stream.Close()
+			defer func() { _ = stream.Close() }()
 			var call object
 			if err := readEvents(stream, func(kind string, data []byte) error {
 				if kind == "response.completed" {

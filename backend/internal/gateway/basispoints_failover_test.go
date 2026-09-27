@@ -61,25 +61,25 @@ func TestBasispointsUsesCoreRetryOutcomesBeforeOutput(t *testing.T) {
 						case "http_limit":
 							w.Header().Set("Content-Type", "application/json")
 							w.WriteHeader(400)
-							fmt.Fprint(w, limitBody)
+							_, _ = fmt.Fprint(w, limitBody)
 							return
 						case "http_server":
 							w.WriteHeader(503)
-							fmt.Fprint(w, "temporary upstream failure")
+							_, _ = fmt.Fprint(w, "temporary upstream failure")
 							return
 						case "bad_request":
 							w.Header().Set("Content-Type", "application/json")
 							w.WriteHeader(400)
-							fmt.Fprint(w, "{\"error\":{\"type\":\"invalid_request_error\",\"message\":\"invalid parameter\"}}")
+							_, _ = fmt.Fprint(w, "{\"error\":{\"type\":\"invalid_request_error\",\"message\":\"invalid parameter\"}}")
 							return
 						}
 						w.Header().Set("Content-Type", "text/event-stream")
-						fmt.Fprint(w, "data: "+created+"\n\n")
+						_, _ = fmt.Fprint(w, "data: "+created+"\n\n")
 						if strings.HasPrefix(scenario, "late_") {
-							fmt.Fprint(w, "data: "+delta+"\n\n")
+							_, _ = fmt.Fprint(w, "data: "+delta+"\n\n")
 						}
 						if strings.HasSuffix(scenario, "limit") {
-							fmt.Fprint(w, "data: "+failed+"\n\n")
+							_, _ = fmt.Fprint(w, "data: "+failed+"\n\n")
 						}
 					})
 					var outcome sdk.ForwardOutcome

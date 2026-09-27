@@ -67,7 +67,7 @@ func TestOAuthAndBasispointsDoNotInferCacheCreation(t *testing.T) {
 			for _, stream := range []bool{false, true} {
 				t.Run(fmt.Sprintf("native_anthropic/stream=%t", stream), func(t *testing.T) {
 					resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(wire))}
-					defer resp.Body.Close()
+					defer func() { _ = resp.Body.Close() }()
 					var outcome sdk.ForwardOutcome
 					var err error
 					w := httptest.NewRecorder()
@@ -96,7 +96,7 @@ func receiveNativeUsageFixture(t *testing.T, event string) WSResult {
 			t.Errorf("upgrade: %v", err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		if err := conn.WriteMessage(websocket.TextMessage, []byte(event)); err != nil {
 			t.Errorf("write: %v", err)
 		}
@@ -105,11 +105,11 @@ func receiveNativeUsageFixture(t *testing.T, event string) WSResult {
 	conn, resp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
 	if err != nil {
 		if resp != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	return ReceiveWSResponse(context.Background(), conn, nil)
 }
 

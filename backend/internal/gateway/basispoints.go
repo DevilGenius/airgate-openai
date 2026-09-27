@@ -137,7 +137,7 @@ func (g *OpenAIGateway) tryBasispointsOAuth(ctx context.Context, req *sdk.Forwar
 	if err != nil {
 		return responseFailureOutcome(err, nil, false, time.Since(start)), true, nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
 		return basispointsHTTPFailure(resp, start), true, nil
 	}
@@ -243,7 +243,7 @@ func (g *OpenAIGateway) tryBasispointsAnthropic(ctx context.Context, req *sdk.Fo
 		outcome := anthropicResponseFailureOutcome(err, false, time.Since(start))
 		return outcome, true
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
 		outcome := basispointsHTTPFailure(resp, start)
 		outcome.Upstream.Body = anthropicErrorJSON(anthropicErrorType(resp.StatusCode), extractOpenAIErrorMessage(outcome.Upstream.Body))
