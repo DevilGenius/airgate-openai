@@ -906,18 +906,15 @@ func TestTranslateResponsesSSEContinuationAnchorFailureReturnsReplayError(t *tes
 		t.Fatalf("failure usage = %+v, want input/cache-read/cache-write 50/20/30", outcome.Usage)
 	}
 	body := w.Body.String()
-	if count := strings.Count(body, "event: message_start"); count != 1 {
-		t.Fatalf("message_start count = %d, want 1; body=%s", count, body)
+	if body != "" || w.Flushed {
+		t.Fatalf("control-only attempt must stay uncommitted: %s", body)
 	}
-	if !strings.Contains(body, "event: error") {
-		t.Fatalf("continuation anchor failure after output should be sent as stream error, got: %s", body)
-	}
-	if canReplayContinuationAnchor(err) {
-		t.Fatalf("anchor failure after message_start must not be replay-safe")
+	if !canReplayContinuationAnchor(err) {
+		t.Fatalf("anchor failure before model output must be replay-safe")
 	}
 }
 
-func TestForwardAnthropicMessageDoesNotReplayAfterMessageStart(t *testing.T) {
+func TestForwardAnthropicMessageDoesNotReplayAfterContent(t *testing.T) {
 	prevContinuation := enableAnthropicContinuation
 	enableAnthropicContinuation = true
 	t.Cleanup(func() { enableAnthropicContinuation = prevContinuation })
@@ -944,6 +941,7 @@ func TestForwardAnthropicMessageDoesNotReplayAfterMessageStart(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = fmt.Fprint(w, `data: {"type":"response.created","response":{"id":"resp_bad_anchor","model":"gpt-5.4"}}`+"\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.output_text.delta","delta":"partial"}`+"\n")
 		_, _ = fmt.Fprint(w, `data: {"type":"response.failed","response":{"id":"resp_bad_anchor","error":{"type":"invalid_request_error","code":"previous_response_not_found","message":"Previous response not found"}}}`+"\n\n")
 	}))
 	defer ts.Close()
@@ -1041,11 +1039,11 @@ Your task is to create a detailed summary of the conversation so far, paying clo
 	if !strings.Contains(err.Error(), "compact summary upstream SSE idle timeout") {
 		t.Fatalf("error = %v, want compact idle timeout", err)
 	}
-	if outcome.Kind != sdk.OutcomeStreamAborted {
-		t.Fatalf("outcome kind = %v, want stream aborted", outcome.Kind)
+	if outcome.Kind != sdk.OutcomeUpstreamTransient {
+		t.Fatalf("outcome kind = %v, want retryable before output", outcome.Kind)
 	}
-	if body := w.Body.String(); !strings.Contains(body, "event: error") {
-		t.Fatalf("stream should emit error after compact idle timeout, got: %s", body)
+	if body := w.Body.String(); body != "" || w.Flushed {
+		t.Fatalf("idle attempt must not commit the client stream: %s", body)
 	}
 }
 

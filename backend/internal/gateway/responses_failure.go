@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -11,6 +12,50 @@ import (
 
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
+
+// responseFailureOutcome is shared by native WS, HTTP Responses and BPS.
+// Protocol adapters report an error and whether output was committed; Core owns
+// account selection, cooldown and retry budgets.
+func responseFailureOutcome(err error, failedEvent []byte, outputStarted bool, elapsed time.Duration) sdk.ForwardOutcome {
+	outcome := transientOutcome(err.Error())
+	outcome.Duration = elapsed
+	outcome.SafetyRejected = isExplicitSafetyRejectedPayload(failedEvent)
+	code, message := outcome.Kind.String(), err.Error()
+	var failure *responsesFailureError
+	if errors.As(err, &failure) {
+		outcome.Kind = failure.outcomeKind()
+		outcome.Upstream.StatusCode = failure.StatusCode
+		outcome.Reason = failure.upstreamReason()
+		outcome.RetryAfter = failure.RetryAfter
+		outcome.FailoverScope = failure.failoverScopeForKind(outcome.Kind)
+		outcome.SafetyRejected = outcome.SafetyRejected || failure.isSafetyRejected()
+		code, message = failure.codeOrKind(), failure.Message
+	}
+	if outputStarted {
+		outcome.FailoverScope = sdk.FailoverScopeNone
+		if outcome.Kind != sdk.OutcomeClientError {
+			outcome.Kind = sdk.OutcomeStreamAborted
+			code = outcome.Kind.String()
+		}
+	}
+	outcome.Upstream.Headers = http.Header{"Content-Type": {"application/json"}}
+	outcome.Upstream.Body = openAIErrorJSON(openAIErrorTypeForStatus(outcome.Upstream.StatusCode), code, message)
+	if failure != nil {
+		outcome.Upstream.Body = failure.openAIErrorBody(code)
+	}
+	return outcome
+}
+
+func anthropicResponseFailureOutcome(err error, outputStarted bool, elapsed time.Duration) sdk.ForwardOutcome {
+	outcome := responseFailureOutcome(err, nil, outputStarted, elapsed)
+	var failure *responsesFailureError
+	if errors.As(err, &failure) {
+		outcome.Upstream.Body = anthropicErrorJSONWithCode(failure.AnthropicErrorType, failure.Code, failure.Message)
+	} else {
+		outcome.Upstream.Body = anthropicErrorJSON("api_error", err.Error())
+	}
+	return outcome
+}
 
 type responsesFailureKind string
 

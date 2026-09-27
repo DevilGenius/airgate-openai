@@ -58,6 +58,14 @@ func successOutcome(statusCode int, body []byte, headers http.Header, usage *sdk
 // 并把上游通过结构化错误码明确判定的安全拒绝记录到 SafetyRejected。
 func failureOutcome(statusCode int, body []byte, headers http.Header, message string, retryAfter time.Duration) sdk.ForwardOutcome {
 	kind := classifyHTTPFailureResponse(statusCode, body, message)
+	if kind == sdk.OutcomeAccountRateLimited && retryAfter <= 0 {
+		if failure := classifyGenericSSEErrorEvent(body); failure != nil && failure.Kind == responsesFailureKindRateLimited {
+			retryAfter = failure.RetryAfter
+		}
+		if retryAfter <= 0 {
+			retryAfter = parseRetryDelay(message)
+		}
+	}
 	reason := message
 	if reason != "" {
 		reason = fmt.Sprintf("HTTP %d: %s", statusCode, message)

@@ -29,7 +29,7 @@ BPS 使用固定 `/basispoints/api/responses` 地址和 Excel 客户端画像。
 只有工具结果、没有对应工具调用的请求直接走普通模式，行为不再取决于缓存是否命中。
 上游 task/turn/prompt-cache 标识仍由账户、用户、API Key、分组和会话确定性派生；
 这是用于上游缓存的身份种子，并不代表本地保存了会话状态。
-BPS 的 response ID 不写入普通 OAuth 续接缓存，失败不改变普通 OAuth 的权益冷却。
+BPS 的 response ID 不写入普通 OAuth 续接缓存。失败分类、账号冷却和换号复用普通 OAuth 的机制。
 用量使用现有 token 计费，并记录 `oauth_transport=basispoints`。
 
 ## 缓存用量与计费口径
@@ -71,14 +71,20 @@ BPS 原始响应及账单核对证据。
 | `previous_response_id` / `item_reference` 增量历史、priority 服务档位、不支持的原生控制参数 | 发请求前选择普通模式 |
 | `/responses/compact`、Images API、入站 WebSocket 直通 | 保持原有模式 |
 | BPS HTTP 400/403/404 明确返回 `model_not_found`、`model_not_supported`、`unsupported_model`、`model_access_denied`、`basispoints_model_access_changed` | 尚未输出时，以未被 BPS 修改的请求走一次普通模式 |
-| 普通 401/403、429、5xx、超时、网络异常、SSE 内错误或流中断 | 返回错误；不自动切模式、切账号或重放 |
+| 输出前的 401/403、429/usage_limit_reached、5xx、超时、网络异常、SSE 临时错误或断流 | 复用普通 OAuth 失败分类；由 Core 按现有预算、冷却和会话约束换号重试 |
+| 非重试性请求错误 | 保留客户端错误，不换号 |
+| 实际内容已输出后的错误或断流 | 终止当前流，不重放 |
 
 不把所有 403 都解释为模型不支持，也不按模型名称维护易过期的静态白名单。
 HTTPS 图片链接可以使用 BPS；此版本不实现 BPS 附件上传、磁盘中转或隐藏的工具自纠请求。
 入站 WebSocket 是持久双向会话，保持原有直通语义；HTTP Responses / Chat Completions /
 Anthropic Messages 均支持 BPS 的流式和非流式响应。
 
-自动重放流中断或网络超时可能产生重复生成与计费，因此不支持。
+`internal/basispoints` 只转换协议，不选号、不维护重试循环。
+网关的 `responseFailureOutcome` 统一处理普通 WS 与 BPS SSE 错误；HTTP 错误共用
+`failureOutcome`。Anthropic 转换在首个实际输出前缓存创建事件和 ping，提前失败不会
+提交 HTTP 200、message_start 或错误帧；输出后仍禁止换号。模型兼容回退与账号换号是不同机制。
+输出前网络失败也采用普通模式的重试策略，因此存在上游已开始计算但尚未交付输出的重复消耗可能。
 关停后的会话若只持有 BPS 服务端引用而没有完整历史，应补发完整历史或新建会话；
 不同上游的服务端响应引用不可互换。
 
@@ -87,5 +93,6 @@ Anthropic Messages 均支持 BPS 的流式和非流式响应。
 协议回归覆盖工具整批校验、schema、无状态完整历史重建、身份隔离、结构化输出及不完整流。
 无状态回归还覆盖四种工具传输的精确载荷恢复、独立请求/账号切换，以及孤立工具结果不继承旧状态。
 本地 TLS 集成测试覆盖分组开关、账号类型、请求头和请求体、三种客户端协议、模型拒绝回退、
-错误不重放、用量及流中断。Core 测试覆盖配置头的防伪与开关恢复。
+HTTP/SSE 限流及 reset 时间、输出前故障重试判决、输出后不重放、失败用量及流中断。
+Core 测试覆盖配置头的防伪、开关恢复和两种 OAuth 传输一致的换号判决。
 测试不访问真实 BPS；部署后的模型权益和真实上游兼容性仍需使用具备权限的 OAuth 账号验证。

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -106,17 +105,18 @@ func (g *OpenAIGateway) openBasispoints(ctx context.Context, req *sdk.ForwardReq
 func basispointsHTTPFailure(resp *http.Response, start time.Time) sdk.ForwardOutcome {
 	body, _ := readLimitedErrorBody(resp.Body)
 	if !gjson.GetBytes(body, "error").IsObject() {
-		body = openAIErrorJSON(openAIErrorTypeForStatus(resp.StatusCode), "basispoints_upstream_rejected", "Basispoints upstream rejected the request")
+		body = openAIErrorJSON(openAIErrorTypeForStatus(resp.StatusCode), "", truncate(string(body), 200))
 	}
 	headers := http.Header{"Content-Type": {"application/json"}}
 	if retry := resp.Header.Get("Retry-After"); retry != "" {
 		headers.Set("Retry-After", retry)
 	}
-	// A BPS-only rejection must not disable/cool down an otherwise usable OAuth
-	// account or cause Core to fan this request out to other accounts.
-	return sdk.ForwardOutcome{Kind: sdk.OutcomeClientError, FailoverScope: sdk.FailoverScopeNone,
-		Upstream: sdk.UpstreamResponse{StatusCode: resp.StatusCode, Headers: headers, Body: body},
-		Reason:   "basispoints_upstream_rejected", Duration: time.Since(start)}
+	outcome := failureOutcome(resp.StatusCode, body, headers, extractOpenAIErrorMessage(body), extractRetryAfterHeader(headers))
+	if resp.StatusCode < 400 {
+		outcome = transientOutcome("unexpected upstream redirect")
+	}
+	outcome.Duration = time.Since(start)
+	return outcome
 }
 
 func (g *OpenAIGateway) tryBasispointsOAuth(ctx context.Context, req *sdk.ForwardRequest) (sdk.ForwardOutcome, bool, error) {
@@ -134,7 +134,7 @@ func (g *OpenAIGateway) tryBasispointsOAuth(ctx context.Context, req *sdk.Forwar
 		return sdk.ForwardOutcome{}, false, nil
 	}
 	if err != nil {
-		return basispointsTransportFailure(start, err), true, nil
+		return responseFailureOutcome(err, nil, false, time.Since(start)), true, nil
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
@@ -173,16 +173,10 @@ func (g *OpenAIGateway) tryBasispointsOAuth(ctx context.Context, req *sdk.Forwar
 	setUsageMetadata(usage, "oauth_transport", "basispoints")
 	fillUsageCost(usage)
 	if result.Err != nil {
-		outcome := basispointsTransportFailure(start, result.Err)
-		var failure *responsesFailureError
-		if errors.As(result.Err, &failure) {
-			outcome.Upstream.StatusCode = failure.StatusCode
-			outcome.Upstream.Body = failure.openAIErrorBody(failure.codeOrKind())
-			outcome.SafetyRejected = failure.isSafetyRejected()
-		}
+		outputStarted := sse != nil && sse.wrote || chat != nil && chat.wrote
+		outcome := responseFailureOutcome(result.Err, result.FailedEventRaw, outputStarted, time.Since(start))
 		outcome.Usage = usage
-		if sse != nil && sse.wrote || chat != nil && chat.wrote {
-			outcome.Kind = sdk.OutcomeStreamAborted
+		if outputStarted {
 			if sse != nil {
 				sse.writeTerminalErrorIfNeeded(http.StatusBadGateway, "basispoints_stream_incomplete", "Basispoints stream interrupted", result.ResponseID)
 			}
@@ -239,27 +233,19 @@ func basispointsResponsesBody(req *sdk.ForwardRequest) ([]byte, error) {
 	return body, nil
 }
 
-func basispointsTransportFailure(start time.Time, _ error) sdk.ForwardOutcome {
-	// No failover for ambiguous generation failures, even before first output.
-	return sdk.ForwardOutcome{Kind: sdk.OutcomeClientError, FailoverScope: sdk.FailoverScopeNone,
-		Upstream: sdk.UpstreamResponse{StatusCode: http.StatusBadGateway, Headers: http.Header{"Content-Type": {"application/json"}}, Body: openAIErrorJSON("server_error", "basispoints_upstream_error", "Basispoints request failed")},
-		Reason:   "basispoints_upstream_error", Duration: time.Since(start)}
-}
-
 func (g *OpenAIGateway) tryBasispointsAnthropic(ctx context.Context, req *sdk.ForwardRequest, body []byte, originalModel, mappedModel string, start time.Time, w http.ResponseWriter) (sdk.ForwardOutcome, bool) {
 	resp, used, err := g.openBasispoints(ctx, req, body)
 	if !used {
 		return sdk.ForwardOutcome{}, false
 	}
 	if err != nil {
-		outcome := basispointsTransportFailure(start, err)
-		outcome.Upstream.Body = anthropicErrorJSON("api_error", "Basispoints request failed")
+		outcome := anthropicResponseFailureOutcome(err, false, time.Since(start))
 		return outcome, true
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		outcome := basispointsHTTPFailure(resp, start)
-		outcome.Upstream.Body = anthropicErrorJSON("api_error", "Basispoints upstream rejected the request")
+		outcome.Upstream.Body = anthropicErrorJSON(anthropicErrorType(resp.StatusCode), extractOpenAIErrorMessage(outcome.Upstream.Body))
 		return outcome, true
 	}
 	// BPS response IDs must not enter the native continuation/session cache.
@@ -268,13 +254,6 @@ func (g *OpenAIGateway) tryBasispointsAnthropic(ctx context.Context, req *sdk.Fo
 		outcome, _ = translateResponsesSSEToAnthropicSSE(ctx, resp, w, originalModel, mappedModel, req.Body, "", "", start, g.streamIdleTimeout(), openAISessionResolution{})
 	} else {
 		outcome, _ = g.handleAnthropicNonStreamFromResponses(resp, nil, originalModel, mappedModel, req.Body, "", "", start, openAISessionResolution{}, 0)
-	}
-	if outcome.Kind != sdk.OutcomeSuccess {
-		outcome.Reason = "basispoints_response_failed"
-		if outcome.Kind != sdk.OutcomeStreamAborted {
-			outcome.Kind = sdk.OutcomeClientError
-		}
-		outcome.FailoverScope = sdk.FailoverScopeNone
 	}
 	setUsageReasoningEffort(outcome.Usage, gjson.GetBytes(body, "reasoning.effort").String())
 	if outcome.Usage != nil {

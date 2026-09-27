@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"log/slog"
-	"strings"
 
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
@@ -11,10 +10,6 @@ import (
 // Transport and response handlers return protocol-level outcomes; account and
 // routing policies are normalized here before Core observes the result.
 func applyForwardOutcomePolicies(logger *slog.Logger, req *sdk.ForwardRequest, outcome sdk.ForwardOutcome) sdk.ForwardOutcome {
-	// BPS entitlement and quota are independent from the native OAuth channel.
-	if strings.HasPrefix(outcome.Reason, "basispoints_") || usageMetadataText(outcome.Usage, "oauth_transport") == "basispoints" {
-		return outcome
-	}
 	cooledOutcome, applied := applyOAuthModelEntitlementCooldown(req, outcome)
 	if !applied {
 		return outcome

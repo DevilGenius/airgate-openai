@@ -120,7 +120,7 @@ func TestBasispointsResponsesAndChat(t *testing.T) {
 	}
 }
 
-func TestBasispointsFallbackAndNoReplay(t *testing.T) {
+func TestBasispointsFallbackAndSharedFailurePolicy(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		status   int
@@ -150,8 +150,9 @@ func TestBasispointsFallbackAndNoReplay(t *testing.T) {
 			}
 			if !tc.fallback {
 				outcome = applyForwardOutcomePolicies(nil, req, outcome)
-				if outcome.Kind != sdk.OutcomeClientError || outcome.FailoverScope != sdk.FailoverScopeNone || outcome.Upstream.StatusCode != tc.status {
-					t.Fatalf("unsafe retry/cooldown: %+v", outcome)
+				want := failureOutcome(tc.status, []byte(tc.body), nil, extractOpenAIErrorMessage([]byte(tc.body)), 0)
+				if outcome.Kind != want.Kind || !outcome.ShouldFailover() || outcome.Upstream.StatusCode != tc.status {
+					t.Fatalf("BPS did not reuse native retry classification: %+v; want %s", outcome, want.Kind)
 				}
 			}
 		})

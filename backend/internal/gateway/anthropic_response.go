@@ -864,7 +864,6 @@ func translateResponsesSSEToAnthropicSSE(
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
 
 	flusher, _ := w.(http.Flusher)
 	state := &anthropicStreamState{}
@@ -896,11 +895,13 @@ func translateResponsesSSEToAnthropicSSE(
 	var upstreamServiceTier string
 	skipCurrentOutput := false
 	outputWritten := false
+	var pendingOutput strings.Builder
 	responseID := ""
 	terminalEventReceived := false
 
 	for scanner.Scan() {
 		skipCurrentOutput = false
+		commitOutput := false
 		select {
 		case <-ctx.Done():
 			streamErr = ctx.Err()
@@ -932,6 +933,7 @@ func translateResponsesSSEToAnthropicSSE(
 				compactIdleTimer.Reset(compactEventIdleTimeout)
 			}
 			eventType := streamDiagnosticEventType(data)
+			commitOutput = isResponseOutputEvent(eventType, []byte(data))
 			if isResponsesTerminalEvent(eventType) && !gjson.Valid(data) {
 				streamErr = fmt.Errorf("上游流式终止事件 JSON 不完整")
 				goto done
@@ -1026,13 +1028,26 @@ func translateResponsesSSEToAnthropicSSE(
 		}
 
 		output := ""
-		if terminalEventReceived || streamErr != nil {
-			sdk.BeginStreamCompletion(w)
+		if streamErr != nil && !outputWritten {
+			goto done
 		}
 		if !skipCurrentOutput {
 			output = convertResponsesEventToAnthropic(line, originalRequest, state, model)
 		}
 		if output != "" {
+			if !outputWritten {
+				if !commitOutput && !terminalEventReceived {
+					if len(output) > maxPendingControlBytes-pendingOutput.Len() {
+						streamErr = errResponseTooLarge
+						_ = resp.Body.Close()
+						goto done
+					}
+					pendingOutput.WriteString(output)
+					continue
+				}
+				output = pendingOutput.String() + output
+				pendingOutput.Reset()
+			}
 			if len(output) > maxResponseEventBytes {
 				streamErr = budget.exceeded()
 				_ = resp.Body.Close()
@@ -1049,8 +1064,12 @@ func translateResponsesSSEToAnthropicSSE(
 					"output_bytes", len(output),
 				)
 			}
-			outputWritten = true
-			if _, err := fmt.Fprint(w, output); err != nil {
+			if terminalEventReceived || streamErr != nil {
+				sdk.BeginStreamCompletion(w)
+			}
+			written, err := fmt.Fprint(w, output)
+			outputWritten = outputWritten || written > 0
+			if err != nil {
 				streamErr = err
 				_ = resp.Body.Close()
 				goto done
@@ -1107,7 +1126,7 @@ done:
 	if streamErr != nil {
 		var failure *responsesFailureError
 		hasFailure := errors.As(streamErr, &failure)
-		if !terminalEventReceived {
+		if !terminalEventReceived && outputWritten {
 			output := closeOpenAnthropicContentBlocks(state)
 			if hasFailure {
 				output += buildAnthropicStreamErrorWithCode(failure.AnthropicErrorType, failure.Code, failure.Message)
@@ -1119,35 +1138,13 @@ done:
 				flusher.Flush()
 			}
 		}
+		outcome := anthropicResponseFailureOutcome(streamErr, outputWritten, elapsed)
+		outcome.Usage = abortUsage()
 		if hasFailure {
-			kind := failure.outcomeKind()
-			// 流已开写后上游 response.failed：除 ClientError 外都按 StreamAborted 报告
-			if kind != sdk.OutcomeClientError {
-				kind = sdk.OutcomeStreamAborted
-			}
-			errBody := anthropicErrorJSONWithCode(failure.AnthropicErrorType, failure.Code, failure.Message)
-			return sdk.ForwardOutcome{
-				Kind:           kind,
-				FailoverScope:  failure.failoverScopeForKind(kind),
-				Upstream:       sdk.UpstreamResponse{StatusCode: failure.StatusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
-				Reason:         failure.upstreamReason(),
-				RetryAfter:     failure.RetryAfter,
-				Duration:       elapsed,
-				Usage:          abortUsage(),
-				SafetyRejected: failure.isSafetyRejected(),
-			}, continuationAnchorReplayErr(failure, outputWritten)
+			return outcome, continuationAnchorReplayErr(failure, outputWritten)
 		}
-		errBody := anthropicErrorJSON("api_error", streamErr.Error())
-		return sdk.ForwardOutcome{
-			Kind:           sdk.OutcomeStreamAborted,
-			Upstream:       sdk.UpstreamResponse{StatusCode: http.StatusBadGateway, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
-			Reason:         streamErr.Error(),
-			Duration:       elapsed,
-			Usage:          abortUsage(),
-			SafetyRejected: false,
-		}, streamErr
+		return outcome, streamErr
 	}
-
 	fillUsageCost(usage)
 	setUsageResponseID(usage, responseID)
 	return sdk.ForwardOutcome{

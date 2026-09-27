@@ -1259,48 +1259,16 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 	}
 
 	if result.Err != nil {
-		// 只检查结构化失败帧的明确 error.code；成功输出和 completed 事件不参与安全缓存判定。
-		safetyRejected := isExplicitSafetyRejectedPayload(result.FailedEventRaw)
-		var failure *responsesFailureError
-		kind := sdk.OutcomeUpstreamTransient
-		statusCode := http.StatusBadGateway
-		message := result.Err.Error()
-		reason := message
-		var retryAfter time.Duration
-		code := kind.String()
-		failoverScope := sdk.FailoverScopeNone
-		if errors.As(result.Err, &failure) {
-			kind = failure.outcomeKind()
-			statusCode = failure.StatusCode
-			message = failure.Message
-			reason = failure.upstreamReason()
-			retryAfter = failure.RetryAfter
-			code = failure.codeOrKind()
-			failoverScope = failure.failoverScopeForKind(kind)
-			safetyRejected = safetyRejected || failure.isSafetyRejected()
-		}
-		// 流已经提交后不能再由 Core 改写 HTTP 状态或切换 dispatch 候选。
-		// 原生 Responses 流如果还没有转发过上游错误事件，则在流内补一个终止错误事件。
-		if req.Stream && streamOutputStarted() {
-			failoverScope = sdk.FailoverScopeNone
-			if kind != sdk.OutcomeClientError {
-				kind = sdk.OutcomeStreamAborted
-				code = kind.String()
-			}
-			if lastSSEHandler != nil {
-				lastSSEHandler.writeTerminalErrorIfNeeded(statusCode, code, message, result.ResponseID)
-			}
-		}
-		errBody := openAIErrorJSON(openAIErrorTypeForStatus(statusCode), code, message)
-		if failure != nil {
-			errBody = failure.openAIErrorBody(code)
+		outcome := responseFailureOutcome(result.Err, result.FailedEventRaw, req.Stream && streamOutputStarted(), elapsed)
+		if req.Stream && streamOutputStarted() && lastSSEHandler != nil {
+			lastSSEHandler.writeTerminalErrorIfNeeded(outcome.Upstream.StatusCode, outcome.Kind.String(), extractOpenAIErrorMessage(outcome.Upstream.Body), result.ResponseID)
 		}
 		logger.Warn("upstream_request_non_2xx",
 			sdk.LogFieldAccountID, account.ID,
 			sdk.LogFieldModel, req.Model,
-			sdk.LogFieldStatus, statusCode,
+			sdk.LogFieldStatus, outcome.Upstream.StatusCode,
 			sdk.LogFieldDurationMs, elapsed.Milliseconds(),
-			sdk.LogFieldReason, reason,
+			sdk.LogFieldReason, outcome.Reason,
 			"phase", "ws_response",
 			"ws_event_count", result.EventCount,
 			"ws_token_event_count", result.TokenEventCount,
@@ -1308,24 +1276,12 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 			"ws_last_event", result.LastEventType,
 			"stream_output_started", streamOutputStarted(),
 		)
-		outcome := sdk.ForwardOutcome{
-			Kind:           kind,
-			FailoverScope:  failoverScope,
-			Upstream:       sdk.UpstreamResponse{StatusCode: statusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: errBody},
-			Reason:         reason,
-			RetryAfter:     retryAfter,
-			Duration:       elapsed,
-			SafetyRejected: safetyRejected,
-		}
-		// 即使请求失败，上游可能已消耗 token（如 response.failed / response.incomplete），
-		// 仍需计费避免漏洞。
 		if result.InputTokens > 0 || result.OutputTokens > 0 || result.CachedInputTokens > 0 || result.CacheCreationTokens > 0 {
 			fillUsageCostWithImageTool(usage, numImages, imageToolSize)
 			outcome.Usage = usage
 		}
 		return outcome, forwardErrForOutcome(outcome, result.Err)
 	}
-
 	// 结束标记 / 响应体写回。必须在 result.Err 判定之后执行，避免把上游错误补成
 	// finish_reason=stop + [DONE] 的空成功流。
 	switch {

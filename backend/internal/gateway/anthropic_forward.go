@@ -511,24 +511,14 @@ func (g *OpenAIGateway) handleAnthropicNonStreamFromResponses(
 	timing := newResponseEventTiming(start)
 	wsResult := ParseSSEStream(resp.Body, responseTimingObserver{timing: &timing}, responseRequestContext(resp))
 	if wsResult.Err != nil {
-		var failure *responsesFailureError
-		if errors.As(wsResult.Err, &failure) {
-			kind := failure.outcomeKind()
-			body := anthropicErrorJSONWithCode(failure.AnthropicErrorType, failure.Code, failure.Message)
-			return sdk.ForwardOutcome{
-				Kind:           kind,
-				FailoverScope:  failure.failoverScopeForKind(kind),
-				Upstream:       sdk.UpstreamResponse{StatusCode: failure.StatusCode, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: body},
-				Reason:         failure.upstreamReason(),
-				RetryAfter:     failure.RetryAfter,
-				Duration:       time.Since(start),
-				SafetyRejected: failure.isSafetyRejected(),
-			}, nil
+		outcome := anthropicResponseFailureOutcome(wsResult.Err, false, time.Since(start))
+		// The failure may carry billable usage, regardless of transport.
+		if wsResult.InputTokens > 0 || wsResult.OutputTokens > 0 || wsResult.CachedInputTokens > 0 || wsResult.CacheCreationTokens > 0 {
+			usage := newTokenUsage(firstNonEmptyString(mappedModel, wsResult.Model), wsResult.ServiceTier, wsResult.InputTokens, wsResult.OutputTokens, wsResult.CachedInputTokens, wsResult.CacheCreationTokens, wsResult.ReasoningOutputTokens, timing.firstEventMs)
+			fillUsageCost(usage)
+			outcome.Usage = usage
 		}
-		// 非 *responsesFailureError 的 err（典型：SSE EOF 提前断流）→ UpstreamTransient，可 failover。
-		outcome := transientOutcome(wsResult.Err.Error())
-		outcome.SafetyRejected = isExplicitSafetyRejectedPayload(wsResult.FailedEventRaw)
-		return outcome, wsResult.Err
+		return outcome, forwardErrForOutcome(outcome, wsResult.Err)
 	}
 	if len(wsResult.CompletedEventRaw) == 0 {
 		reason := "未收到 response.completed 事件"
