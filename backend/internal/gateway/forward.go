@@ -924,6 +924,9 @@ func enrichModelsResponse(resp *http.Response) *http.Response {
 
 // forwardOAuth 使用 WebSocket 连接上游，将响应以 SSE 格式写回客户端
 func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardRequest) (sdk.ForwardOutcome, error) {
+	if outcome, used, err := g.tryBasispointsOAuth(ctx, req); used {
+		return outcome, err
+	}
 	start := time.Now()
 	account := req.Account
 	logger := sdk.LoggerFromContext(ctx)
