@@ -29,7 +29,7 @@ func bpsRequest() *sdk.ForwardRequest {
 }
 
 // Route the fixed production URL to a local TLS fixture; tests never contact BPS.
-func bpsGateway(t *testing.T, req *sdk.ForwardRequest, serve http.HandlerFunc) *OpenAIGateway {
+func bpsGateway(t testing.TB, req *sdk.ForwardRequest, serve http.HandlerFunc) *OpenAIGateway {
 	t.Helper()
 	server := httptest.NewTLSServer(serve)
 	t.Cleanup(server.Close)

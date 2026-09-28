@@ -153,7 +153,7 @@ func (g *OpenAIGateway) handleWSWithAPIKey(ctx context.Context, clientConn sdk.W
 }
 
 // bridgeWebSocket 双向桥接客户端和上游的 WebSocket 消息
-func bridgeWebSocket(ctx context.Context, clientConn sdk.WebSocketConn, upstreamConn *websocket.Conn, fingerprintIDs *codexFingerprintIDs, strictCodex bool) error {
+func bridgeWebSocket(ctx context.Context, clientConn sdk.WebSocketConn, upstreamConn upstreamWebSocket, fingerprintIDs *codexFingerprintIDs, strictCodex bool) error {
 	var clientHeaders http.Header
 	if info := clientConn.ConnectInfo(); info != nil {
 		clientHeaders = info.Headers.Clone()

@@ -161,10 +161,6 @@ func (g *OpenAIGateway) forwardWithinResponseLimit(ctx context.Context, req *sdk
 	if isOpenAIAgentIdentityAccount(req.Account) {
 		ctx = withAgentIdentityRequestState(ctx)
 	}
-	var traceCapture *finalErrorTraceCapture
-	if req.TraceFinalError {
-		ctx, traceCapture = withFinalErrorTrace(ctx)
-	}
 
 	method, path := resolveAPIKeyRoute(req)
 	logger.Debug("plugin_request_received",
@@ -287,9 +283,6 @@ func (g *OpenAIGateway) forwardWithinResponseLimit(ctx context.Context, req *sdk
 			sdk.LogFieldModel, req.Model,
 			sdk.LogFieldPath, path,
 		)
-	}
-	if traceCapture != nil && shouldAttachFinalErrorDiagnostic(outcome, err) {
-		outcome.FinalErrorDiagnostic = traceCapture.snapshot()
 	}
 	if isOpenAIAgentIdentityAccount(req.Account) {
 		mergeAgentIdentityUpdatedCredentials(&outcome, ctx)

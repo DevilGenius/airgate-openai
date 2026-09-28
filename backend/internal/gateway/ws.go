@@ -16,6 +16,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/tidwall/gjson"
 
+	"github.com/DevilGenius/airgate-sdk/runtimego/requesttrace"
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
@@ -33,6 +34,17 @@ const (
 	webSocketKeepAliveInterval   = 30 * time.Second
 	webSocketReadLimitBytes      = maxResponseEventBytes
 )
+
+// upstreamWebSocket keeps transport observation below all request modes.
+type upstreamWebSocket interface {
+	SetWriteDeadline(time.Time) error
+	SetReadDeadline(time.Time) error
+	WriteJSON(any) error
+	WriteMessage(int, []byte) error
+	ReadMessage() (int, []byte, error)
+	WriteControl(int, []byte, time.Time) error
+	Close() error
+}
 
 // WSConfig WebSocket 连接配置
 type WSConfig struct {
@@ -130,7 +142,7 @@ type WSEventHandler interface {
 }
 
 // DialWebSocket establishes an upstream WebSocket connection and observes ctx cancellation.
-func DialWebSocket(ctx context.Context, cfg WSConfig) (*websocket.Conn, *http.Response, error) {
+func DialWebSocket(ctx context.Context, cfg WSConfig) (*requesttrace.WebSocket, *http.Response, error) {
 	targetURL := cfg.URL
 	if strings.TrimSpace(targetURL) == "" {
 		targetURL = ChatGPTWSURL
@@ -168,7 +180,7 @@ func DialWebSocket(ctx context.Context, cfg WSConfig) (*websocket.Conn, *http.Re
 	return dialWebSocket(ctx, targetURL, cfg.ProxyURL, headers)
 }
 
-func dialWebSocket(ctx context.Context, targetURL, proxyURL string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+func dialWebSocket(ctx context.Context, targetURL, proxyURL string, headers http.Header) (*requesttrace.WebSocket, *http.Response, error) {
 	networkDialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
 	dialer := &websocket.Dialer{
 		TLSClientConfig:  &tls.Config{MinVersion: tls.VersionTLS12},
@@ -192,11 +204,13 @@ func dialWebSocket(ctx context.Context, targetURL, proxyURL string, headers http
 
 	conn, resp, err := dialer.DialContext(ctx, targetURL, headers)
 	if err != nil {
+		exchange := requesttrace.Record(ctx, sdk.OutboundRequestDiagnostic{Transport: "websocket", Method: http.MethodGet, URL: targetURL, Headers: headers})
+		exchange.WrapResponse(resp)
 		return nil, resp, formatWebSocketDialError(resp, err)
 	}
 	configureWebSocketConn(conn)
 
-	return conn, resp, nil
+	return requesttrace.WrapWebSocket(ctx, conn, targetURL, headers), resp, nil
 }
 
 func formatWebSocketDialError(resp *http.Response, err error) error {
@@ -245,14 +259,14 @@ func formatWebSocketDialError(resp *http.Response, err error) error {
 	return fmt.Errorf("WebSocket 连接失败: %w", err)
 }
 
-func writeWebSocketJSON(conn *websocket.Conn, v any) error {
+func writeWebSocketJSON(conn upstreamWebSocket, v any) error {
 	if err := conn.SetWriteDeadline(time.Now().Add(webSocketWriteTimeout)); err != nil {
 		return err
 	}
 	return conn.WriteJSON(v)
 }
 
-func writeWebSocketMessage(conn *websocket.Conn, messageType int, data []byte) error {
+func writeWebSocketMessage(conn upstreamWebSocket, messageType int, data []byte) error {
 	if err := conn.SetWriteDeadline(time.Now().Add(webSocketWriteTimeout)); err != nil {
 		return err
 	}
@@ -275,7 +289,7 @@ func configureWebSocketConn(conn *websocket.Conn) {
 	})
 }
 
-func startWebSocketKeepAlive(ctx context.Context, conn *websocket.Conn) func() {
+func startWebSocketKeepAlive(ctx context.Context, conn upstreamWebSocket) func() {
 	if conn == nil {
 		return func() {}
 	}
@@ -321,11 +335,11 @@ func cloneHTTPHeader(headers http.Header) http.Header {
 }
 
 // ReceiveWSResponse 从 WebSocket 读取完整响应，通过 handler 回调输出
-func ReceiveWSResponse(ctx context.Context, conn *websocket.Conn, handler WSEventHandler) WSResult {
+func ReceiveWSResponse(ctx context.Context, conn upstreamWebSocket, handler WSEventHandler) WSResult {
 	return receiveWSResponse(ctx, conn, handler, webSocketReadTimeout)
 }
 
-func receiveWSResponse(ctx context.Context, conn *websocket.Conn, handler WSEventHandler, idleTimeout time.Duration) WSResult {
+func receiveWSResponse(ctx context.Context, conn upstreamWebSocket, handler WSEventHandler, idleTimeout time.Duration) WSResult {
 	start := time.Now()
 	result := WSResult{}
 	var textBuilder strings.Builder

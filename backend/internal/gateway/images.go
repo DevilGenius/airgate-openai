@@ -2039,9 +2039,6 @@ func (g *OpenAIGateway) generateImagesViaResponsesTool(ctx context.Context, req 
 		}
 		wsDialMs = attemptWSDialMs
 
-		if req.TraceFinalError {
-			captureFinalErrorWebSocketRequest(ctx, targetURL, cfg, createMsg)
-		}
 		if err := writeWebSocketJSON(conn, json.RawMessage(createMsg)); err != nil {
 			_ = conn.Close()
 			reason := fmt.Sprintf("发送 WebSocket 消息失败: %v", err)
@@ -2064,9 +2061,6 @@ func (g *OpenAIGateway) generateImagesViaResponsesTool(ctx context.Context, req 
 
 		handler = &imagesSilentHandler{accountID: account.ID, timing: newResponseEventTiming(start)}
 		wsResult = ReceiveWSResponse(ctx, conn, handler)
-		if req.TraceFinalError && len(wsResult.FailedEventRaw) > 0 {
-			captureFinalErrorUpstreamBody(ctx, wsResult.FailedEventRaw)
-		}
 		if isOpenAIAgentIdentityAccount(account) && isAgentIdentityTaskInvalidWSResult(wsResult) {
 			g.invalidateAgentIdentityTask(account, cfg.Headers)
 			_ = conn.Close()

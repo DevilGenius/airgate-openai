@@ -293,7 +293,7 @@ func (g *OpenAIGateway) forwardAnthropicResponses(
 	)
 
 	streamable := gjson.GetBytes(req.Body, "stream").Bool() && w != nil
-	client := g.buildForwardHTTPClient(ctx, req, account)
+	client := g.buildForwardHTTPClient(account)
 	resp, cancel, err := g.doStreamableUpstream(ctx, client, upstreamReq, streamable)
 	if err != nil {
 		dur := time.Since(start)
@@ -348,9 +348,6 @@ func (g *OpenAIGateway) forwardAnthropicResponses(
 			}
 		}
 		if resp.StatusCode >= 400 {
-			if req.TraceFinalError {
-				captureFinalErrorUpstreamBody(ctx, body)
-			}
 			dur := time.Since(start)
 			logger.Warn("upstream_request_non_2xx",
 				sdk.LogFieldAccountID, account.ID,

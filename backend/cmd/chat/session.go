@@ -14,6 +14,7 @@ import (
 
 	"github.com/DevilGenius/airgate-openai/backend/internal/gateway"
 	"github.com/DevilGenius/airgate-openai/backend/resources"
+	"github.com/DevilGenius/airgate-sdk/runtimego/requesttrace"
 )
 
 // ──────────────────────────────────────────────────────
@@ -110,7 +111,7 @@ func (s *sseSession) chat(input string) error {
 type wsSession struct {
 	cfg                gateway.WSConfig
 	model              string
-	conn               *websocket.Conn
+	conn               *requesttrace.WebSocket
 	history            []any
 	previousResponseID string
 	cacheKey           string

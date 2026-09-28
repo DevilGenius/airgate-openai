@@ -68,10 +68,12 @@ func (g *OpenAIGateway) openBasispoints(ctx context.Context, req *sdk.ForwardReq
 		return nil, true, err
 	}
 	headers := basispoints.Headers(auth.Get("Authorization"), req.Account.Credentials["chatgpt_account_id"])
-	client := g.buildForwardHTTPClient(ctx, req, req.Account)
+	client := g.buildForwardHTTPClient(req.Account)
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	uploadClient := g.buildHTTPClient(req.Account)
+	uploadClient.CheckRedirect = client.CheckRedirect
 	if err := prepared.UploadImages(ctx, func(ctx context.Context, image basispoints.InlineImage) (string, error) {
-		return uploadBasispointsImage(ctx, client, headers, image)
+		return uploadBasispointsImage(ctx, uploadClient, headers, image)
 	}); err != nil {
 		var httpErr *basispointsAttachmentHTTPError
 		if errors.As(err, &httpErr) {
@@ -99,6 +101,8 @@ func (g *OpenAIGateway) openBasispoints(ctx context.Context, req *sdk.ForwardReq
 		return resp, true, nil
 	}
 	if !strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+		// Consume the bounded invalid response through the shared transport observer.
+		_, _ = readLimitedErrorBody(resp.Body)
 		_ = resp.Body.Close()
 		cancel()
 		return nil, true, fmt.Errorf("basispoints returned a non-SSE response")

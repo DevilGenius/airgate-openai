@@ -4,14 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/DevilGenius/airgate-sdk/runtimego/requesttrace"
+	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
 // Only fixture tests opt into local HTTP endpoints; production has no switch
@@ -100,6 +105,49 @@ func TestImageRedirectCannotReachPrivateDestination(t *testing.T) {
 	}
 	if err == nil || privateHits.Load() != 0 {
 		t.Fatal("redirect reached private endpoint")
+	}
+}
+
+func TestImageDownloadDoesNotReplaceMainRequestTrace(t *testing.T) {
+	imageBytes, _ := bpsImageFixture(t)
+	for _, status := range []int{http.StatusOK, http.StatusForbidden} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "image/png")
+				w.WriteHeader(status)
+				_, _ = w.Write(imageBytes)
+			}))
+			defer server.Close()
+			client := newImageDownloadHTTPClient()
+			transport := client.Transport.(imageDownloadTransport).transport
+			transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
+			}
+			defer transport.CloseIdleConnections()
+			previous := imageDownloadHTTPClient
+			imageDownloadHTTPClient = client
+			defer func() { imageDownloadHTTPClient = previous }()
+
+			ctx, capture := requesttrace.Start(t.Context(), true)
+			raw := `{"error":{"message":"main request rejected"}}`
+			entry := requesttrace.Record(ctx, sdk.OutboundRequestDiagnostic{Transport: "http", Method: "POST", URL: "https://example.test/responses"})
+			response := &http.Response{StatusCode: 422, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(raw))}
+			entry.WrapResponse(response)
+			_, _ = io.Copy(io.Discard, response.Body)
+			_ = response.Body.Close()
+
+			// This is the actual reference-image helper used by images_web_reverse.
+			_, err := downloadImageRef(ctx, "http://public.example/ref.png")
+			if (err != nil) != (status != http.StatusOK) {
+				t.Fatalf("download status=%d err=%v", status, err)
+			}
+			outcome := sdk.ForwardOutcome{Kind: sdk.OutcomeClientError}
+			capture.Finish(&outcome, nil)
+			diagnostic := outcome.FinalErrorDiagnostic
+			if diagnostic == nil || len(diagnostic.OutboundRequests) != 1 || diagnostic.OutboundRequests[0].StatusCode != 422 || string(diagnostic.UpstreamErrorBody) != raw {
+				t.Fatalf("auxiliary image download changed main trace: %+v", diagnostic)
+			}
+		})
 	}
 }
 

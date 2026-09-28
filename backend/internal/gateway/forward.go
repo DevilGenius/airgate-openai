@@ -17,6 +17,7 @@ import (
 	"github.com/tidwall/sjson"
 
 	"github.com/DevilGenius/airgate-openai/backend/internal/model"
+	"github.com/DevilGenius/airgate-sdk/runtimego/requesttrace"
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
@@ -250,7 +251,7 @@ func (g *OpenAIGateway) forwardOAuthCompact(ctx context.Context, req *sdk.Forwar
 		"account_type", "oauth",
 	)
 
-	resp, err := g.buildForwardHTTPClient(ctx, req, account).Do(upstreamReq)
+	resp, err := g.buildForwardHTTPClient(account).Do(upstreamReq)
 	if err != nil {
 		dur := time.Since(start)
 		logger.Warn("upstream_request_failed",
@@ -313,7 +314,7 @@ func (g *OpenAIGateway) forwardOAuthCompact(ctx context.Context, req *sdk.Forwar
 				retryReq.Header.Set("User-Agent", ua)
 			}
 			applyCodexFingerprintHeaders(retryReq.Header, fingerprintIDs)
-			retryResp, retryErr := g.buildForwardHTTPClient(ctx, req, account).Do(retryReq)
+			retryResp, retryErr := g.buildForwardHTTPClient(account).Do(retryReq)
 			if retryErr != nil {
 				reason := fmt.Sprintf("Agent Identity 重试请求失败: %v", retryErr)
 				return transientOutcome(reason), fmt.Errorf("%s", reason)
@@ -543,7 +544,7 @@ func (g *OpenAIGateway) forwardAPIKeyRequest(ctx context.Context, req *sdk.Forwa
 	)
 
 	streamable := req.Stream && req.Writer != nil && !isImageReq
-	client := g.buildForwardHTTPClient(ctx, req, account)
+	client := g.buildForwardHTTPClient(account)
 	if streamable {
 		client.Timeout = 0
 	}
@@ -1057,9 +1058,6 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 
 	currentModel := req.Model
 	runAttempt := func(msg []byte, w http.ResponseWriter, attemptModel string) (WSResult, error) {
-		if req.TraceFinalError {
-			captureFinalErrorWebSocketRequest(ctx, ChatGPTWSURL, cfg, msg)
-		}
 		if err := writeWebSocketJSON(conn, json.RawMessage(msg)); err != nil {
 			return WSResult{}, fmt.Errorf("发送 WebSocket 消息失败: %w", err)
 		}
@@ -1107,9 +1105,6 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 			handler = sseHandler
 		}
 		result := ReceiveWSResponse(ctx, conn, handler)
-		if req.TraceFinalError && len(result.FailedEventRaw) > 0 {
-			captureFinalErrorUpstreamBody(ctx, result.FailedEventRaw)
-		}
 		return result, nil
 	}
 
@@ -1580,6 +1575,14 @@ func (g *OpenAIGateway) buildHTTPClient(account *sdk.Account) *http.Client {
 		Transport: transport,
 		Timeout:   g.requestTimeout(),
 	}
+}
+
+// Only model forwarding enters trace. Uploads, downloads, auth and polling use
+// the ordinary client and cannot replace the main request's diagnostic.
+func (g *OpenAIGateway) buildForwardHTTPClient(account *sdk.Account) *http.Client {
+	client := g.buildHTTPClient(account)
+	client.Transport = &requesttrace.Transport{Base: client.Transport}
+	return client
 }
 
 const (

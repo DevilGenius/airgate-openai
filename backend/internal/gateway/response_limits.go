@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/DevilGenius/airgate-sdk/runtimego/requesttrace"
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
@@ -52,7 +53,9 @@ func responseRequestContext(resp *http.Response) context.Context {
 	return context.Background()
 }
 
-func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (sdk.ForwardOutcome, error) {
+func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (outcome sdk.ForwardOutcome, err error) {
+	ctx, trace := requesttrace.Start(ctx, req.TraceFinalError)
+	defer func() { trace.Finish(&outcome, err) }()
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	limit := &responseLimit{cancel: cancel, streamBytes: g.streamResponseLimitBytes()}
@@ -63,7 +66,7 @@ func (g *OpenAIGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (s
 		writer = &limitedResponseWriter{ResponseWriter: req.Writer, limit: limit, stream: req.Stream}
 		copy.Writer = writer
 	}
-	outcome, err := g.forwardWithinResponseLimit(ctx, &copy)
+	outcome, err = g.forwardWithinResponseLimit(ctx, &copy)
 	if errors.Is(err, errResponseTooLarge) || len(outcome.Upstream.Body) > sdk.MaxBufferedResponseBytes {
 		limit.trip()
 	}
