@@ -44,7 +44,7 @@ func TestBPSKeepaliveDuringBaselineValidationWait(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 			defer cancel()
 			prepared, reason := basispoints.PrepareRequest([]byte("{\"model\":\"gpt-test\",\"input\":\"hi\"}"), "keepalive")
-			if reason != "" {
+			if reason != nil {
 				t.Fatal(reason)
 			}
 			raw, producer := io.Pipe()

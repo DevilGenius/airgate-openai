@@ -73,7 +73,7 @@ func TestPreparedDuplicateToolsRejectContractChanges(t *testing.T) {
 			if _, _, err := Prepare(raw, "account", nil); err == nil || !strings.Contains(err.Error(), "conflicting duplicate") {
 				t.Fatalf("execution contract conflict was lost: %v", err)
 			}
-			if prepared, reason := PrepareRequest(raw, "account"); prepared != nil || reason != FallbackProtocol {
+			if prepared, reason := PrepareRequest(raw, "account"); prepared != nil || reason == nil {
 				t.Fatalf("conflicting contract used BPS: %s", reason)
 			}
 		})

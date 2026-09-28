@@ -121,19 +121,18 @@ func TestBasispointsResponsesAndChat(t *testing.T) {
 	}
 }
 
-func TestBasispointsFallbackAndSharedFailurePolicy(t *testing.T) {
+func TestBasispointsErrorsStayOnSelectedTransport(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		status   int
-		body     string
-		fallback bool
+		name   string
+		status int
+		body   string
 	}{
-		{"unsupported model", 400, `{"error":{"code":"model_not_supported"}}`, true},
-		{"no access", 403, `{"error":{"code":"model_access_denied"}}`, true},
-		{"rate limited", 429, `{"error":{"code":"rate_limit_exceeded"}}`, false},
-		{"forbidden", 403, `{"error":{"message":"forbidden"}}`, false},
-		{"server failure", 503, `{"error":{"code":"internal_error"}}`, false},
-		{"authentication", 401, `{"error":{"code":"invalid_token"}}`, false},
+		{"unsupported model", 400, `{"error":{"code":"model_not_supported"}}`},
+		{"no access", 403, `{"error":{"code":"model_access_denied"}}`},
+		{"rate limited", 429, `{"error":{"code":"rate_limit_exceeded"}}`},
+		{"forbidden", 403, `{"error":{"message":"forbidden"}}`},
+		{"server failure", 503, `{"error":{"code":"internal_error"}}`},
+		{"authentication", 401, `{"error":{"code":"invalid_token"}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := bpsRequest()
@@ -146,13 +145,13 @@ func TestBasispointsFallbackAndSharedFailurePolicy(t *testing.T) {
 				_, _ = io.WriteString(w, tc.body)
 			})
 			outcome, used, err := g.tryBasispointsOAuth(context.Background(), req)
-			if err != nil || used == tc.fallback || calls.Load() != 1 || !bytes.Equal(original, req.Body) {
+			if err != nil || !used || calls.Load() != 1 || !bytes.Equal(original, req.Body) {
 				t.Fatalf("used=%v err=%v calls=%d", used, err, calls.Load())
 			}
-			if !tc.fallback {
+			{
 				outcome = applyForwardOutcomePolicies(nil, req, outcome)
 				want := failureOutcome(tc.status, []byte(tc.body), nil, extractOpenAIErrorMessage([]byte(tc.body)), 0)
-				if outcome.Kind != want.Kind || !outcome.ShouldFailover() || outcome.Upstream.StatusCode != tc.status {
+				if outcome.Kind != want.Kind || outcome.Upstream.StatusCode != tc.status {
 					t.Fatalf("BPS did not reuse native retry classification: %+v; want %s", outcome, want.Kind)
 				}
 			}

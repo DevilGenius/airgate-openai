@@ -179,6 +179,9 @@ func (g *OpenAIGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest
 
 func (g *OpenAIGateway) forwardOAuthCompact(ctx context.Context, req *sdk.ForwardRequest, reqServiceTier string) (sdk.ForwardOutcome, error) {
 	start := time.Now()
+	if basispointsEnabled(req) {
+		return basispointsHTTPFailure(basispointsInvalidRequestResponse(fmt.Errorf("standalone /responses/compact is not supported by this Basispoints adapter")), start), nil
+	}
 	account := req.Account
 	logger := sdk.LoggerFromContext(ctx)
 	session := resolveOpenAISession(req.Headers, req.Body, account.ID)

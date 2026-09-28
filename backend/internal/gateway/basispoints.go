@@ -52,17 +52,15 @@ func (b *basispointsBody) Close() error {
 	return b.ReadCloser.Close()
 }
 
-// openBasispoints returns used=false only before any client output, either for
-// local incompatibility or an explicit HTTP model rejection. The native caller
-// retains its original request and cannot recursively re-enter this attempt.
+// openBasispoints returns used=false only when BAS is disabled for this account.
+// Once selected, conversion and upstream errors remain on the BAS path.
 func (g *OpenAIGateway) openBasispoints(ctx context.Context, req *sdk.ForwardRequest, body []byte) (*http.Response, bool, error) {
 	if !basispointsEnabled(req) {
 		return nil, false, nil
 	}
-	prepared, reason := basispoints.PrepareRequest(body, basispointsIdentity(req, body))
-	if reason != "" {
-		sdk.LoggerFromContext(ctx).Info("basispoints_native_route", "reason", reason, "model", req.Model)
-		return nil, false, nil
+	prepared, err := basispoints.PrepareRequest(body, basispointsIdentity(req, body))
+	if err != nil {
+		return basispointsInvalidRequestResponse(err), true, nil
 	}
 	auth, err := g.buildOpenAIAuthHeaders(ctx, req.Account, false)
 	if err != nil {
@@ -86,10 +84,6 @@ func (g *OpenAIGateway) openBasispoints(ctx context.Context, req *sdk.ForwardReq
 		if readErr != nil {
 			return nil, true, readErr
 		}
-		if basispoints.ModelUnavailable(resp.StatusCode, errorBody) {
-			sdk.LoggerFromContext(ctx).Info("basispoints_native_route", "reason", "model_unavailable", "model", req.Model)
-			return nil, false, nil
-		}
 		resp.Body = io.NopCloser(bytes.NewReader(errorBody))
 		return resp, true, nil
 	}
@@ -105,6 +99,14 @@ func (g *OpenAIGateway) openBasispoints(ctx context.Context, req *sdk.ForwardReq
 	resp.Body = &basispointsBody{ReadCloser: converted, cancel: cancel}
 	sdk.LoggerFromContext(ctx).Debug("basispoints_request_started", "model", req.Model, "account_id", req.Account.ID)
 	return resp, true, nil
+}
+
+func basispointsInvalidRequestResponse(err error) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Header:     http.Header{"Content-Type": {"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader(openAIErrorJSON("invalid_request_error", "basispoints_request_invalid", err.Error()))),
+	}
 }
 
 func basispointsHTTPFailure(resp *http.Response, start time.Time) sdk.ForwardOutcome {
@@ -131,7 +133,7 @@ func (g *OpenAIGateway) tryBasispointsOAuth(ctx context.Context, req *sdk.Forwar
 	start := time.Now()
 	body, err := basispointsResponsesBody(req)
 	if err != nil {
-		return sdk.ForwardOutcome{}, false, nil
+		return basispointsHTTPFailure(basispointsInvalidRequestResponse(err), start), true, nil
 	}
 	body, _ = sjson.SetBytes(body, "model", req.Model)
 	resp, used, err := g.openBasispoints(ctx, req, body)
@@ -225,8 +227,8 @@ func (g *OpenAIGateway) tryBasispointsOAuth(ctx context.Context, req *sdk.Forwar
 	return outcome, true, nil
 }
 
-// Native normalization strips controls that Codex ignores. Retain them for the
-// BPS capability check, and map Chat's structured format before preparing BPS.
+// Adapt client protocols to Responses while retaining fields needed by the BAS
+// converter. PrepareRequest alone owns BAS compatibility and wire-field filtering.
 func basispointsResponsesBody(req *sdk.ForwardRequest) ([]byte, error) {
 	body, err := wrapAsResponsesAPIWithTier(req.Body, req.Model, resolveOpenAIRequestServiceTier(req.Body, req.Headers))
 	if err != nil {

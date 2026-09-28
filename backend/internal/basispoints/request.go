@@ -215,6 +215,9 @@ func prepare(raw []byte, scope string, replay *ReplayCache, nativeToolImages map
 			iteration++
 		}
 	}
+	// The BAS wire schema rejects service_tier (even default). Build an explicit
+	// allowlist here for every ingress protocol; tiers and native-only generation
+	// controls are omitted. Billing uses the actual terminal response tier.
 	output := object{
 		"model": model, "model_selection": "explicit", "stream": true, "store": false,
 		"input": append(prologue, translated...), "reasoning_effort": effort,

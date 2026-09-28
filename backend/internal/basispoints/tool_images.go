@@ -5,8 +5,8 @@ import "fmt"
 // separateToolImages runs after output validation. BPS accepts HTTPS images in
 // messages, not in tool results. Keep result text and image positions linked by
 // call_id labels, and emit the images immediately after their tool result.
-// PrepareRequest routes native file IDs and inline images to native OAuth before
-// this conversion; it does not upload attachments or recover cross-request state.
+// Content validation accepts supported image references and rejects unsupported
+// ones before conversion; it never switches the selected upstream transport.
 func separateToolImages(item object) object {
 	parts, ok := item["output"].([]any)
 	if !ok {

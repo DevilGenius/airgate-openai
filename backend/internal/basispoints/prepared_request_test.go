@@ -5,30 +5,30 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"net/http"
+
 	"strings"
 	"testing"
 )
 
-func TestPreparedRequestRoutesBeforeNetworkWithoutMutatingRequest(t *testing.T) {
+func TestPreparedRequestConvertsOrRejectsWithoutMutatingRequest(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		extra  object
-		native bool
+		name    string
+		extra   object
+		invalid bool
 	}{
 		{name: "text"},
 		{name: "functions", extra: object{"tools": []any{object{"type": "function", "name": "shell", "parameters": object{"type": "object"}}}}},
 		{name: "model passthrough", extra: object{"model": "future-model"}},
-		{name: "hosted search", extra: object{"tools": []any{object{"type": "web_search"}}}, native: true},
-		{name: "nested hosted tool", extra: object{"tools": []any{object{"type": "namespace", "name": "nested", "tools": []any{object{"type": "web_search"}}}}}, native: true},
-		{name: "additional hosted tool", extra: object{"input": []any{message("user", "hi"), object{"type": "additional_tools", "tools": []any{object{"type": "web_search"}}}}}, native: true},
-		{name: "image generation", extra: object{"tools": []any{object{"type": "image_generation"}}}, native: true},
-		{name: "incremental history", extra: object{"previous_response_id": "resp-native"}, native: true},
-		{name: "priority", extra: object{"service_tier": "priority"}, native: true},
-		{name: "sampling", extra: object{"temperature": 0.5}, native: true},
-		{name: "inline image", extra: object{"input": []any{object{"role": "user", "content": []any{object{"type": "input_image", "image_url": "data:image/png;base64,YQ=="}}}}}, native: true},
-		{name: "native attachment", extra: object{"input": []any{object{"role": "user", "content": []any{object{"type": "input_image", "file_id": "file-abc"}}}}}, native: true},
-		{name: "encrypted message", extra: object{"input": []any{object{"role": "user", "content": []any{object{"type": "encrypted_content", "encrypted_content": "opaque"}}}}}, native: true},
+		{name: "hosted search", extra: object{"tools": []any{object{"type": "web_search"}}}},
+		{name: "nested hosted tool", extra: object{"tools": []any{object{"type": "namespace", "name": "nested", "tools": []any{object{"type": "web_search"}}}}}},
+		{name: "additional hosted tool", extra: object{"input": []any{message("user", "hi"), object{"type": "additional_tools", "tools": []any{object{"type": "web_search"}}}}}},
+		{name: "image generation", extra: object{"tools": []any{object{"type": "image_generation"}}}},
+		{name: "incremental history", extra: object{"previous_response_id": "resp-native"}, invalid: true},
+		{name: "priority", extra: object{"service_tier": "priority"}},
+		{name: "sampling", extra: object{"temperature": 0.5}},
+		{name: "inline image", extra: object{"input": []any{object{"role": "user", "content": []any{object{"type": "input_image", "image_url": "data:image/png;base64,YQ=="}}}}}, invalid: true},
+		{name: "native attachment", extra: object{"input": []any{object{"role": "user", "content": []any{object{"type": "input_image", "file_id": "file-abc"}}}}}},
+		{name: "encrypted message", extra: object{"input": []any{object{"role": "user", "content": []any{object{"type": "encrypted_content", "encrypted_content": "opaque"}}}}}, invalid: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			source := testSource()
@@ -38,10 +38,10 @@ func TestPreparedRequestRoutesBeforeNetworkWithoutMutatingRequest(t *testing.T) 
 			raw, _ := json.Marshal(source)
 			before := bytes.Clone(raw)
 			prepared, reason := PrepareRequest(raw, "account:key:thread")
-			if (reason != "") != tc.native || !bytes.Equal(raw, before) {
+			if (reason != nil) != tc.invalid || !bytes.Equal(raw, before) {
 				t.Fatalf("reason=%q mutation=%v", reason, !bytes.Equal(raw, before))
 			}
-			if !tc.native && (prepared == nil || len(prepared.body) == 0) {
+			if !tc.invalid && (prepared == nil || len(prepared.body) == 0) {
 				t.Fatal("missing prepared request")
 			}
 		})
@@ -69,7 +69,7 @@ func TestPreparedRequestFullToolHistoryNeedsNoPriorRequest(t *testing.T) {
 			source["tools"] = []any{tool}
 			raw, _ := json.Marshal(source)
 			initial, reason := PrepareRequest(raw, "account:key:thread")
-			if reason != "" {
+			if reason != nil {
 				t.Fatalf("initial request: %s", reason)
 			}
 			wire := sse(object{"type": "response.completed", "response": object{"id": "resp_first", "status": "completed", "output": []any{nativeCall(envelope)}}})
@@ -98,7 +98,7 @@ func TestPreparedRequestFullToolHistoryNeedsNoPriorRequest(t *testing.T) {
 			var previousInput string
 			for _, identity := range []string{"account:key:thread", "account:key:thread", "other-account:key:thread"} {
 				prepared, reason := PrepareRequest(raw, identity)
-				if reason != "" {
+				if reason != nil {
 					t.Fatalf("full history should not depend on an earlier process/account: %s", reason)
 				}
 				body, err := io.ReadAll(prepared.Body())
@@ -128,7 +128,7 @@ func TestPreparedRequestFullToolHistoryNeedsNoPriorRequest(t *testing.T) {
 			// result must not be completed from another request's retained state.
 			source["input"] = []any{result}
 			raw, _ = json.Marshal(source)
-			if prepared, reason := PrepareRequest(raw, "account:key:thread"); prepared != nil || reason != FallbackProtocol {
+			if prepared, reason := PrepareRequest(raw, "account:key:thread"); prepared != nil || reason == nil {
 				t.Fatalf("orphan result inherited state: prepared=%v reason=%s", prepared != nil, reason)
 			}
 		})
@@ -138,7 +138,7 @@ func TestPreparedRequestFullToolHistoryNeedsNoPriorRequest(t *testing.T) {
 func TestPreparedRequestIdentityIsDeterministicWithoutRetainingBodies(t *testing.T) {
 	raw, _ := json.Marshal(testSource())
 	first, reason := PrepareRequest(raw, "account:key:thread")
-	if reason != "" {
+	if reason != nil {
 		t.Fatal(reason)
 	}
 	one, _ := io.ReadAll(first.Body())
@@ -150,7 +150,7 @@ func TestPreparedRequestIdentityIsDeterministicWithoutRetainingBodies(t *testing
 		one[i] = 0
 	}
 	again, reason := PrepareRequest(raw, "account:key:thread")
-	if reason != "" {
+	if reason != nil {
 		t.Fatal(reason)
 	}
 	three, _ := io.ReadAll(again.Body())
@@ -178,23 +178,5 @@ func TestBasispointsProfileHeaders(t *testing.T) {
 	headers.Set("Authorization", "modified")
 	if Headers("Bearer test", "account").Get("Authorization") != "Bearer test" {
 		t.Fatal("shared mutable profile")
-	}
-}
-
-func TestModelUnavailableRequiresExplicitRejection(t *testing.T) {
-	raw := []byte(`{"error":{"code":"model_not_supported"}}`)
-	for _, status := range []int{200, 401, 429, 500, 502, 503} {
-		if ModelUnavailable(status, raw) {
-			t.Fatalf("replayed status %d", status)
-		}
-	}
-	for _, code := range []string{"model_not_supported", "model_not_found", "model_access_denied"} {
-		raw, _ := json.Marshal(object{"error": object{"code": code}})
-		if !ModelUnavailable(http.StatusForbidden, raw) {
-			t.Fatalf("did not recognize %s", code)
-		}
-	}
-	if ModelUnavailable(403, []byte(`{"error":{"message":"forbidden"}}`)) {
-		t.Fatal("ambiguous denial was replayed")
 	}
 }

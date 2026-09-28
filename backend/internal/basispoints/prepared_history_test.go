@@ -17,7 +17,7 @@ func prepareHistoryFixture(t *testing.T, source object, identity string) (object
 	}
 	before := bytes.Clone(raw)
 	prepared, reason := PrepareRequest(raw, identity)
-	if prepared == nil || reason != "" {
+	if prepared == nil || reason != nil {
 		t.Fatalf("unexpected native fallback: %s", reason)
 	}
 	if !bytes.Equal(raw, before) {
@@ -134,16 +134,14 @@ func TestPreparedToolImagesPreserveOrderAndCallAssociation(t *testing.T) {
 	}
 }
 
-func TestPreparedHistoryKeepsNativeRouting(t *testing.T) {
+func TestPreparedHistoryRejectsUnsupportedContent(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		part object
-		want FallbackReason
 	}{
-		{"file ID", object{"type": "input_image", "file_id": "file-native"}, FallbackNativeAttachment},
-		{"inline image", object{"type": "input_image", "image_url": "data:image/png;base64,YQ=="}, FallbackProtocol},
-		{"invalid URL", object{"type": "input_image", "image_url": "http://example.com/a.png"}, FallbackProtocol},
-		{"encrypted part", object{"type": "encrypted_content", "encrypted_content": "opaque"}, FallbackProtocol},
+		{"inline image", object{"type": "input_image", "image_url": "data:image/png;base64,YQ=="}},
+		{"invalid URL", object{"type": "input_image", "image_url": "http://example.com/a.png"}},
+		{"encrypted part", object{"type": "encrypted_content", "encrypted_content": "opaque"}},
 	} {
 		for _, kind := range []string{"message", "agent_message", "function_call_output", "custom_tool_call_output"} {
 			t.Run(tc.name+"/"+kind, func(t *testing.T) {
@@ -161,8 +159,8 @@ func TestPreparedHistoryKeepsNativeRouting(t *testing.T) {
 					t.Fatal(err)
 				}
 				before := bytes.Clone(raw)
-				if prepared, reason := PrepareRequest(raw, "account"); prepared != nil || reason != tc.want || !bytes.Equal(raw, before) {
-					t.Fatalf("native routing changed: %s, want %s", reason, tc.want)
+				if prepared, reason := PrepareRequest(raw, "account"); prepared != nil || reason == nil || !bytes.Equal(raw, before) {
+					t.Fatalf("unsupported content accepted or request mutated: %v", reason)
 				}
 			})
 		}
