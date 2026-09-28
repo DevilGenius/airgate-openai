@@ -279,7 +279,7 @@ streamLoop:
 	elapsed := time.Since(start)
 	usage.FirstEventMs = timing.firstEventMs
 	usage.FirstTokenMs = timing.firstTokenMs
-	setUsageServiceTier(usage, resolveOpenAIUsageServiceTier(reqServiceTier, upstreamServiceTier))
+	setUsageServiceTier(usage, upstreamServiceTier, reqServiceTier)
 	numImages := imageGenCount
 	if numImages <= 0 {
 		numImages = estimateImageCountFromTokens(toolImageOut)
@@ -551,13 +551,14 @@ func handleNonStreamResponse(resp *http.Response, w http.ResponseWriter, start t
 	elapsed := time.Since(start)
 	usage := newTokenUsage(
 		gjson.GetBytes(body, "model").String(),
-		resolveOpenAIUsageServiceTier(reqServiceTier, gjson.GetBytes(body, "service_tier").String()),
+		gjson.GetBytes(body, "service_tier").String(),
 		parsed.inputTokens,
 		parsed.outputTokens,
 		parsed.cachedInputTokens,
 		parsed.cacheCreationTokens,
 		parsed.reasoningOutputTokens,
 		elapsed.Milliseconds(),
+		reqServiceTier,
 	)
 	// 非流式 HTTP 响应无法观察 token 级事件，完整响应到达时间同时作为 TTFT。
 	usage.FirstTokenMs = elapsed.Milliseconds()

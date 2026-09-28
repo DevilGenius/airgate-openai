@@ -514,7 +514,7 @@ func (g *OpenAIGateway) handleAnthropicNonStreamFromResponses(
 		outcome := anthropicResponseFailureOutcome(wsResult.Err, false, time.Since(start))
 		// The failure may carry billable usage, regardless of transport.
 		if wsResult.InputTokens > 0 || wsResult.OutputTokens > 0 || wsResult.CachedInputTokens > 0 || wsResult.CacheCreationTokens > 0 {
-			usage := newTokenUsage(firstNonEmptyString(mappedModel, wsResult.Model), wsResult.ServiceTier, wsResult.InputTokens, wsResult.OutputTokens, wsResult.CachedInputTokens, wsResult.CacheCreationTokens, wsResult.ReasoningOutputTokens, timing.firstEventMs)
+			usage := newTokenUsage(firstNonEmptyString(wsResult.Model, mappedModel), wsResult.ServiceTier, wsResult.InputTokens, wsResult.OutputTokens, wsResult.CachedInputTokens, wsResult.CacheCreationTokens, wsResult.ReasoningOutputTokens, timing.firstEventMs, firstNonEmptyTier(requestServiceTier, defaultServiceTier))
 			fillUsageCost(usage)
 			outcome.Usage = usage
 		}
@@ -548,26 +548,22 @@ func (g *OpenAIGateway) handleAnthropicNonStreamFromResponses(
 	upstreamHeaders := http.Header{}
 	upstreamHeaders.Set("Content-Type", "application/json")
 
-	// 计费 model 用映射后的 GPT 名
-	billingModel := mappedModel
+	// As with Responses and streaming, use the observed model before fallback.
+	billingModel := firstNonEmptyString(wsResult.Model, mappedModel)
 	if billingModel == "" {
 		billingModel = gjson.Get(anthropicJSON, "model").String()
 	}
-	serviceTier := resolveOpenAIUsageServiceTier(
-		firstNonEmptyTier(requestServiceTier, defaultServiceTier),
-		wsResult.ServiceTier,
-	)
-
 	elapsed := time.Since(start)
 	usage := newTokenUsage(
 		billingModel,
-		serviceTier,
+		wsResult.ServiceTier,
 		wsResult.InputTokens,
 		wsResult.OutputTokens,
 		wsResult.CachedInputTokens,
 		wsResult.CacheCreationTokens,
 		wsResult.ReasoningOutputTokens,
 		timing.firstEventMs,
+		firstNonEmptyTier(requestServiceTier, defaultServiceTier),
 	)
 	usage.FirstTokenMs = timing.firstTokenMs
 	fillUsageCost(usage)

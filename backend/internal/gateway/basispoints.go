@@ -193,7 +193,7 @@ func (g *OpenAIGateway) tryBasispointsOAuth(ctx context.Context, req *sdk.Forwar
 	} else {
 		timing = silent.timing
 	}
-	usage := newTokenUsage(firstNonEmptyString(result.Model, req.Model), result.ServiceTier, result.InputTokens, result.OutputTokens, result.CachedInputTokens, result.CacheCreationTokens, result.ReasoningOutputTokens, timing.firstEventMs)
+	usage := newTokenUsage(firstNonEmptyString(result.Model, req.Model), result.ServiceTier, result.InputTokens, result.OutputTokens, result.CachedInputTokens, result.CacheCreationTokens, result.ReasoningOutputTokens, timing.firstEventMs, resolveOpenAIRequestServiceTier(req.Body, req.Headers))
 	usage.FirstTokenMs = timing.firstTokenMs
 	setUsageReasoningEffort(usage, gjson.GetBytes(body, "reasoning.effort").String())
 	setUsageResponseID(usage, result.ResponseID)
@@ -287,10 +287,11 @@ func (g *OpenAIGateway) tryBasispointsAnthropic(ctx context.Context, req *sdk.Fo
 	}
 	// BPS response IDs must not enter the native continuation/session cache.
 	var outcome sdk.ForwardOutcome
+	requestedTier := resolveOpenAIRequestServiceTier(req.Body, req.Headers)
 	if req.Stream && w != nil {
-		outcome, _ = translateResponsesSSEToAnthropicSSE(ctx, resp, w, originalModel, mappedModel, req.Body, "", "", start, g.streamIdleTimeout(), openAISessionResolution{})
+		outcome, _ = translateResponsesSSEToAnthropicSSE(ctx, resp, w, originalModel, mappedModel, req.Body, requestedTier, "", start, g.streamIdleTimeout(), openAISessionResolution{})
 	} else {
-		outcome, _ = g.handleAnthropicNonStreamFromResponses(resp, nil, originalModel, mappedModel, req.Body, "", "", start, openAISessionResolution{}, 0)
+		outcome, _ = g.handleAnthropicNonStreamFromResponses(resp, nil, originalModel, mappedModel, req.Body, requestedTier, "", start, openAISessionResolution{}, 0)
 	}
 	setUsageReasoningEffort(outcome.Usage, gjson.GetBytes(body, "reasoning.effort").String())
 	if outcome.Usage != nil {

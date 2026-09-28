@@ -1245,13 +1245,14 @@ func (g *OpenAIGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReques
 
 	usage := newTokenUsage(
 		firstNonEmptyString(result.Model, currentModel),
-		resolveOpenAIUsageServiceTier(resolveOpenAIRequestServiceTier(req.Body, req.Headers), result.ServiceTier),
+		result.ServiceTier,
 		result.InputTokens,
 		result.OutputTokens,
 		result.CachedInputTokens,
 		result.CacheCreationTokens,
 		result.ReasoningOutputTokens,
 		firstEventMs,
+		resolveOpenAIRequestServiceTier(req.Body, req.Headers),
 	)
 	usage.FirstTokenMs = firstTokenMs
 	usage.WSDialMs = wsDialMs

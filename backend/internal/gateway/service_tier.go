@@ -2,19 +2,15 @@ package gateway
 
 import "github.com/tidwall/gjson"
 
-// OAuth and API Key upstreams use the same policy. Ordinary requests remain
-// ordinary. For priority (including fast) and flex requests, an explicit
-// supported response tier determines billing; otherwise use the requested tier.
+// Billing is independent of upstream transport and downstream protocol.
+// A supported actual response tier wins; only an absent/unsupported response
+// tier falls back to the effective request tier. Fast is an alias for priority.
 // Ordinary billing is represented by an empty Usage service_tier.
 func resolveOpenAIUsageServiceTier(requestedTier, upstreamTier string) string {
-	requested := normalizeOpenAIServiceTier(requestedTier)
-	if requested == "" {
-		return ""
-	}
 	if actual := normalizeOpenAIWireServiceTier(upstreamTier); actual != "" {
 		return normalizeOpenAIServiceTier(actual)
 	}
-	return requested
+	return normalizeOpenAIServiceTier(requestedTier)
 }
 
 func upstreamSSEServiceTier(eventType string, data []byte) (string, bool) {

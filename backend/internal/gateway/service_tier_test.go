@@ -40,12 +40,12 @@ func TestAPIKeyServiceTierForwardingAndBilling(t *testing.T) {
 		priceMultiplier                         float64
 	}{
 		{"omitted-default", "", "default", "default", "", 1},
-		{"omitted-priority", "", "priority", "default", "", 1},
-		{"omitted-fast", "", "fast", "default", "", 1},
+		{"omitted-priority", "", "priority", "default", "priority", 2},
+		{"omitted-fast", "", "fast", "default", "priority", 2},
 		{"omitted-missing", "", "", "default", "", 1},
-		{"default-priority", "default", "priority", "default", "", 1},
-		{"default-fast", "default", "fast", "default", "", 1},
-		{"default-flex", "default", "flex", "default", "", 1},
+		{"default-priority", "default", "priority", "default", "priority", 2},
+		{"default-fast", "default", "fast", "default", "priority", 2},
+		{"default-flex", "default", "flex", "default", "flex", 0.5},
 		{"priority-confirmed", "priority", "priority", "priority", "priority", 2},
 		{"priority-downgraded", "priority", "default", "priority", "", 1},
 		{"priority-auto-falls-back", "priority", "auto", "priority", "priority", 2},
@@ -88,7 +88,7 @@ func TestAPIKeyServiceTierTerminalEvents(t *testing.T) {
 				requested, reported, billed string
 				multiplier                  float64
 			}{
-				{"default", "priority", "", 1},
+				{"default", "priority", "priority", 2},
 				{"priority", "default", "", 1},
 				{"priority", "priority", "priority", 2},
 				{"fast", "default", "", 1},
@@ -117,7 +117,7 @@ func TestAPIKeyChatServiceTierReportedBeforeUsage(t *testing.T) {
 		{"fast-later-flex", "fast", "flex", "flex", 0.5},
 		{"flex-later-default", "flex", "default", "", 1},
 		{"flex-priority-confirmed-early", "flex", "", "priority", 2},
-		{"no-unrequested-upgrade", "", "", "", 1},
+		{"reported-priority-without-request", "", "", "priority", 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			outcome, _ := forwardServiceTierTest(t, serviceTierTestProtocols[4], tc.requested, tc.final, "response.completed", "priority")
@@ -133,7 +133,7 @@ func TestOAuthServiceTierUsesSharedBillingPolicy(t *testing.T) {
 			multiplier                        float64
 		}{
 			{"priority-downgraded", "priority", "default", "", 1},
-			{"no-unrequested-priority", "", "priority", "", 1},
+			{"reported-priority", "", "priority", "priority", 2},
 			{"priority-unreported", "priority", "", "priority", 2},
 			{"priority-confirmed", "priority", "priority", "priority", 2},
 			{"fast-confirmed", "fast", "priority", "priority", 2},
@@ -207,7 +207,7 @@ func TestOAuthWebSocketServiceTier(t *testing.T) {
 			name, requested, reported, billed string
 			multiplier                        float64
 		}{
-			{"default-not-upgraded", "", "priority", "", 1},
+			{"default-served-as-priority", "", "priority", "priority", 2},
 			{"priority-unreported", "priority", "", "priority", 2},
 			{"priority-downgraded", "priority", "default", "", 1},
 			{"priority-confirmed", "priority", "priority", "priority", 2},
@@ -279,8 +279,8 @@ func TestOAuthWebSocketServiceTier(t *testing.T) {
 				if result.ServiceTier != wantReported {
 					t.Fatalf("terminal WS tier = %q, want %q; err=%v", result.ServiceTier, wantReported, result.Err)
 				}
-				usage := newTokenUsage(result.Model, resolveOpenAIUsageServiceTier(wireTier, result.ServiceTier),
-					result.InputTokens, result.OutputTokens, result.CachedInputTokens, result.CacheCreationTokens, result.ReasoningOutputTokens, 0)
+				usage := newTokenUsage(result.Model, result.ServiceTier,
+					result.InputTokens, result.OutputTokens, result.CachedInputTokens, result.CacheCreationTokens, result.ReasoningOutputTokens, 0, wireTier)
 				fillUsageCost(usage)
 				assertServiceTierTestUsage(t, usage, tc.billed, tc.multiplier)
 			})

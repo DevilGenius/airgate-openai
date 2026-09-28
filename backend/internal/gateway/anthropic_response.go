@@ -1109,16 +1109,16 @@ done:
 	}
 
 	elapsed := time.Since(start)
-	serviceTier := resolveOpenAIUsageServiceTier(firstNonEmptyTier(requestServiceTier, defaultServiceTier), upstreamServiceTier)
 	usage := newTokenUsage(
 		billingModel,
-		serviceTier,
+		upstreamServiceTier,
 		state.InputTokens,
 		state.OutputTokens,
 		state.CachedInputTokens,
 		state.CacheCreationTokens,
 		state.ReasoningOutputTokens,
 		timing.firstEventMs,
+		firstNonEmptyTier(requestServiceTier, defaultServiceTier),
 	)
 	usage.FirstTokenMs = timing.firstTokenMs
 

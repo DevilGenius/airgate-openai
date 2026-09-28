@@ -18,7 +18,7 @@ var serviceTierOverrideCases = []struct {
 	{"group-priority-no-client", "priority", "", "", "priority", "priority", 2},
 	{"group-priority-flex-client", "priority", "flex", "priority", "priority", "priority", 2},
 	{"group-fast-upstream-downgrade", "fast", "default", "default", "priority", "", 1},
-	{"group-default-priority-client", "default", "priority", "priority", "default", "", 1},
+	{"group-default-priority-client", "default", "priority", "priority", "default", "priority", 2},
 	{"group-flex-priority-client", "flex", "priority", "", "flex", "flex", 0.5},
 	{"group-flex-upstream-default", "flex", "priority", "default", "flex", "", 1},
 	{"group-flex-upstream-priority", "flex", "default", "priority", "flex", "priority", 2},
@@ -26,7 +26,7 @@ var serviceTierOverrideCases = []struct {
 	{"invalid-group-keeps-client", "invalid-tier", "fast", "", "priority", "priority", 2},
 	{"empty-group-keeps-client", "", "priority", "", "priority", "priority", 2},
 	{"empty-group-keeps-flex", "", "flex", "flex", "flex", "flex", 0.5},
-	{"no-overrides", "", "", "priority", "default", "", 1},
+	{"no-overrides", "", "", "priority", "default", "priority", 2},
 }
 
 func TestServiceTierGroupOverrideForwardingAndBilling(t *testing.T) {
@@ -90,7 +90,7 @@ func TestServiceTierGroupOverrideOAuthRequestBuilders(t *testing.T) {
 				if effectiveTier != tc.wire {
 					t.Fatalf("billing request tier = %q, wire tier = %q", effectiveTier, tc.wire)
 				}
-				usage := newTokenUsage(req.Model, resolveOpenAIUsageServiceTier(effectiveTier, tc.reported), 70, 50, 20, 10, 0, 0)
+				usage := newTokenUsage(req.Model, tc.reported, 70, 50, 20, 10, 0, 0, effectiveTier)
 				fillUsageCost(usage)
 				assertServiceTierTestUsage(t, usage, tc.billed, tc.multiplier)
 			})

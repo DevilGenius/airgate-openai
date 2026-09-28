@@ -135,7 +135,10 @@ func forwardErrForOutcome(outcome sdk.ForwardOutcome, err error) error {
 	return err
 }
 
-func newTokenUsage(modelID, serviceTier string, inputTokens, outputTokens, cachedInputTokens, cacheCreationTokens, reasoningOutputTokens int, firstEventMs int64) *sdk.Usage {
+// Adapters provide measurements, not billing decisions. The reported tier is
+// authoritative; requestedTier is an optional fallback when upstream omits it.
+// All models/protocols use setUsageServiceTier and fillUsageCost for billing.
+func newTokenUsage(modelID, reportedTier string, inputTokens, outputTokens, cachedInputTokens, cacheCreationTokens, reasoningOutputTokens int, firstEventMs int64, requestedTier ...string) *sdk.Usage {
 	billingModel, wireModel := usageBillingModel(modelID)
 	usage := &sdk.Usage{
 		Model:        billingModel,
@@ -145,7 +148,7 @@ func newTokenUsage(modelID, serviceTier string, inputTokens, outputTokens, cache
 	if wireModel != "" {
 		setUsageMetadata(usage, usageAttrWireModel, wireModel)
 	}
-	setUsageServiceTier(usage, serviceTier)
+	setUsageServiceTier(usage, reportedTier, requestedTier...)
 	setUsageTokens(usage, inputTokens, outputTokens, cachedInputTokens, cacheCreationTokens, reasoningOutputTokens)
 	return usage
 }
@@ -165,12 +168,15 @@ func setUsageReasoningEffort(usage *sdk.Usage, effort string) {
 	usage.ReasoningEffort = effort
 }
 
-func setUsageServiceTier(usage *sdk.Usage, tier string) {
+// The single billing-tier assignment point, also used by incremental parsers.
+func setUsageServiceTier(usage *sdk.Usage, reportedTier string, requestedTier ...string) {
 	if usage == nil {
 		return
 	}
-	tier = normalizeOpenAIServiceTier(tier)
+	tier := resolveOpenAIUsageServiceTier(firstNonEmptyTier(requestedTier...), reportedTier)
 	if tier == "" {
+		// A terminal default must clear any earlier special-tier observation.
+		delete(usage.Metadata, usageAttrServiceTier)
 		return
 	}
 	setUsageMetadata(usage, usageAttrServiceTier, tier)
