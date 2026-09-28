@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -66,13 +67,23 @@ func (g *OpenAIGateway) openBasispoints(ctx context.Context, req *sdk.ForwardReq
 	if err != nil {
 		return nil, true, err
 	}
+	headers := basispoints.Headers(auth.Get("Authorization"), req.Account.Credentials["chatgpt_account_id"])
+	client := g.buildForwardHTTPClient(ctx, req, req.Account)
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	if err := prepared.UploadImages(ctx, func(ctx context.Context, image basispoints.InlineImage) (string, error) {
+		return uploadBasispointsImage(ctx, client, headers, image)
+	}); err != nil {
+		var httpErr *basispointsAttachmentHTTPError
+		if errors.As(err, &httpErr) {
+			return httpErr.response, true, nil
+		}
+		return nil, true, err
+	}
 	upstream, err := http.NewRequestWithContext(ctx, http.MethodPost, basispoints.ResponsesURL, prepared.Body())
 	if err != nil {
 		return nil, true, err
 	}
-	upstream.Header = basispoints.Headers(auth.Get("Authorization"), req.Account.Credentials["chatgpt_account_id"])
-	client := g.buildForwardHTTPClient(ctx, req, req.Account)
-	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	upstream.Header = headers
 	resp, cancel, err := g.doStreamableUpstream(ctx, client, upstream, true)
 	if err != nil {
 		return nil, true, err
@@ -111,6 +122,15 @@ func basispointsInvalidRequestResponse(err error) *http.Response {
 
 func basispointsHTTPFailure(resp *http.Response, start time.Time) sdk.ForwardOutcome {
 	body, _ := readLimitedErrorBody(resp.Body)
+	// Local BAS validation is a request error, never evidence about credentials.
+	// Its text may describe a disabled feature and must not enter account heuristics.
+	if resp.StatusCode == http.StatusBadRequest && gjson.GetBytes(body, "error.code").String() == "basispoints_request_invalid" {
+		return sdk.ForwardOutcome{
+			Kind:     sdk.OutcomeClientError,
+			Upstream: sdk.UpstreamResponse{StatusCode: http.StatusBadRequest, Headers: http.Header{"Content-Type": {"application/json"}}, Body: body},
+			Reason:   extractOpenAIErrorMessage(body), Duration: time.Since(start),
+		}
+	}
 	if !gjson.GetBytes(body, "error").IsObject() {
 		body = openAIErrorJSON(openAIErrorTypeForStatus(resp.StatusCode), "", truncate(string(body), 200))
 	}

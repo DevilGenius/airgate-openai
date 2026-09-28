@@ -12,6 +12,7 @@ import (
 type PreparedRequest struct {
 	body   []byte
 	bridge *Bridge
+	images map[string]InlineImage
 }
 
 // PrepareRequest is side-effect free. Identity is only a seed for upstream
@@ -19,15 +20,24 @@ type PreparedRequest struct {
 // Prepare owns all BAS compatibility conversion and wire-field filtering.
 // Invalid requests fail explicitly; selecting BAS never falls back to native OAuth.
 func PrepareRequest(body []byte, identity string) (*PreparedRequest, error) {
+	body, images, err := planInlineImages(body)
+	if err != nil {
+		return nil, err
+	}
 	prepared, bridge, err := Prepare(body, identity, nil)
 	if err != nil {
 		return nil, err
 	}
-	return &PreparedRequest{body: prepared, bridge: bridge}, nil
+	return &PreparedRequest{body: prepared, bridge: bridge, images: images}, nil
 }
 
 // Body returns a fresh reader; the prepared wire body cannot be mutated by callers.
-func (r *PreparedRequest) Body() io.Reader { return bytes.NewReader(r.body) }
+func (r *PreparedRequest) Body() io.Reader {
+	if len(r.images) != 0 {
+		return pendingImageReader{}
+	}
+	return bytes.NewReader(r.body)
+}
 
 // Stream takes ownership of upstream. Closing the returned body cancels protocol
 // translation and closes upstream, including a read or pipe write in progress.

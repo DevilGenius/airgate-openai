@@ -3,6 +3,7 @@ package gateway
 import (
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -31,7 +32,7 @@ const maxErrorResponseBodyBytes = 1 << 20
 //	402 / 403 + 余额或配额耗尽（结构化 code 或纯文本）→ AccountQuotaExhausted
 //	  （Core 语义：可 failover 换号重试，并把该账号直接 disabled）
 //	400 + 消息含限流关键词 → AccountRateLimited（部分上游用 400 返回 usage_limit_reached）
-//	400 + 消息含 disabled/deactivated → AccountDead
+//	400 + 明确账号/组织/workspace 禁用语义 → AccountDead
 //	overloaded 语义 → FamilyTransient（走 Core 的 family 级短退避）
 //	5xx → UpstreamTransient
 //	其它 4xx → ClientError（客户端请求自己的问题，账号无辜）
@@ -224,14 +225,14 @@ func isOverloadedText(parts ...string) bool {
 	return strings.Contains(combined, "overloaded")
 }
 
+var disabledAccountPattern = regexp.MustCompile(`(?:^|[^[:alnum:]])(?:account|organization|organisation|workspace|user)[[:space:]]+(?:(?:has|have)[[:space:]]+been[[:space:]]+|(?:is|was)[[:space:]]+)?(?:(?:permanently|temporarily)[[:space:]]+)?(?:disabled|deactivated|suspended)(?:$|[^[:alnum:]])|(?:^|[^[:alnum:]])(?:disabled|deactivated|suspended)[[:space:]]+(?:account|organization|organisation|workspace|user)(?:$|[^[:alnum:]])`)
+
 func isDisabledAccountText(parts ...string) bool {
-	combined := strings.ToLower(strings.Join(parts, " "))
+	combined := strings.ReplaceAll(strings.ToLower(strings.Join(parts, " ")), "_", " ")
 	if combined == "" {
 		return false
 	}
-	return strings.Contains(combined, "disabled") ||
-		strings.Contains(combined, "deactivated") ||
-		strings.Contains(combined, "suspended") ||
+	return disabledAccountPattern.MatchString(combined) ||
 		strings.Contains(combined, "not an active member of the selected workspace") ||
 		strings.Contains(combined, "personal access token owner is inactive")
 }
