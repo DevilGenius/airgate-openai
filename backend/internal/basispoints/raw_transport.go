@@ -99,7 +99,7 @@ func (b *Bridge) toolTransportEnvelope(arguments object) (object, string, error)
 		envelope, err := decodeTransportEnvelope(arguments["code"])
 		if err != nil {
 			if recovered, ok := recoverTransportEnvelope(arguments["code"], b.tools); ok {
-				envelope, err = recovered, nil
+				envelope = recovered
 			} else {
 				return nil, "", fmt.Errorf("%w; raw input requires references containing exactly one declared CUSTOM, FUNCTION_CODE or FUNCTION_CMD tool", err)
 			}
