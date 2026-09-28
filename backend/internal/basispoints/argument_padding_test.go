@@ -80,7 +80,7 @@ func TestNativeReferencePaddingFailsBeforeUpstreamEOF(t *testing.T) {
 	source := testSource()
 	source["tools"] = []any{object{"type": "custom", "name": "functions.exec"}}
 	_, bridge := mustPrepare(t, source, "padding", nil)
-	prefix := "{\"summary\":\"codex2api.custom/functions.exec\",\"extended_summary\":\"diagnostic\",\"code\":\"text(1)\",\"destructive\":false,\"references\":["
+	prefix := "{\"summary\":\"Run client tool\",\"extended_summary\":\"diagnostic\",\"code\":\"text(1)\",\"destructive\":false,\"references\":["
 	wire := sse(object{"type": "response.created", "response": object{"id": "resp_padding", "status": "in_progress"}}) +
 		sse(object{"type": "response.output_item.added", "output_index": 0, "item": object{"type": "function_call", "id": "fc_padding", "call_id": "call_padding", "name": "run_officejs", "arguments": "", "status": "in_progress"}}) +
 		sse(object{"type": "response.function_call_arguments.delta", "item_id": "fc_padding", "delta": prefix}) +

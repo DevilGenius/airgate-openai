@@ -38,8 +38,8 @@ func TestCustomHistoryRebuildUsesCatalogTransport(t *testing.T) {
 					if err := decode([]byte(text(native["arguments"])), &outer); err != nil {
 						t.Fatal(err)
 					}
-					if outer["summary"] != customTransportPrefix+name || outer["code"] != input {
-						t.Fatal("rebuilt custom history must use the declared raw marker and exact input")
+					if !reflect.DeepEqual(outer["references"], []any{name}) || outer["code"] != input {
+						t.Fatal("rebuilt custom history must use the declared catalog reference and exact input")
 					}
 					restored, err := bridge.translateCall(native)
 					if err != nil || historyCallFingerprint(restored) != historyCallFingerprint(call) {
@@ -84,11 +84,11 @@ func TestRawCustomStreamingRequiresExplicitRouting(t *testing.T) {
 		source := testSource()
 		source["tools"] = []any{object{"type": "namespace", "name": "functions", "tools": []any{object{"type": "custom", "name": "exec"}}}}
 		_, bridge := mustPrepare(t, source, "scope", nil)
-		summary := "Run client tool"
+		refs := []any{}
 		if marked {
-			summary = customTransportPrefix + "functions.exec"
+			refs = []any{"functions.exec"}
 		}
-		args, err := json.Marshal(object{"summary": summary, "code": code, "extended_summary": "Run client tool", "destructive": false, "references": []any{}})
+		args, err := json.Marshal(object{"summary": "Run client tool", "code": code, "extended_summary": "Run client tool", "destructive": false, "references": refs})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -118,8 +118,8 @@ func TestRawCustomStreamingRequiresExplicitRouting(t *testing.T) {
 				completed++
 			case "response.failed":
 				failed++
-				if !bytes.Contains(data, []byte("summary=codex2api.custom/CATALOG_NAME")) || bytes.Contains(data, []byte("private-fixture")) {
-					t.Fatal("invalid routing must explain the marker without exposing code")
+				if !bytes.Contains(data, []byte("raw input requires references")) || bytes.Contains(data, []byte("private-fixture")) {
+					t.Fatal("invalid routing must explain the reference without exposing code")
 				}
 			}
 			return nil

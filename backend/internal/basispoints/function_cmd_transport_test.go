@@ -23,8 +23,8 @@ func functionCmdTestTool(name string) object {
 func functionCmdTestNative(t *testing.T, name string, code any, metadata any) object {
 	t.Helper()
 	outer, err := json.Marshal(object{
-		"summary": functionCmdTransportPrefix + name, "code": code,
-		"extended_summary": metadata, "destructive": false, "references": []any{},
+		"summary": "Inspect requested state", "code": code,
+		"extended_summary": metadata, "destructive": false, "references": []any{name},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -150,14 +150,9 @@ func TestFunctionCmdTransportRequiresExplicitCatalogContract(t *testing.T) {
 		object{"type": "function", "name": "numeric", "parameters": object{"type": "object", "properties": object{"cmd": object{"type": "number"}}}},
 	}
 	_, bridge := mustPrepare(t, source, "scope", nil)
-	for _, name := range []string{"", "missing", "custom_code", "plain", "numeric", "exec_command ", " exec_command", "functions.exec_command", "exec_command\n", "exec_command/extra"} {
+	for _, name := range []string{"", "missing", "plain", "numeric", "exec_command ", " exec_command", "functions.exec_command", "exec_command\n", "exec_command/extra"} {
 		if _, err := bridge.translateCall(functionCmdTestNative(t, name, "private payload", "{}")); err == nil {
 			t.Fatal("undeclared, wrong-kind or approximate catalog name was accepted")
-		}
-	}
-	for _, summary := range []any{nil, 1, "Run code", "codex2api.function_cmd", " codex2api.function_cmd/exec_command", "Codex2api.function_cmd/exec_command"} {
-		if envelope, marked, err := bridge.functionCmdTransportEnvelope(object{"summary": summary, "code": "source", "extended_summary": "{}"}); envelope != nil || marked || err != nil {
-			t.Fatal("an approximate marker activated raw code transport")
 		}
 	}
 	for _, patch := range []object{{"call_id": ""}, {"name": "not_run_officejs"}} {
@@ -178,7 +173,7 @@ func TestFunctionCmdCatalogAndHistoryUseRawTransport(t *testing.T) {
 	items := mustTestValue[[]any](t, body["input"])
 	protocolMessage := mustTestValue[object](t, items[1])
 	protocol := text(mustTestValue[object](t, mustTestValue[[]any](t, protocolMessage["content"])[0])["text"])
-	for _, want := range []string{functionCmdTransportPrefix + "client.exec_command", "FUNCTION_CODE", "all other supplied arguments", "only fields declared", "Do not include cmd"} {
+	for _, want := range []string{`references to ["client.exec_command"]`, "FUNCTION_CODE", "all other supplied arguments", "only fields declared", "Do not include cmd"} {
 		if !strings.Contains(protocol, want) {
 			t.Fatalf("missing transport contract: %s", want)
 		}
@@ -201,7 +196,7 @@ func TestFunctionCmdCatalogAndHistoryUseRawTransport(t *testing.T) {
 			t.Fatal("cached native tool item must replay exactly")
 		}
 		outer := functionCmdTestArguments(t, restored)
-		if outer["summary"] != functionCmdTransportPrefix+"client.exec_command" || outer["code"] != code {
+		if !reflect.DeepEqual(outer["references"], []any{"client.exec_command"}) || outer["code"] != code {
 			t.Fatal("cache-miss history reintroduced nested code JSON")
 		}
 		roundTrip, err := replayBridge.translateCall(restored)
@@ -228,7 +223,7 @@ func TestFunctionCmdTransportStreamingIsAtomic(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if bytes.Contains(output, []byte("UNVALIDATED_NATIVE_CODE")) || bytes.Contains(output, []byte(functionCmdTransportPrefix)) {
+		if bytes.Contains(output, []byte("UNVALIDATED_NATIVE_CODE")) || bytes.Contains(output, []byte("run_officejs")) {
 			t.Fatal("raw native transport leaked before conversion")
 		}
 		calls, completed, failed := 0, 0, 0
@@ -263,7 +258,7 @@ func TestFunctionCmdTransportStreamingIsAtomic(t *testing.T) {
 	}
 }
 
-func TestFunctionCmdEligibilityAndLegacyCompatibility(t *testing.T) {
+func TestFunctionCmdEligibilityAndJSONEnvelopeCompatibility(t *testing.T) {
 	for _, name := range []string{"exec_command", "functions.exec_command", "client.exec_command"} {
 		spec := functionCmdTestTool(name)
 		if !supportsFunctionCmdTransport(name, "function", spec["parameters"]) {
@@ -285,20 +280,21 @@ func TestFunctionCmdEligibilityAndLegacyCompatibility(t *testing.T) {
 		t.Fatal("expected command tool properties object")
 	}
 	props["code"] = object{"type": "string"}
+	parameters["required"] = []any{"cmd", "code", "description"}
 	if supportsFunctionCmdTransport("exec_command", "function", spec["parameters"]) {
 		t.Fatal("existing code contract overridden")
 	}
 	source := testSource()
 	source["tools"] = []any{functionCmdTestTool("exec_command")}
 	_, bridge := mustPrepare(t, source, "scope", nil)
-	args := object{"cmd": "echo legacy", "description": "legacy check"}
+	args := object{"cmd": "echo explicit JSON", "description": "explicit JSON check"}
 	payload, _ := json.Marshal(object{"name": "exec_command", "arguments": args})
 	outer, _ := json.Marshal(object{"code": string(payload)})
 	native := functionCmdTestNative(t, "exec_command", "", "{}")
 	native["arguments"] = string(outer)
 	call, err := bridge.translateCall(native)
 	if err != nil || !reflect.DeepEqual(functionCmdTestArguments(t, call), args) {
-		t.Fatal("legacy envelope changed", err)
+		t.Fatal("explicit JSON envelope changed", err)
 	}
 }
 

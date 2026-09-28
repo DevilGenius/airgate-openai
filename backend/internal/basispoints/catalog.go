@@ -18,15 +18,15 @@ func describeCatalog(catalog []any) string {
 			line += " " + description
 		}
 		if text(entry["type"]) == "custom" {
-			line += " Set run_officejs summary to " + quoted("codex2api.custom/"+text(entry["name"])) + " and pass its exact raw text directly in code."
+			line += " Use CUSTOM transport: set run_officejs references to [" + quoted(entry["name"]) + "], and pass its exact raw text directly in code. Summary is a human-readable description."
 			if format := entry["format"]; format != nil {
 				line += " Input format: " + quoted(format) + "."
 			}
 		} else {
 			if supportsFunctionCodeTransport(text(entry["name"]), text(entry["type"]), entry["parameters"]) {
-				line += " Use FUNCTION_CODE transport: set run_officejs summary to " + quoted(functionCodeTransportPrefix+text(entry["name"])) + ". Put the exact code argument directly in native code. Put all other supplied arguments in one JSON object in extended_summary, using only fields declared in the contract; use {} when there are none. Do not include code in that object."
+				line += " Use FUNCTION_CODE transport: set run_officejs references to [" + quoted(entry["name"]) + "]. Put the exact code argument directly in native code. Put all other supplied arguments in one JSON object in extended_summary, using only fields declared in the contract; use {} when there are none. Do not include code in that object."
 			} else if supportsFunctionCmdTransport(text(entry["name"]), text(entry["type"]), entry["parameters"]) {
-				line += " Use FUNCTION_CMD transport: set run_officejs summary to " + quoted(functionCmdTransportPrefix+text(entry["name"])) + ". Put the exact cmd argument directly in native code. Put all other supplied arguments in one JSON object in extended_summary, using only fields declared in the contract; use {} when there are none. Do not include cmd in that object."
+				line += " Use FUNCTION_CMD transport: set run_officejs references to [" + quoted(entry["name"]) + "]. Put the exact cmd argument directly in native code. Put all other supplied arguments in one JSON object in extended_summary, using only fields declared in the contract; use {} when there are none. Do not include cmd in that object."
 			} else {
 				line += " Pass a JSON object in the envelope's arguments field."
 			}

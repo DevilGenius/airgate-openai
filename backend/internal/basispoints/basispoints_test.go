@@ -119,7 +119,7 @@ func TestEffortAndUnsupportedCapabilities(t *testing.T) {
 
 func nativeCall(envelope object) object {
 	code, _ := json.Marshal(envelope)
-	arguments, _ := json.Marshal(object{"code": string(code), "summary": "Call client tool", "extended_summary": "Preserve the original envelope", "destructive": false, "references": []any{"Tokyo weather"}})
+	arguments, _ := json.Marshal(object{"code": string(code), "summary": "Call client tool", "extended_summary": "Preserve the original envelope", "destructive": false, "references": []any{}})
 	return object{"type": "function_call", "id": "fc_native", "call_id": "call_native", "name": "run_officejs", "arguments": string(arguments), "status": "completed"}
 }
 

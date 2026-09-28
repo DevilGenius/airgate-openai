@@ -19,7 +19,7 @@ func TestCatalogKeepsNamespacedToolContractsInProse(t *testing.T) {
 	message := mustTestValue[object](t, items[1])
 	content := mustTestValue[[]any](t, message["content"])
 	protocol := text(mustTestValue[object](t, content[0])["text"])
-	for _, want := range []string{`Client tool "functions.shell"`, `Field "cmd" (required)`, "Command text.", `"enum":["read","check"]`, `"additionalProperties":false`, "start: PATCH", "exact raw text", "codex2api.custom/functions.patch"} {
+	for _, want := range []string{`Client tool "functions.shell"`, `Field "cmd" (required)`, "Command text.", `"enum":["read","check"]`, `"additionalProperties":false`, "start: PATCH", "exact raw text", `references to ["functions.patch"]`} {
 		if !strings.Contains(protocol, want) {
 			t.Fatalf("catalog lost contract detail %q", want)
 		}

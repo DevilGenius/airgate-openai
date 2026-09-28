@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"strconv"
-	"strings"
 )
 
 const maxToolRepairs = 2
@@ -177,8 +176,8 @@ func (b *Bridge) restoreToolOperations(original, corrected []object) ([]object, 
 			}
 		}
 		args := transportArguments(corrected[i])
-		summary := text(args["summary"])
-		if (!strings.HasPrefix(summary, customTransportPrefix) && !strings.HasPrefix(summary, functionCodeTransportPrefix) && !strings.HasPrefix(summary, functionCmdTransportPrefix)) || args["code"] == code {
+		reference, _ := transportReference(args)
+		if b.rawTransportField(reference) == "" || args["code"] == code {
 			continue
 		}
 		boundArgs := make(object, len(args))
@@ -243,7 +242,8 @@ func (b *Bridge) preservesToolOperations(original, corrected []object) bool {
 		} else {
 			var payload object
 			field := "code"
-			if strings.HasPrefix(text(transportArguments(corrected[i])["summary"]), functionCmdTransportPrefix) {
+			reference, _ := transportReference(transportArguments(corrected[i]))
+			if b.rawTransportField(reference) == "cmd" {
 				field = "cmd"
 			}
 			if decode([]byte(text(after["arguments"])), &payload) != nil || payload[field] != code {
@@ -264,10 +264,8 @@ func transportArguments(native object) object {
 }
 
 func transportTarget(args object) string {
-	for _, prefix := range []string{customTransportPrefix, functionCodeTransportPrefix, functionCmdTransportPrefix} {
-		if summary := text(args["summary"]); strings.HasPrefix(summary, prefix) {
-			return strings.TrimPrefix(summary, prefix)
-		}
+	if name, err := transportReference(args); err == nil && name != "" {
+		return name
 	}
 	if envelope, err := decodeTransportEnvelope(args["code"]); err == nil {
 		name, _ := envelopeName(envelope)
@@ -334,7 +332,7 @@ func BuildToolRepairRequest(prepared []byte, failed map[string]any, validation e
 		call := text(item["call_id"])
 		input = append(input, object{"type": "function_call_output", "id": "fc_" + fingerprint([]any{call, len(input)}), "call_id": call, "output": string(feedback)})
 	}
-	input = append(input, message("developer", fmt.Sprintf("The preceding tool batch failed transport validation before any client tool was executed. Correct only its transport formatting and return exactly %d run_officejs calls in the same order, preserving the intended operations and exact raw code. Use the existing client catalog: FUNCTION needs one JSON envelope with object arguments; CUSTOM needs summary=codex2api.custom/CATALOG_NAME and raw input in code; FUNCTION_CODE and FUNCTION_CMD need their declared markers and metadata JSON in extended_summary. Calls that already passed validation must remain unchanged. Do not execute Office code, infer an undeclared target, add operations, or repeat commentary.", len(items))))
+	input = append(input, message("developer", fmt.Sprintf("The preceding tool batch failed transport validation before any client tool was executed. Correct only its transport formatting and return exactly %d run_officejs calls in the same order, preserving the intended operations and exact raw code. Set references to exactly one declared catalog tool name. The catalog determines transport: FUNCTION needs one JSON envelope with object arguments; CUSTOM needs raw input in code; FUNCTION_CODE and FUNCTION_CMD need raw payload in code and metadata JSON in extended_summary. Summary is descriptive only. Calls that already passed validation must remain unchanged. Do not execute Office code, infer an undeclared target, add operations, or repeat commentary.", len(items))))
 	request["input"] = input
 	metadata, _ := request["metadata"].(object)
 	if metadata == nil {

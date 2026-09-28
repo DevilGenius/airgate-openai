@@ -24,7 +24,7 @@ func TestNativeReferencesMatchCatalogInPromptAndRebuiltHistory(t *testing.T) {
 					decl["name"] = name
 					call["name"] = name
 				}
-				decl["parameters"] = object{"type": "object", "properties": object{kind: object{"type": "string"}}}
+				decl["parameters"] = object{"type": "object", "required": []any{kind}, "properties": object{kind: object{"type": "string"}}}
 				args, _ := json.Marshal(object{kind: "line1\nline2"})
 				call["arguments"] = string(args)
 			}
@@ -48,7 +48,7 @@ func TestNativeReferencesMatchCatalogInPromptAndRebuiltHistory(t *testing.T) {
 			}
 			encoded, _ := json.Marshal(body["input"])
 			protocol := string(encoded)
-			if strings.Contains(protocol, "references=[]") || !strings.Contains(protocol, "at least one reference") {
+			if strings.Contains(protocol, "references=[]") || !strings.Contains(protocol, "exactly one exact catalog tool name") {
 				t.Fatal("prompt contradicts native references minItems")
 			}
 		})

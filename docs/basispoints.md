@@ -21,6 +21,12 @@ BPS 使用固定 `/basispoints/api/responses` 地址和 Excel 客户端画像。
 请求保留映射后的模型，以 `model_selection: explicit`、`stream: true`、`store: false`
 发送完整历史。FUNCTION、FUNCTION_CODE、FUNCTION_CMD 和 CUSTOM 工具都通过
 `run_officejs` 信封传输；代理不执行 Office 或工具代码。
+原始载荷以 `references: ["完整工具名"]` 唯一确定目标，并根据本次客户端工具声明选择
+CUSTOM / FUNCTION_CODE / FUNCTION_CMD；`summary` 仅用于说明，不参与路由。
+不再解析 `codex2api.*` summary 标记，也不按代码内容猜测目标或请求模型重写命令。
+FUNCTION 保留 JSON `name` / `arguments` 信封；若同时携带 references，目标必须一致。
+只有声明为必填字符串的 code/cmd 字段使用原始载荷传输；可选字段使用 JSON 信封，保留省略语义。
+原始命令、代码和自定义输入保持原字节；多目标、未声明目标、非法元数据及冲突载荷拒绝转发。
 普通文本保持增量；工具调用整批校验通过后才交付。结构化输出在终态校验通过后交付。
 
 `OpenAIGateway` 不持有 BPS Adapter 或会话缓存。`PrepareRequest` 是无副作用的准备入口，

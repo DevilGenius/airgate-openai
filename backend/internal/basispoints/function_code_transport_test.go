@@ -23,8 +23,8 @@ func functionCodeTestTool(name string) object {
 func functionCodeTestNative(t *testing.T, name string, code any, metadata any) object {
 	t.Helper()
 	outer, err := json.Marshal(object{
-		"summary": functionCodeTransportPrefix + name, "code": code,
-		"extended_summary": metadata, "destructive": false, "references": []any{},
+		"summary": "Inspect requested state", "code": code,
+		"extended_summary": metadata, "destructive": false, "references": []any{name},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -150,14 +150,9 @@ func TestFunctionCodeTransportRequiresExplicitCatalogContract(t *testing.T) {
 		object{"type": "function", "name": "numeric", "parameters": object{"type": "object", "properties": object{"code": object{"type": "number"}}}},
 	}
 	_, bridge := mustPrepare(t, source, "scope", nil)
-	for _, name := range []string{"", "missing", "custom_code", "plain", "numeric", "run_code ", " run_code", "functions.run_code", "run_code\n", "run_code/extra"} {
+	for _, name := range []string{"", "missing", "plain", "numeric", "run_code ", " run_code", "functions.run_code", "run_code\n", "run_code/extra"} {
 		if _, err := bridge.translateCall(functionCodeTestNative(t, name, "private payload", "{}")); err == nil {
 			t.Fatal("undeclared, wrong-kind or approximate catalog name was accepted")
-		}
-	}
-	for _, summary := range []any{nil, 1, "Run code", "codex2api.function_code", " codex2api.function_code/run_code", "Codex2api.function_code/run_code"} {
-		if envelope, marked, err := bridge.functionCodeTransportEnvelope(object{"summary": summary, "code": "source", "extended_summary": "{}"}); envelope != nil || marked || err != nil {
-			t.Fatal("an approximate marker activated raw code transport")
 		}
 	}
 	for _, patch := range []object{{"call_id": ""}, {"name": "not_run_officejs"}} {
@@ -178,7 +173,7 @@ func TestFunctionCodeCatalogAndHistoryUseRawTransport(t *testing.T) {
 	items := mustTestValue[[]any](t, body["input"])
 	protocolMessage := mustTestValue[object](t, items[1])
 	protocol := text(mustTestValue[object](t, mustTestValue[[]any](t, protocolMessage["content"])[0])["text"])
-	for _, want := range []string{functionCodeTransportPrefix + "client.run_code", "FUNCTION_CODE", "all other supplied arguments", "only fields declared", "Do not include code"} {
+	for _, want := range []string{`references to ["client.run_code"]`, "FUNCTION_CODE", "all other supplied arguments", "only fields declared", "Do not include code"} {
 		if !strings.Contains(protocol, want) {
 			t.Fatalf("missing transport contract: %s", want)
 		}
@@ -201,7 +196,7 @@ func TestFunctionCodeCatalogAndHistoryUseRawTransport(t *testing.T) {
 			t.Fatal("cached native tool item must replay exactly")
 		}
 		outer := functionCodeTestArguments(t, restored)
-		if outer["summary"] != functionCodeTransportPrefix+"client.run_code" || outer["code"] != code {
+		if !reflect.DeepEqual(outer["references"], []any{"client.run_code"}) || outer["code"] != code {
 			t.Fatal("cache-miss history reintroduced nested code JSON")
 		}
 		roundTrip, err := replayBridge.translateCall(restored)
@@ -228,7 +223,7 @@ func TestFunctionCodeTransportStreamingIsAtomic(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if bytes.Contains(output, []byte("UNVALIDATED_NATIVE_CODE")) || bytes.Contains(output, []byte(functionCodeTransportPrefix)) {
+		if bytes.Contains(output, []byte("UNVALIDATED_NATIVE_CODE")) || bytes.Contains(output, []byte("run_officejs")) {
 			t.Fatal("raw native transport leaked before conversion")
 		}
 		calls, completed, failed := 0, 0, 0

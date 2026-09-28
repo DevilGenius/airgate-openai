@@ -316,42 +316,36 @@ func (b *Bridge) rebuildNativeHistoryCall(item object) (object, error) {
 	default:
 		return nil, fmt.Errorf("basispoints history recovery requires a function or custom tool call")
 	}
-	code, err := json.Marshal(envelope)
-	if err != nil {
-		return nil, fmt.Errorf("basispoints history tool arguments cannot be serialized")
-	}
 	outer := object{
-		"code": string(code), "summary": "Replay a previously requested client tool",
+		"summary":          "Replay a previously requested client tool",
 		"extended_summary": "The supplied client history contains this tool call; consume its recorded result without repeating it.",
 		"destructive":      false, "references": []any{name},
 	}
 	// Rebuilt calls are examples for subsequent model turns. Use the same raw
 	// transport advertised by today's catalog instead of teaching CUSTOM tools
 	// to use the ordinary FUNCTION envelope. Cached native calls stay verbatim.
-	if info, ok := b.tools[name]; ok && info.Kind == "custom" && text(item["type"]) == "custom_tool_call" {
-		outer["summary"] = customTransportPrefix + name
+	switch field := b.rawTransportField(name); field {
+	case "input":
 		outer["code"] = envelope["input"]
-		if _, _, err := customTransportEnvelope(outer); err != nil {
+		if _, _, err := b.toolTransportEnvelope(outer); err != nil {
 			return nil, err
 		}
-	}
-	if info, ok := b.tools[name]; ok && text(item["type"]) == "function_call" && supportsFunctionCodeTransport(name, info.Kind, info.Parameters) {
+	case "code", "cmd":
 		args, _ := envelope["arguments"].(object)
-		if _, hasCode := args["code"].(string); hasCode {
-			outer, err = encodeFunctionCodeTransport(name, args)
-			if err != nil {
-				return nil, err
-			}
+		if _, ok := args[field].(string); !ok {
+			return nil, fmt.Errorf("basispoints history raw function payload must be a string")
 		}
-	}
-	if info, ok := b.tools[name]; ok && text(item["type"]) == "function_call" && supportsFunctionCmdTransport(name, info.Kind, info.Parameters) {
-		args, _ := envelope["arguments"].(object)
-		if _, hasCmd := args["cmd"].(string); hasCmd {
-			outer, err = encodeFunctionCmdTransport(name, args)
-			if err != nil {
-				return nil, err
-			}
+		var err error
+		outer, err = encodeRawFunctionTransport(name, field, args)
+		if err != nil {
+			return nil, err
 		}
+	default:
+		code, err := json.Marshal(envelope)
+		if err != nil {
+			return nil, fmt.Errorf("basispoints history tool arguments cannot be serialized")
+		}
+		outer["code"] = string(code)
 	}
 	arguments, err := json.Marshal(outer)
 	if err != nil {
@@ -473,26 +467,7 @@ func (b *Bridge) translateCall(native object) (object, error) {
 	if arguments == nil {
 		return nil, fmt.Errorf("basispoints returned empty tool transport arguments")
 	}
-	envelope, marked, err := customTransportEnvelope(arguments)
-	rawCustom := marked
-	rawCmd := false
-	if !marked && err == nil {
-		envelope, marked, err = b.functionCodeTransportEnvelope(arguments)
-	}
-	if !marked && err == nil {
-		envelope, marked, err = b.functionCmdTransportEnvelope(arguments)
-		rawCmd = marked
-	}
-	if !marked && err == nil {
-		envelope, err = decodeTransportEnvelope(arguments["code"])
-		if err != nil {
-			if recovered, ok := recoverTransportEnvelope(arguments["code"], b.tools); ok {
-				envelope, err = recovered, nil
-			} else {
-				err = fmt.Errorf("%w; raw CUSTOM input requires summary=codex2api.custom/CATALOG_NAME; raw FUNCTION_CODE requires summary=codex2api.function_code/CATALOG_NAME for an eligible catalog function", err)
-			}
-		}
-	}
+	envelope, field, err := b.toolTransportEnvelope(arguments)
 	if err != nil {
 		return nil, err
 	}
@@ -504,7 +479,7 @@ func (b *Bridge) translateCall(native object) (object, error) {
 	if !allowed {
 		return nil, unknownClientToolError{}
 	}
-	result, err := b.finishClientToolCall(native, info, envelope, rawCustom, !rawCmd)
+	result, err := b.finishClientToolCall(native, info, envelope, field == "input", field != "cmd")
 	if err != nil {
 		return nil, err
 	}

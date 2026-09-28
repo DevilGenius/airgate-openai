@@ -62,7 +62,7 @@ func TestFormattedEnvelopeAndOutputOnlyReplay(t *testing.T) {
 	source["tools"] = []any{object{"type": "function", "name": "get_weather"}}
 	_, bridge := mustPrepare(t, source, "account/key", cache)
 	native := nativeCall(object{})
-	args := object{"code": "```json\n{\"tool\":\"get_weather\",\"args\":{\"city\":\"Tokyo\"}}\n```", "summary": "Weather", "references": []any{"Tokyo"}}
+	args := object{"code": "```json\n{\"tool\":\"get_weather\",\"args\":{\"city\":\"Tokyo\"}}\n```", "summary": "Weather", "references": []any{"get_weather"}}
 	encoded, _ := json.Marshal(args)
 	native["arguments"] = string(encoded)
 	call, err := bridge.translateCall(native)
