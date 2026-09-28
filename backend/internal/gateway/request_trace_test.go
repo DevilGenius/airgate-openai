@@ -9,9 +9,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gorilla/websocket"
+
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 	"github.com/DevilGenius/airgate-sdk/sdkgo/requesttrace"
-	"github.com/gorilla/websocket"
 )
 
 func TestNativeOAuthRequestTraceAtWebSocketBoundary(t *testing.T) {
@@ -34,7 +35,7 @@ func TestNativeOAuthRequestTraceAtWebSocketBoundary(t *testing.T) {
 				if err != nil {
 					return
 				}
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				_, body, err := conn.ReadMessage()
 				if err != nil {
 					return
@@ -47,14 +48,14 @@ func TestNativeOAuthRequestTraceAtWebSocketBoundary(t *testing.T) {
 			conn, _, err := DialWebSocket(ctx, WSConfig{URL: "ws" + strings.TrimPrefix(server.URL, "http"), Token: "secret", AccountID: "private-account"})
 			if handshakeFailure {
 				if err == nil {
-					conn.Close()
+					_ = conn.Close()
 					t.Fatal("expected failed handshake")
 				}
 			} else {
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				body := map[string]any{"type": "response.create", "model": "gpt-test", "input": strings.Repeat("complete oauth history ", 4096)}
 				raw, _ := json.Marshal(body)
 				if err := writeWebSocketJSON(conn, json.RawMessage(raw)); err != nil {
