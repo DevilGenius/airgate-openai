@@ -28,7 +28,7 @@ func TestPreparedRequestConvertsOrRejectsWithoutMutatingRequest(t *testing.T) {
 		{name: "sampling", extra: object{"temperature": 0.5}},
 		{name: "inline image", extra: object{"input": []any{object{"role": "user", "content": []any{object{"type": "input_image", "image_url": "data:image/png;base64,YQ=="}}}}}, invalid: true},
 		{name: "native attachment", extra: object{"input": []any{object{"role": "user", "content": []any{object{"type": "input_image", "file_id": "file-abc"}}}}}},
-		{name: "encrypted message", extra: object{"input": []any{object{"role": "user", "content": []any{object{"type": "encrypted_content", "encrypted_content": "opaque"}}}}}, invalid: true},
+		{name: "encrypted message", extra: object{"input": []any{object{"role": "user", "content": []any{object{"type": "encrypted_content", "encrypted_content": "opaque"}}}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			source := testSource()

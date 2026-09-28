@@ -5,12 +5,16 @@ import (
 	"fmt"
 )
 
-// normalizeHistoryMessage keeps client attribution as text rather than sending
-// author/recipient fields that BPS rejects. Agent messages are collaboration
-// context; their metadata must not grant them a system/developer role. Ordinary
-// messages retain their role and native fields. Tool arguments are never scrubbed.
-// Call this after content validation so lowering cannot hide encrypted content.
+// normalizeHistoryMessage lowers plaintext attribution to supported message
+// shapes. Plaintext agent messages are collaboration context; their metadata
+// must not grant them a system/developer role. Ordinary messages retain their
+// role and native fields. Tool arguments are never scrubbed.
+// Encrypted message parts and their native envelope remain opaque; only the
+// upstream can validate them. Lowering them would change the encrypted protocol.
 func normalizeHistoryMessage(item object, index int) (object, error) {
+	if hasEncryptedContentPart(item["content"]) {
+		return item, nil
+	}
 	kind := text(item["type"])
 	agent := kind == "agent_message"
 	if !agent && kind != "message" && (kind != "" || text(item["role"]) == "") {

@@ -7,18 +7,27 @@ func (b *Bridge) validateHistoryContent(value any, inputIndex int, field string)
 	for index, rawPart := range content {
 		part, _ := rawPart.(object)
 		switch text(part["type"]) {
-		case "input_text", "output_text", "text", "refusal":
+		case "input_text", "output_text", "text", "refusal", "encrypted_content":
 		case "input_image":
 			if err := validateImage(part); err != nil {
 				return fmt.Errorf("%w (path=input[%d].%s[%d])", err, inputIndex, field, index)
 			}
-		case "encrypted_content":
-			return fmt.Errorf("basispoints cannot forward encrypted_content message parts; refresh the model catalog and start a new conversation without a multi-agent v2 override, or resend the original plaintext (path=input[%d].%s[%d]; type=encrypted_content)", inputIndex, field, index)
 		default:
 			return fmt.Errorf("basispoints supports text and supported input_image references only (path=input[%d].%s[%d]; type=%s)", inputIndex, field, index, contentTypeDiagnostic(part))
 		}
 	}
 	return nil
+}
+
+func hasEncryptedContentPart(value any) bool {
+	parts, _ := value.([]any)
+	for _, raw := range parts {
+		part, _ := raw.(object)
+		if text(part["type"]) == "encrypted_content" {
+			return true
+		}
+	}
+	return false
 }
 
 // Report only fixed protocol labels. A caller-controlled type can itself contain

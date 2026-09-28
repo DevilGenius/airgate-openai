@@ -99,13 +99,13 @@ func TestHistoryMessageWithoutAttributionIsUnchanged(t *testing.T) {
 func TestHistoryAttributionRetainsValidation(t *testing.T) {
 	for _, kind := range []string{"message", "agent_message"} {
 		source := testSource()
-		source["input"] = []any{object{"type": kind, "role": "user", "author": "/root", "content": []any{object{"type": "encrypted_content", "encrypted_content": "secret-ciphertext"}}}}
+		source["input"] = []any{object{"type": kind, "role": "user", "author": "/root", "content": []any{object{"type": "input_audio", "data": "secret-content"}}}}
 		raw, err := json.Marshal(source)
 		if err != nil {
 			t.Fatal(err)
 		}
 		_, _, err = Prepare(raw, "validation", nil)
-		if err == nil || !strings.Contains(err.Error(), "path=input[0].content[0]") || strings.Contains(err.Error(), "secret-ciphertext") {
+		if err == nil || !strings.Contains(err.Error(), "path=input[0].content[0]") || strings.Contains(err.Error(), "secret-content") {
 			t.Fatalf("validation changed: %v", err)
 		}
 	}

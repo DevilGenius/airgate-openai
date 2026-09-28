@@ -75,7 +75,7 @@ func TestInlineAttachmentPlanPreservesHistoryAndDeduplicates(t *testing.T) {
 
 func TestInlineAttachmentValidatesWholeRequestBeforeUpload(t *testing.T) {
 	source := testSource()
-	source["input"] = []any{object{"role": "user", "content": []any{object{"type": "input_image", "image_url": inlineImageFixture(t)}, object{"type": "encrypted_content", "encrypted_content": "private"}}}}
+	source["input"] = []any{object{"role": "user", "content": []any{object{"type": "input_image", "image_url": inlineImageFixture(t)}, object{"type": "input_audio", "data": "private"}}}}
 	raw, _ := json.Marshal(source)
 	if p, err := PrepareRequest(raw, "account"); p != nil || err == nil {
 		t.Fatal("invalid history accepted")

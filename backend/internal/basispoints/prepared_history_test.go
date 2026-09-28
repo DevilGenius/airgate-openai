@@ -141,7 +141,6 @@ func TestPreparedHistoryRejectsUnsupportedContent(t *testing.T) {
 	}{
 		{"inline image", object{"type": "input_image", "image_url": "data:image/png;base64,YQ=="}},
 		{"invalid URL", object{"type": "input_image", "image_url": "http://example.com/a.png"}},
-		{"encrypted part", object{"type": "encrypted_content", "encrypted_content": "opaque"}},
 	} {
 		for _, kind := range []string{"message", "agent_message", "function_call_output", "custom_tool_call_output"} {
 			t.Run(tc.name+"/"+kind, func(t *testing.T) {

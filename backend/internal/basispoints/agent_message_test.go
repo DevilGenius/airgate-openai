@@ -167,11 +167,13 @@ func TestRelayDoesNotCopyWrapperEncryptionMetadata(t *testing.T) {
 func TestAgentCiphertextIsNeverGuessedAsPlaintext(t *testing.T) {
 	for _, value := range []string{"ordinary-looking task from an old session", "gAAAAABopaqueCiphertext"} {
 		source := testSource()
-		source["input"] = []any{object{"type": "agent_message", "author": "/root", "recipient": "/root/worker",
-			"content": []any{object{"type": "encrypted_content", "encrypted_content": value}}}}
-		raw, _ := json.Marshal(source)
-		if _, _, err := Prepare(raw, "scope", nil); err == nil || !strings.Contains(err.Error(), "type=encrypted_content") || !strings.Contains(err.Error(), "path=input[0].content[0]") || strings.Contains(err.Error(), value) {
-			t.Fatalf("encrypted content must be rejected with a safe, specific diagnostic: %v", err)
+		original := object{"type": "agent_message", "id": "agent_fixture", "author": "/root", "recipient": "/root/worker",
+			"content": []any{object{"type": "input_text", "text": "Message Type: NEW_TASK\nPayload:\n"}, object{"type": "encrypted_content", "encrypted_content": value}}}
+		source["input"] = []any{original}
+		wire, _ := mustPrepare(t, source, "scope", nil)
+		input := mustTestValue[[]any](t, wire["input"])
+		if !reflect.DeepEqual(input[len(input)-1], original) {
+			t.Fatal("encrypted agent message was decrypted, lowered or modified")
 		}
 	}
 }

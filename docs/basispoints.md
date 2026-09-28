@@ -28,6 +28,10 @@ FUNCTION 保留 JSON `name` / `arguments` 信封；若同时携带 references，
 只有声明为必填字符串的 code/cmd 字段使用原始载荷传输；可选字段使用 JSON 信封，保留省略语义。
 原始命令、代码和自定义输入保持原字节；多目标、未声明目标、非法元数据及冲突载荷拒绝转发。
 普通文本保持增量；工具调用整批校验通过后才交付。结构化输出在终态校验通过后交付。
+消息中的 `encrypted_content` 作为不透明内容交给上游验证，不再由本地按类型拒绝。
+包含这类内容的消息保留原生结构；特别是 `agent_message` 的 type、author、recipient 和
+混合明文/密文 content 不降格为普通 user message。reasoning 密文继续按原有规则转发。
+此处理不新增普通 OAuth 回退；BAS 上游若拒绝，仍按原有错误处理流程返回。
 
 `OpenAIGateway` 不持有 BPS Adapter 或会话缓存。`PrepareRequest` 是无副作用的准备入口，
 返回单次请求专用的 `PreparedRequest`，其正文只通过只读 reader 暴露，流转换状态随请求释放。
