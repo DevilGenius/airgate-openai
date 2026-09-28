@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DevilGenius/airgate-sdk/runtimego/requesttrace"
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
+	"github.com/DevilGenius/airgate-sdk/sdkgo/requesttrace"
 )
 
 // Only fixture tests opt into local HTTP endpoints; production has no switch

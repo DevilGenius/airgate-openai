@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DevilGenius/airgate-sdk/runtimego/requesttrace"
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
+	"github.com/DevilGenius/airgate-sdk/sdkgo/requesttrace"
 	"github.com/gorilla/websocket"
 )
 
@@ -72,8 +72,8 @@ func TestNativeOAuthRequestTraceAtWebSocketBoundary(t *testing.T) {
 				t.Fatalf("missing native OAuth trace: %+v", trace)
 			}
 			outbound := trace.OutboundRequests[0]
-			if outbound.Headers.Get("Authorization") != "" || outbound.Headers.Get("ChatGPT-Account-ID") != "" {
-				t.Fatal("trace leaked account credentials")
+			if outbound.Headers.Get("Authorization") != "Bearer secret" || outbound.Headers.Get("ChatGPT-Account-ID") != "private-account" {
+				t.Fatal("raw account headers were changed before Core preprocessing")
 			}
 			if !handshakeFailure && !bytes.Equal(outbound.Body, <-sent) {
 				t.Fatal("trace did not preserve complete native wire request")

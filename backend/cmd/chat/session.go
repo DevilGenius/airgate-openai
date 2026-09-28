@@ -14,7 +14,7 @@ import (
 
 	"github.com/DevilGenius/airgate-openai/backend/internal/gateway"
 	"github.com/DevilGenius/airgate-openai/backend/resources"
-	"github.com/DevilGenius/airgate-sdk/runtimego/requesttrace"
+	"github.com/DevilGenius/airgate-sdk/sdkgo/requesttrace"
 )
 
 // ──────────────────────────────────────────────────────

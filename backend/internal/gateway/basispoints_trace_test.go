@@ -118,8 +118,8 @@ func TestBasispointsFinalErrorTraceAcrossProtocols(t *testing.T) {
 					if gjson.GetBytes(outbound.Body, "service_tier").Exists() || gjson.GetBytes(outbound.Body, "model_selection").String() != "explicit" {
 						t.Fatal("trace contains client body instead of BAS body")
 					}
-					if outbound.Headers.Get("Authorization") != "" || outbound.Headers.Get("X-OpenAI-Account-ID") != "" {
-						t.Fatal("trace contains account credentials")
+					if outbound.Headers.Get("Authorization") != "Bearer test-token" || outbound.Headers.Get("X-OpenAI-Account-ID") != "account-test" {
+						t.Fatal("raw diagnostics changed before Core preprocessing")
 					}
 				})
 			}
@@ -160,11 +160,11 @@ func TestBasispointsTraceExcludesAttachmentRequests(t *testing.T) {
 				t.Fatalf("missing main request diagnostics: %+v", diagnostic)
 			}
 			for _, outbound := range diagnostic.OutboundRequests {
-				if !outbound.BodyRedacted || outbound.BodyOriginalSize == 0 || bytes.Contains(outbound.Body, imageBytes) || bytes.Contains(outbound.Body, []byte(encoded)) {
-					t.Fatalf("image trace was not redacted: %+v", outbound)
+				if outbound.BodyOriginalSize != int64(len(outbound.Body)) || !bytes.Contains(outbound.Body, []byte("file-trace")) || bytes.Contains(outbound.Body, imageBytes) || bytes.Contains(outbound.Body, []byte(encoded)) {
+					t.Fatal("BAS wire body was not captured verbatim")
 				}
-				if outbound.Headers.Get("Authorization") != "" {
-					t.Fatal("trace leaked authorization")
+				if outbound.Headers.Get("Authorization") != "Bearer test-token" {
+					t.Fatal("SDK applied a persistence policy")
 				}
 			}
 			if !strings.HasSuffix(diagnostic.OutboundRequests[0].URL, "/responses") {

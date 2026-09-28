@@ -10,8 +10,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/DevilGenius/airgate-sdk/runtimego/requesttrace"
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
+	"github.com/DevilGenius/airgate-sdk/sdkgo/requesttrace"
 )
 
 var errResponseTooLarge = errors.New("上游响应超过大小限制")

@@ -16,8 +16,8 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/tidwall/gjson"
 
-	"github.com/DevilGenius/airgate-sdk/runtimego/requesttrace"
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
+	"github.com/DevilGenius/airgate-sdk/sdkgo/requesttrace"
 )
 
 const (
