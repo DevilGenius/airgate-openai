@@ -10,7 +10,7 @@ import (
 // Transport and response handlers return protocol-level outcomes; account and
 // routing policies are normalized here before Core observes the result.
 func applyForwardOutcomePolicies(logger *slog.Logger, req *sdk.ForwardRequest, outcome sdk.ForwardOutcome) sdk.ForwardOutcome {
-	annotateDefaultTokenQuote(outcome.Usage)
+	applyProviderBillingPolicy(req, outcome.Usage)
 	cooledOutcome, applied := applyOAuthModelEntitlementCooldown(req, outcome)
 	if !applied {
 		return outcome

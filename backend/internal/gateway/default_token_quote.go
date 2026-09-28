@@ -2,19 +2,15 @@ package gateway
 
 import (
 	"math"
-	"strconv"
 
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
-const defaultTokenCostMetadata = "openai.billing.default_token_cost"
-
-// Quote only: Core decides whether this base applies to API key quota. Reuse the
-// standard calculator, including long-context and cache-write pricing. Never
-// change actual service_tier, measured prices, costs or upstream account usage.
-func annotateDefaultTokenQuote(usage *sdk.Usage) {
-	if usage == nil || usage.Model == "" || usageMetadataText(usage, "oauth_transport") != "basispoints" {
-		return
+// Build a private counterfactual quote using the same vendor pricing engine.
+// It never changes actual service tier, measured prices, costs or upstream usage.
+func defaultTokenQuote(usage *sdk.Usage) (float64, bool) {
+	if usage == nil || usage.Model == "" {
+		return 0, false
 	}
 	standard := *usage
 	standard.Metadata = make(map[string]string, len(usage.Metadata))
@@ -25,7 +21,7 @@ func annotateDefaultTokenQuote(usage *sdk.Usage) {
 	fillUsageCost(&standard)
 	quote := standard.InputCost + standard.OutputCost + standard.CachedInputCost + standard.CacheCreationCost
 	if quote < 0 || math.IsNaN(quote) || math.IsInf(quote, 0) {
-		return
+		return 0, false
 	}
-	setUsageMetadata(usage, defaultTokenCostMetadata, strconv.FormatFloat(quote, 'g', -1, 64))
+	return quote, true
 }

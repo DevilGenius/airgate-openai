@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"reflect"
-	"strconv"
 	"testing"
 
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
@@ -21,10 +20,15 @@ func TestDefaultTokenQuotePreservesActualBilling(t *testing.T) {
 					before := snapshotUnifiedBill(t, actual)
 					standard := newTokenUsage(model, "default", input, 50, 20, 10, 5, 0)
 					fillUsageCost(standard)
-					outcome := applyForwardOutcomePolicies(nil, bpsRequest(), sdk.ForwardOutcome{Kind: sdk.OutcomeSuccess, Usage: actual})
-					quote, err := strconv.ParseFloat(outcome.Usage.Metadata[defaultTokenCostMetadata], 64)
-					if err != nil || math.Abs(quote-standard.AccountCost) > 1e-12 {
-						t.Fatalf("quote=%g want=%g err=%v", quote, standard.AccountCost, err)
+					req := bpsRequest()
+					req.Headers.Set(standardKeyBillingHeader, "true")
+					outcome := applyForwardOutcomePolicies(nil, req, sdk.ForwardOutcome{Kind: sdk.OutcomeSuccess, Usage: actual})
+					if outcome.Usage.Billing == nil || outcome.Usage.Billing.APIKeyBaseCost == nil {
+						t.Fatal("missing typed quote")
+					}
+					quote := *outcome.Usage.Billing.APIKeyBaseCost
+					if math.Abs(quote-standard.AccountCost) > 1e-12 {
+						t.Fatalf("quote=%g want=%g", quote, standard.AccountCost)
 					}
 					if !reflect.DeepEqual(before, snapshotUnifiedBill(t, actual)) {
 						t.Fatal("actual model/tier/prices/costs changed")
@@ -43,8 +47,10 @@ func TestDefaultTokenQuoteOnlyForBAS(t *testing.T) {
 		usage := newTokenUsage("gpt-5.6-sol", tc.tier, 100, 50, 20, 10, 0, 0)
 		fillUsageCost(usage)
 		setUsageMetadata(usage, "oauth_transport", tc.transport)
-		outcome := applyForwardOutcomePolicies(nil, bpsRequest(), sdk.ForwardOutcome{Kind: sdk.OutcomeStreamAborted, Usage: usage})
-		_, exists := outcome.Usage.Metadata[defaultTokenCostMetadata]
+		req := bpsRequest()
+		req.Headers.Set(standardKeyBillingHeader, "true")
+		outcome := applyForwardOutcomePolicies(nil, req, sdk.ForwardOutcome{Kind: sdk.OutcomeStreamAborted, Usage: usage})
+		exists := outcome.Usage.Billing != nil && outcome.Usage.Billing.APIKeyBaseCost != nil
 		if exists != tc.want {
 			t.Fatalf("%+v quote exists=%v", tc, exists)
 		}

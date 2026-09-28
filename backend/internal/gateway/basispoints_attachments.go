@@ -12,8 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/DevilGenius/airgate-openai/backend/internal/basispoints"
 	"github.com/tidwall/gjson"
+
+	"github.com/DevilGenius/airgate-openai/backend/internal/basispoints"
 )
 
 // Preserve upload HTTP status for normal account/rate-limit classification.
@@ -53,7 +54,7 @@ func uploadBasispointsImage(ctx context.Context, client *http.Client, headers ht
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := readLimitedErrorBody(resp.Body)
 	if err != nil {
 		return "", err

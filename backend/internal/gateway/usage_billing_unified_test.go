@@ -10,8 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 	"github.com/tidwall/gjson"
+
+	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
 // Include all billing fields while excluding protocol-specific timing/metadata.
