@@ -373,9 +373,9 @@ func TestReprepareKeepsValidatedCatalogDuringAttachmentUpload(t *testing.T) {
 	}
 }
 
-func TestRawCommandCompatibilityDoesNotBypassOrdinarySchema(t *testing.T) {
+func TestCommandEnvelopeUsesTheSameSchemaValidation(t *testing.T) {
 	source := testSource()
-	spec := functionCmdTestTool("exec_command")
+	spec := functionTransportTestTool("exec_command", "cmd")
 	params := mustTestValue[object](t, spec["parameters"])
 	params["additionalProperties"] = false
 	source["tools"] = []any{spec}
@@ -383,7 +383,7 @@ func TestRawCommandCompatibilityDoesNotBypassOrdinarySchema(t *testing.T) {
 	if _, err := b.translateCall(nativeCall(object{"name": "exec_command", "arguments": object{"cmd": "pwd", "undeclared": true}})); err == nil {
 		t.Fatal("ordinary command envelope bypassed schema")
 	}
-	if _, err := b.translateCall(functionCmdTestNative(t, "exec_command", "pwd", "{\"undeclared\":true}")); err != nil {
-		t.Fatal(err)
+	if _, err := b.translateCall(functionTransportTestNative(t, "exec_command", object{"cmd": "pwd", "undeclared": true})); err == nil {
+		t.Fatal("referenced command envelope bypassed schema")
 	}
 }

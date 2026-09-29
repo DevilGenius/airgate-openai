@@ -324,23 +324,12 @@ func (b *Bridge) rebuildNativeHistoryCall(item object) (object, error) {
 	// Rebuilt calls are examples for subsequent model turns. Use the same raw
 	// transport advertised by today's catalog instead of teaching CUSTOM tools
 	// to use the ordinary FUNCTION envelope. Cached native calls stay verbatim.
-	switch field := b.rawTransportField(name); field {
-	case "input":
+	if info, known := b.tools[name]; known && info.Kind == "custom" {
 		outer["code"] = envelope["input"]
-		if _, _, err := b.toolTransportEnvelope(outer); err != nil {
+		if _, err := b.toolTransportEnvelope(outer); err != nil {
 			return nil, err
 		}
-	case "code", "cmd":
-		args, _ := envelope["arguments"].(object)
-		if _, ok := args[field].(string); !ok {
-			return nil, fmt.Errorf("basispoints history raw function payload must be a string")
-		}
-		var err error
-		outer, err = encodeRawFunctionTransport(name, field, args)
-		if err != nil {
-			return nil, err
-		}
-	default:
+	} else {
 		code, err := json.Marshal(envelope)
 		if err != nil {
 			return nil, fmt.Errorf("basispoints history tool arguments cannot be serialized")
@@ -467,7 +456,7 @@ func (b *Bridge) translateCall(native object) (object, error) {
 	if arguments == nil {
 		return nil, fmt.Errorf("basispoints returned empty tool transport arguments")
 	}
-	envelope, field, err := b.toolTransportEnvelope(arguments)
+	envelope, err := b.toolTransportEnvelope(arguments)
 	if err != nil {
 		return nil, err
 	}
@@ -479,7 +468,7 @@ func (b *Bridge) translateCall(native object) (object, error) {
 	if !allowed {
 		return nil, unknownClientToolError{}
 	}
-	result, err := b.finishClientToolCall(native, info, envelope, field == "input", field != "cmd")
+	result, err := b.finishClientToolCall(native, info, envelope)
 	if err != nil {
 		return nil, err
 	}
@@ -526,7 +515,7 @@ func (b *Bridge) translateDirectCatalogCall(native object) (object, error) {
 	default:
 		return nil, fmt.Errorf("basispoints returned an unsupported native tool; no tool was executed")
 	}
-	result, err := b.finishClientToolCall(native, info, envelope, false, true)
+	result, err := b.finishClientToolCall(native, info, envelope)
 	if err != nil {
 		return nil, err
 	}
@@ -549,10 +538,7 @@ func (b *Bridge) translateDirectCatalogCall(native object) (object, error) {
 // finishClientToolCall builds the client-facing tool item from a resolved catalog
 // tool and its envelope. It performs no caching and executes nothing; callers decide
 // how the call replays upstream.
-func (b *Bridge) finishClientToolCall(native object, info tool, envelope object, marked, validateSchema bool) (object, error) {
-	if marked && info.Kind != "custom" {
-		return nil, fmt.Errorf("basispoints raw transport requires a declared custom tool")
-	}
+func (b *Bridge) finishClientToolCall(native object, info tool, envelope object) (object, error) {
 	id := text(native["call_id"])
 	if id == "" {
 		return nil, fmt.Errorf("basispoints tool call is missing call_id")
@@ -593,7 +579,7 @@ func (b *Bridge) finishClientToolCall(native object, info tool, envelope object,
 				return nil, fmt.Errorf("basispoints function arguments are invalid JSON")
 			}
 		}
-		if _, ok := args.(object); !ok {
+		if parsed, ok := args.(object); !ok || parsed == nil {
 			return nil, fmt.Errorf("basispoints function arguments must be an object")
 		}
 		if info.Schema != nil {
@@ -601,9 +587,8 @@ func (b *Bridge) finishClientToolCall(native object, info tool, envelope object,
 				return nil, toolArgumentsSchemaError{}
 			}
 		}
-		// FUNCTION_CMD preserves client-validated metadata verbatim. Ordinary
-		// function envelopes still enforce their complete declared schema.
-		if validateSchema && info.Schema != nil && info.Schema.Validate(args) != nil {
+		// Validate without stripping fields, injecting defaults or coercing values.
+		if info.Schema != nil && info.Schema.Validate(args) != nil {
 			return nil, toolArgumentsSchemaError{}
 		}
 		encoded, _ := json.Marshal(args)

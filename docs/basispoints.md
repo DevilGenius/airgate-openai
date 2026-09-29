@@ -19,14 +19,16 @@ API Key 和 Agent Identity 账号不进入 BPS。
 
 BPS 使用固定 `/basispoints/api/responses` 地址和 Excel 客户端画像。
 请求保留映射后的模型，以 `model_selection: explicit`、`stream: true`、`store: false`
-发送完整历史。FUNCTION、FUNCTION_CODE、FUNCTION_CMD 和 CUSTOM 工具都通过
+发送完整历史。FUNCTION 和 CUSTOM 工具都通过
 `run_officejs` 信封传输；代理不执行 Office 或工具代码。
-原始载荷以 `references: ["完整工具名"]` 唯一确定目标，并根据本次客户端工具声明选择
-CUSTOM / FUNCTION_CODE / FUNCTION_CMD；`summary` 仅用于说明，不参与路由。
-不再解析 `codex2api.*` summary 标记，也不按代码内容猜测目标或请求模型重写命令。
-FUNCTION 保留 JSON `name` / `arguments` 信封；若同时携带 references，目标必须一致。
-只有声明为必填字符串的 code/cmd 字段使用原始载荷传输；可选字段使用 JSON 信封，保留省略语义。
-原始命令、代码和自定义输入保持原字节；多目标、未声明目标、非法元数据及冲突载荷拒绝转发。
+FUNCTION 的 `code` 固定承载完整 JSON `name` / `arguments` 信封，cmd/code、workdir、
+超时和其他可选参数全部保存在 arguments 中。CUSTOM 的 code 保留原始输入，
+以 `references: ["完整工具名"]` 确定目标；FUNCTION 的 references 必须与信封目标一致。
+`summary` 和 `extended_summary` 都只作说明，不参与参数解析或路由；移除旧的
+FUNCTION_CODE / FUNCTION_CMD 参数拆分协议，不保留兼容分支，不将无效参数替换为默认值。
+历史函数调用也按同一完整信封重建。参数校验不会裁剪字段、注入默认值或转换类型，
+保留 false、0、null、空字符串、嵌套结构、大整数及省略语义。多目标、未声明目标、
+无效 JSON 或违反客户端声明的参数拒绝整批交付，不猜测缺失字段或自动回退 OAuth。
 普通文本保持增量；工具调用整批校验通过后才交付。结构化输出在终态校验通过后交付。
 消息中的 `encrypted_content` 作为不透明内容交给上游验证，不再由本地按类型拒绝。
 包含这类内容的消息保留原生结构；特别是 `agent_message` 的 type、author、recipient 和

@@ -118,7 +118,7 @@ func TestRawCustomStreamingRequiresExplicitRouting(t *testing.T) {
 				completed++
 			case "response.failed":
 				failed++
-				if !bytes.Contains(data, []byte("raw input requires references")) || bytes.Contains(data, []byte("private-fixture")) {
+				if !bytes.Contains(data, []byte("raw CUSTOM input requires references")) || bytes.Contains(data, []byte("private-fixture")) {
 					t.Fatal("invalid routing must explain the reference without exposing code")
 				}
 			}

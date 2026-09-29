@@ -210,13 +210,11 @@ func TestToolRepairDoesNotRetryOtherFailures(t *testing.T) {
 
 func TestToolRepairRestoresOriginalRawPayload(t *testing.T) {
 	for _, tc := range []struct {
-		name, code   string
-		functionCode bool
+		name, code string
 	}{
 		{name: "patch", code: "*** Begin Patch\n*** Update File: sample.tex\n@@\n-($x,y)\n+(x,y)\n*** End Patch"},
 		{name: "javascript", code: "text(1)"},
 		{name: "raw_json", code: "{\"payload\":1}"},
-		{name: "function_code", code: "const price = '$1';\ntext(price);", functionCode: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			code := tc.code
@@ -224,21 +222,12 @@ func TestToolRepairRestoresOriginalRawPayload(t *testing.T) {
 			source := testSource()
 			definition := object{"type": "custom", "name": "apply_patch"}
 			marker := "apply_patch"
-			if tc.functionCode {
-				definition = object{"type": "function", "name": "run_script", "parameters": object{"type": "object", "required": []any{"code"}, "properties": object{"code": object{"type": "string"}, "timeout_ms": object{"type": "integer"}}}}
-				marker = "run_script"
-			}
+
 			source["tools"] = []any{definition}
 			_, bridge := mustPrepare(t, source, "repair-scope", cache)
 			initial := repairResponse("resp_original", 10, 2, repairCall("bad", "", code))
 			corrected := repairCall("fixed", marker, strings.ReplaceAll(code, "$", "")+"\n")
-			if tc.functionCode {
-				args := transportArguments(corrected)
-				args["extended_summary"] = "{\"timeout_ms\":1500}"
-				encoded, err := json.Marshal(args)
-				require.NoError(t, err)
-				corrected["arguments"] = string(encoded)
-			}
+
 			modelArguments := corrected["arguments"]
 			body := bridge.StreamWithToolRepair(context.Background(), io.NopCloser(strings.NewReader(sse(object{"type": "response.completed", "response": initial}))), func(context.Context, object, error) (object, error) {
 				return repairResponse("resp_fixed", 20, 3, corrected), nil
@@ -250,14 +239,9 @@ func TestToolRepairRestoresOriginalRawPayload(t *testing.T) {
 			output := repairValue[[]any](t, response["output"])
 			require.Len(t, output, 1)
 			call := repairValue[object](t, output[0])
-			if tc.functionCode {
-				var args object
-				require.NoError(t, decode([]byte(text(call["arguments"])), &args))
-				require.Equal(t, code, args["code"])
-				require.Equal(t, json.Number("1500"), args["timeout_ms"])
-			} else {
-				require.Equal(t, code, call["input"])
-			}
+
+			require.Equal(t, code, call["input"])
+
 			require.Equal(t, "fixed", call["call_id"])
 			require.Equal(t, code, transportArguments(cache.get("repair-scope", "fixed"))["code"])
 			require.Equal(t, modelArguments, corrected["arguments"], "leave the model response untouched")
@@ -413,33 +397,24 @@ func TestToolRepairReaderRejectsIncompleteOrMissingTools(t *testing.T) {
 	}
 }
 
-func TestToolRepairBindsOriginalRawCommand(t *testing.T) {
+func TestToolRepairDoesNotInventFunctionArgumentsFromRawSource(t *testing.T) {
 	source := testSource()
-	source["tools"] = []any{functionCmdTestTool("exec_command")}
-	cache := new(ReplayCache)
-	_, bridge := mustPrepare(t, source, "cmd-repair", cache)
-	original := "printf '%s\\n' \"literal $value\"\n"
-	initial := repairResponse("initial", 3, 1, repairCall("bad", "", original))
+	source["tools"] = []any{functionTransportTestTool("exec_command", "cmd")}
+	_, bridge := mustPrepare(t, source, "cmd-repair", nil)
+	original := "Write-Output 'original'"
+	initial := repairResponse("initial", 3, 1, repairCall("bad", "exec_command", original))
 	attempts := 0
 	body := bridge.StreamWithToolRepair(context.Background(), io.NopCloser(strings.NewReader(sse(object{"type": "response.completed", "response": initial}))), func(context.Context, object, error) (object, error) {
 		attempts++
-		fixed := functionCmdTestNative(t, "exec_command", "rewritten command", "{\"description\":\"Run command\"}")
+		fixed := functionTransportTestNative(t, "exec_command", object{"cmd": original, "workdir": "invented"})
 		return repairResponse("fixed", 2, 1, fixed), nil
 	})
 	events := repairEvents(t, body)
 	require.Equal(t, 1, attempts)
-	var final object
+	require.Equal(t, "response.failed", events[len(events)-1]["type"])
 	for _, event := range events {
-		if event["type"] == "response.completed" {
-			final = repairValue[object](t, event["response"])
-		}
+		require.NotEqual(t, "response.output_item.done", event["type"])
 	}
-	require.NotNil(t, final)
-	output := repairValue[[]any](t, final["output"])
-	call := repairValue[object](t, output[0])
-	require.Equal(t, original, functionCmdTestArguments(t, call)["cmd"])
-	cached := cache.get("cmd-repair", "call_code")
-	require.Equal(t, original, transportArguments(cached)["code"])
 }
 
 func TestToolRepairPreservesAlreadyValidOperations(t *testing.T) {

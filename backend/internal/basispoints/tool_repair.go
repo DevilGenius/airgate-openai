@@ -177,7 +177,7 @@ func (b *Bridge) restoreToolOperations(original, corrected []object) ([]object, 
 		}
 		args := transportArguments(corrected[i])
 		reference, _ := transportReference(args)
-		if b.rawTransportField(reference) == "" || args["code"] == code {
+		if b.tools[reference].Kind != "custom" || args["code"] == code {
 			continue
 		}
 		boundArgs := make(object, len(args))
@@ -240,15 +240,9 @@ func (b *Bridge) preservesToolOperations(original, corrected []object) bool {
 				return false
 			}
 		} else {
-			var payload object
-			field := "code"
-			reference, _ := transportReference(transportArguments(corrected[i]))
-			if b.rawTransportField(reference) == "cmd" {
-				field = "cmd"
-			}
-			if decode([]byte(text(after["arguments"])), &payload) != nil || payload[field] != code {
-				return false
-			}
+			// Unframed source does not establish a complete function argument set.
+			// Do not infer missing parameters or revive the removed split protocol.
+			return false
 		}
 	}
 	return true
@@ -332,7 +326,7 @@ func BuildToolRepairRequest(prepared []byte, failed map[string]any, validation e
 		call := text(item["call_id"])
 		input = append(input, object{"type": "function_call_output", "id": "fc_" + fingerprint([]any{call, len(input)}), "call_id": call, "output": string(feedback)})
 	}
-	input = append(input, message("developer", fmt.Sprintf("The preceding tool batch failed transport validation before any client tool was executed. Correct only its transport formatting and return exactly %d run_officejs calls in the same order, preserving the intended operations and exact raw code. Set references to exactly one declared catalog tool name. The catalog determines transport: FUNCTION needs one JSON envelope with object arguments; CUSTOM needs raw input in code; FUNCTION_CODE and FUNCTION_CMD need raw payload in code and metadata JSON in extended_summary. Summary is descriptive only. Calls that already passed validation must remain unchanged. Do not execute Office code, infer an undeclared target, add operations, or repeat commentary.", len(items))))
+	input = append(input, message("developer", fmt.Sprintf("The preceding tool batch failed transport validation before any client tool was executed. Correct only its transport formatting and return exactly %d run_officejs calls in the same order, preserving the intended operations and exact raw code. Set references to exactly one declared catalog tool name. FUNCTION needs a complete JSON envelope in code containing name and ALL arguments; CUSTOM needs raw input in code. summary and extended_summary are descriptions only and never carry parameters. Calls that already passed validation must remain unchanged. Do not execute Office code, infer an undeclared target, add operations, invent parameters, or repeat commentary.", len(items))))
 	request["input"] = input
 	metadata, _ := request["metadata"].(object)
 	if metadata == nil {
