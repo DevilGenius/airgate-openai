@@ -53,8 +53,9 @@ func (b *basispointsBody) Close() error {
 	return b.ReadCloser.Close()
 }
 
-// openBasispoints returns used=false only when BAS is disabled for this account.
-// Once selected, conversion and upstream errors remain on the BAS path.
+// openBasispoints returns used=false when BAS is disabled or its model access
+// has changed. Callers then continue on native OAuth with the same account.
+// Other conversion and upstream errors remain on the BAS path.
 func (g *OpenAIGateway) openBasispoints(ctx context.Context, req *sdk.ForwardRequest, body []byte) (*http.Response, bool, error) {
 	if !basispointsEnabled(req) {
 		return nil, false, nil
@@ -77,7 +78,7 @@ func (g *OpenAIGateway) openBasispoints(ctx context.Context, req *sdk.ForwardReq
 	}); err != nil {
 		var httpErr *basispointsAttachmentHTTPError
 		if errors.As(err, &httpErr) {
-			return httpErr.response, true, nil
+			return basispointsErrorResponse(ctx, req, httpErr.response)
 		}
 		return nil, true, err
 	}
@@ -91,14 +92,8 @@ func (g *OpenAIGateway) openBasispoints(ctx context.Context, req *sdk.ForwardReq
 		return nil, true, err
 	}
 	if resp.StatusCode >= 300 {
-		errorBody, readErr := readLimitedErrorBody(resp.Body)
-		_ = resp.Body.Close()
-		cancel()
-		if readErr != nil {
-			return nil, true, readErr
-		}
-		resp.Body = io.NopCloser(bytes.NewReader(errorBody))
-		return resp, true, nil
+		defer cancel()
+		return basispointsErrorResponse(ctx, req, resp)
 	}
 	if !strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 		// Consume the bounded invalid response through the shared transport observer.
@@ -114,6 +109,31 @@ func (g *OpenAIGateway) openBasispoints(ctx context.Context, req *sdk.ForwardReq
 	resp.Body = &basispointsBody{ReadCloser: converted, cancel: cancel}
 	sdk.LoggerFromContext(ctx).Debug("basispoints_request_started", "model", req.Model, "account_id", req.Account.ID)
 	return resp, true, nil
+}
+
+// Inspect only rejected HTTP responses, before any output reaches the client.
+// Returning used=false lets the existing native path run once without mutating
+// the request, changing accounts, or persisting an account-wide BAS disablement.
+func basispointsErrorResponse(ctx context.Context, req *sdk.ForwardRequest, resp *http.Response) (*http.Response, bool, error) {
+	body, err := readLimitedErrorBody(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		return nil, true, err
+	}
+	if isBasispointsModelAccessChanged(resp.StatusCode, body) {
+		sdk.LoggerFromContext(ctx).Warn("basispoints_model_access_changed_fallback", "model", req.Model, "account_id", req.Account.ID)
+		return nil, false, nil
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	return resp, true, nil
+}
+
+func isBasispointsModelAccessChanged(status int, body []byte) bool {
+	if status != http.StatusForbidden {
+		return false
+	}
+	message := firstNonEmptyString(extractOpenAIErrorMessage(body), gjson.GetBytes(body, "message").String(), gjson.GetBytes(body, "detail").String(), string(body))
+	return strings.Contains(strings.ToLower(message), "model access has changed.")
 }
 
 func basispointsInvalidRequestResponse(err error) *http.Response {
