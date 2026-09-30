@@ -83,17 +83,16 @@ func BuildPluginInfo() sdk.PluginInfo {
 			sdk.CapabilityForHostMethod(hostMethodAssetsStoreURL),
 		},
 		DispatchDSL: openAIDispatchDSL(),
+		AccountPlans: []sdk.AccountPlan{
+			{Key: "free", Label: "Free", Matches: []string{"free"}},
+			{Key: "plus", Label: "Plus", Matches: []string{"plus"}},
+			{Key: "team", Label: "Team", MatchMode: sdk.AccountPlanNormalizedContains, Matches: []string{"team", "k12", "prolite"}},
+			{Key: "pro", Label: "Pro", Matches: []string{"pro"}},
+		},
 		Metadata: map[string]string{
 			"account_import.v1": `{
 				"formats":["sub2api","cpa","codex","cockpit","agent_identity","account_json","refresh_token","rt"]
 			}`,
-			"account.oauth_plans": `[
-				{"key":"unknown","label":"Unknown","credential_key":"plan_type","match":"unknown"},
-				{"key":"free","label":"Free","credential_key":"plan_type","matches":["free"]},
-				{"key":"plus","label":"Plus","credential_key":"plan_type","matches":["plus"]},
-				{"key":"team","label":"Team","credential_key":"plan_type","match":"normalized_contains","matches":["team","k12","prolite"]},
-				{"key":"pro","label":"Pro","credential_key":"plan_type","matches":["pro"]}
-			]`,
 		},
 		AccountTypes: []sdk.AccountType{
 			{

@@ -66,25 +66,18 @@ func TestBuildPluginInfoAndRoutes(t *testing.T) {
 	if len(info.InstructionPresets) != 0 {
 		t.Fatalf("retired instruction presets still advertised: %#v", info.InstructionPresets)
 	}
-	if info.Metadata["account.oauth_plans"] == "" {
-		t.Fatal("expected oauth plan metadata")
+	if len(info.AccountPlans) == 0 || info.Metadata["account.oauth_plans"] != "" {
+		t.Fatal("expected typed plans without metadata fallback")
 	}
-	var planFilters []struct {
-		Key     string   `json:"key"`
-		Match   string   `json:"match"`
-		Matches []string `json:"matches"`
-	}
-	if err := json.Unmarshal([]byte(info.Metadata["account.oauth_plans"]), &planFilters); err != nil {
-		t.Fatalf("decode oauth plan metadata: %v", err)
-	}
-	if len(planFilters) == 0 || planFilters[0].Key != "unknown" || planFilters[0].Match != "unknown" {
-		t.Fatalf("expected Unknown plan filter, got %+v", planFilters)
+	planFilters, err := sdk.NormalizeAccountPlans(info.AccountPlans)
+	if err != nil {
+		t.Fatal(err)
 	}
 	teamFilterFound := false
 	for _, filter := range planFilters {
 		if filter.Key == "team" {
 			teamFilterFound = true
-			if filter.Match != "normalized_contains" || !reflect.DeepEqual(filter.Matches, []string{"team", "k12", "prolite"}) {
+			if filter.MatchMode != sdk.AccountPlanNormalizedContains || !reflect.DeepEqual(filter.Matches, []string{"team", "k12", "prolite"}) {
 				t.Fatalf("unexpected Team oauth plan filter: %+v", filter)
 			}
 			break
