@@ -77,6 +77,9 @@ func TestBuildPluginInfoAndRoutes(t *testing.T) {
 	if err := json.Unmarshal([]byte(info.Metadata["account.oauth_plans"]), &planFilters); err != nil {
 		t.Fatalf("decode oauth plan metadata: %v", err)
 	}
+	if len(planFilters) == 0 || planFilters[0].Key != "unknown" || planFilters[0].Match != "unknown" {
+		t.Fatalf("expected Unknown plan filter, got %+v", planFilters)
+	}
 	teamFilterFound := false
 	for _, filter := range planFilters {
 		if filter.Key == "team" {
