@@ -59,7 +59,12 @@ Responses、Chat、Anthropic 转换及 BAS 共用别名规则：`maximum` → `m
 | --- | --- | --- |
 | `none` / `minimal` | `none` | `low` |
 | `low` / `medium` / `high` / `xhigh` | 原档位 | 原档位 |
-| `max` / `ultra` | GPT-5.6 Sol/Terra/Luna 为 `max`，其余已配置模型为 `xhigh` | `xhigh` |
+| `max` / `ultra` | 默认限制到 `max`；GPT-5.5 限制到 `xhigh` | `xhigh` |
+
+原生上游最高档位集中配置在 `request_convert.go` 顶部：
+`defaultOpenAIReasoningMaxEffort = "max"`，
+`openAIReasoningMaxEffortByModel` 使用“模型 ID → 最高档位”的字符串映射覆盖默认值。
+这是上限，不会提升较低请求档位，也不会给未传 effort 的请求补上默认上限。
 
 BAS 未传 effort 时使用 `medium`。原生映射仅改写已提供的字段，保留既有入口默认规则。
 HTTP、WebSocket、compact 和 Anthropic 转换在发送上游前应用对应映射，不修改原请求字节。

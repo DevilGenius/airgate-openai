@@ -17,6 +17,13 @@ var (
 	jsonReasoningKey       = []byte(`"reasoning"`)
 	jsonReasoningEffortKey = []byte(`"reasoning_effort"`)
 	jsonOutputConfigKey    = []byte(`"output_config"`)
+
+	// Native upstream maximum: xhigh, max, or ultra. This is a ceiling,
+	// not a default request value. BAS applies its own independent limit.
+	defaultOpenAIReasoningMaxEffort = "max"
+	openAIReasoningMaxEffortByModel = map[string]string{
+		"gpt-5.5": "xhigh",
+	}
 )
 
 func normalizeOpenAIServiceTier(tier string) string {
@@ -86,12 +93,13 @@ func rewriteOpenAIReasoningEffort(body []byte, modelID string) ([]byte, error) {
 }
 
 func oauthReasoningRewriterForModel(modelID string) reasoning.OAuth {
-	switch openAIWireReasoningModelID(modelID) {
-	case "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
-		// Preserve existing native wire support; this does not constrain BAS.
-		return reasoning.OAuth{Max: true}
-	default:
-		return reasoning.OAuth{}
+	maxEffort, ok := openAIReasoningMaxEffortByModel[openAIWireReasoningModelID(modelID)]
+	if !ok {
+		maxEffort = defaultOpenAIReasoningMaxEffort
+	}
+	return reasoning.OAuth{
+		Max:   maxEffort == "max" || maxEffort == "ultra",
+		Ultra: maxEffort == "ultra",
 	}
 }
 
