@@ -429,10 +429,14 @@ func (g *OpenAIGateway) buildAnthropicUpstreamRequest(
 	session openAISessionResolution,
 ) (*http.Request, error) {
 	isOAuth := isOpenAIOAuthCredentials(account.Credentials)
-	responsesBody = applyOpenAIWireReasoningEffort(
+	var err error
+	responsesBody, err = rewriteOpenAIReasoningEffort(
 		responsesBody,
 		gjson.GetBytes(responsesBody, "model").String(),
 	)
+	if err != nil {
+		return nil, err
+	}
 	fingerprintIDs := g.resolveCodexFingerprintIDs(account, req.Headers)
 	responsesBody = applyCodexFingerprintBody(responsesBody, fingerprintIDs)
 

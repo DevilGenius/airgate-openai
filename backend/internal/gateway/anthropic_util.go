@@ -6,6 +6,8 @@ import (
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+
+	"github.com/DevilGenius/airgate-openai/backend/internal/reasoning"
 )
 
 // ──────────────────────────────────────────────────────
@@ -53,25 +55,9 @@ func anthropicTokenBudgetToReasoningEffort(tokens int64) string {
 // 合法返回：none / minimal / low / medium / high / xhigh / max / ultra
 // 无法识别返回 ""，由调用方走兜底逻辑
 func normalizeReasoningEffort(raw string) string {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "none", "off", "disabled":
-		return "none"
-	case "minimal", "min":
-		return "minimal"
-	case "low":
-		return "low"
-	case "medium", "mid", "normal", "default":
-		return "medium"
-	case "high":
-		return "high"
-	case "max":
-		return "max"
-	case "maximum":
-		return "max"
-	case "ultra":
-		return "ultra"
-	case "xhigh", "very_high", "veryhigh":
-		return "xhigh"
+	switch effort := reasoning.Normalize(raw); effort {
+	case "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
+		return effort
 	default:
 		return ""
 	}

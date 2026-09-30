@@ -92,9 +92,11 @@ func TestPrepareWireShapeAndDeterminism(t *testing.T) {
 
 func TestEffortAndUnsupportedCapabilities(t *testing.T) {
 	for requested, want := range map[string]string{"max": "xhigh", "ultra": "xhigh", "x-high": "xhigh", "high": "high", "none": "low", "minimal": "low", "": "medium"} {
-		got, err := NormalizeEffort(requested)
-		if err != nil || got != want {
-			t.Fatalf("effort %q = %q, %v", requested, got, err)
+		source := testSource()
+		source["reasoning"] = object{"effort": requested}
+		wire, bridge := mustPrepare(t, source, "effort", nil)
+		if wire["reasoning_effort"] != want || bridge.Effort != want {
+			t.Fatalf("effort %q = %v, want %q", requested, wire["reasoning_effort"], want)
 		}
 	}
 	for _, patch := range []object{

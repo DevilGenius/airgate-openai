@@ -10,6 +10,8 @@ import (
 	"io"
 	"sort"
 	"strings"
+
+	"github.com/DevilGenius/airgate-openai/backend/internal/reasoning"
 )
 
 const ResponsesURL = "https://bps.openai.com/basispoints/api/responses"
@@ -48,22 +50,6 @@ func text(value any) string {
 	return s
 }
 
-// NormalizeEffort caps unsupported high tiers explicitly instead of falling back to medium.
-func NormalizeEffort(effort string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(effort)) {
-	case "", "medium":
-		return "medium", nil
-	case "low", "high":
-		return strings.ToLower(strings.TrimSpace(effort)), nil
-	case "xhigh", "x-high", "extra-high", "extra_high", "max", "ultra":
-		return "xhigh", nil
-	case "none", "minimal":
-		return "low", nil
-	default:
-		return "", fmt.Errorf("basispoints reasoning effort %q is unsupported", effort)
-	}
-}
-
 func fingerprint(value any) string {
 	raw, _ := json.Marshal(value)
 	sum := sha256.Sum256(raw)
@@ -87,14 +73,14 @@ func Prepare(raw []byte, scope string, replay *ReplayCache) ([]byte, *Bridge, er
 	if text(source["previous_response_id"]) != "" {
 		return nil, nil, fmt.Errorf("basispoints requires expanded history instead of previous_response_id")
 	}
-	requested := text(source["reasoning_effort"])
+	requested := reasoning.Requested(raw)
 	if reasoning, ok := source["reasoning"].(object); ok {
-		requested = text(reasoning["effort"])
 		if mode := text(reasoning["mode"]); mode != "" && mode != "standard" {
 			return nil, nil, fmt.Errorf("basispoints does not support reasoning mode %q", mode)
 		}
 	}
-	effort, err := NormalizeEffort(requested)
+	var rewriter reasoning.Rewriter = reasoning.Basispoints{}
+	effort, err := rewriter.Rewrite(requested)
 	if err != nil {
 		return nil, nil, err
 	}

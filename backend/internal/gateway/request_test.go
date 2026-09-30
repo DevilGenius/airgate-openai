@@ -15,6 +15,8 @@ import (
 
 	"github.com/tidwall/gjson"
 
+	"github.com/DevilGenius/airgate-openai/backend/internal/reasoning"
+
 	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
@@ -915,7 +917,7 @@ func TestOpenAIReasoningHintIgnoresEscapedJSONInStringValue(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// normalizeOpenAIReasoningEffort — 所有别名、大小写变体、分隔符变体、边界
+// reasoning.Normalize — aliases preserve the requested level before rewriting.
 // ---------------------------------------------------------------------------
 
 func TestNormalizeOpenAIReasoningEffort_AllAliases(t *testing.T) {
@@ -938,8 +940,8 @@ func TestNormalizeOpenAIReasoningEffort_AllAliases(t *testing.T) {
 		{"ultra", "ultra"},
 
 		// 禁用思考别名 — Phase 1 精确命中
-		{"minimal", "none"},
-		{"min", "none"},
+		{"minimal", "minimal"},
+		{"min", "minimal"},
 		{"off", "none"},
 		{"disabled", "none"},
 
@@ -957,8 +959,8 @@ func TestNormalizeOpenAIReasoningEffort_AllAliases(t *testing.T) {
 		{"ExtraHigh", "xhigh"},
 		{"VeryHigh", "xhigh"},
 		{"Ultra", "ultra"},
-		{"Minimal", "none"},
-		{"Min", "none"},
+		{"Minimal", "minimal"},
+		{"Min", "minimal"},
 		{"Off", "none"},
 		{"Disabled", "none"},
 		{"DISABLED", "none"},
@@ -987,8 +989,8 @@ func TestNormalizeOpenAIReasoningEffort_AllAliases(t *testing.T) {
 		{"\t\n", ""},
 	}
 	for _, tc := range cases {
-		if got := normalizeOpenAIReasoningEffort(tc.input); got != tc.want {
-			t.Errorf("normalizeOpenAIReasoningEffort(%q) = %q, want %q", tc.input, got, tc.want)
+		if got := reasoning.Normalize(tc.input); got != tc.want {
+			t.Errorf("reasoning.Normalize(%q) = %q, want %q", tc.input, got, tc.want)
 		}
 	}
 }
@@ -1009,8 +1011,8 @@ func TestOpenAIWireReasoningEffortClampsUnsupportedLevels(t *testing.T) {
 		{"unknown", "unknown"},
 	}
 	for _, tc := range cases {
-		if got := openAIWireReasoningEffort(tc.input, openAIWireReasoningSupport{}); got != tc.want {
-			t.Errorf("openAIWireReasoningEffort(%q) = %q, want %q", tc.input, got, tc.want)
+		if got, err := (reasoning.OAuth{}).Rewrite(tc.input); err != nil || got != tc.want {
+			t.Errorf("OAuth.Rewrite(%q) = %q, %v, want %q", tc.input, got, err, tc.want)
 		}
 	}
 }
@@ -1027,15 +1029,18 @@ func TestOpenAIWireReasoningEffortAllowsDeclaredExtendedLevels(t *testing.T) {
 		{"unknown", "unknown"},
 	}
 	for _, tc := range cases {
-		if got := openAIWireReasoningEffort(tc.input, openAIWireReasoningSupport{Max: true, Ultra: true}); got != tc.want {
-			t.Errorf("openAIWireReasoningEffort(%q, support=max+ultra) = %q, want %q", tc.input, got, tc.want)
+		if got, err := (reasoning.OAuth{Max: true, Ultra: true}).Rewrite(tc.input); err != nil || got != tc.want {
+			t.Errorf("OAuth.Rewrite(%q, support=max+ultra) = %q, %v, want %q", tc.input, got, err, tc.want)
 		}
 	}
 }
 
 func TestApplyOpenAIWireReasoningEffortClampsUnsupportedLevels(t *testing.T) {
 	body := []byte(`{"reasoning":{"effort":"max"},"reasoning_effort":"ultra","output_config":{"effort":"maximum"}}`)
-	result := applyOpenAIWireReasoningEffort(body, "gpt-5.5")
+	result, err := rewriteOpenAIReasoningEffort(body, "gpt-5.5")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "xhigh" {
 		t.Fatalf("reasoning.effort = %q, want xhigh; body=%s", got, result)
@@ -1050,7 +1055,10 @@ func TestApplyOpenAIWireReasoningEffortClampsUnsupportedLevels(t *testing.T) {
 
 func TestApplyOpenAIWireReasoningEffortClampsLunaUltra(t *testing.T) {
 	body := []byte(`{"reasoning":{"effort":"max"},"reasoning_effort":"ultra"}`)
-	result := applyOpenAIWireReasoningEffort(body, "gpt-5.6-luna")
+	result, err := rewriteOpenAIReasoningEffort(body, "gpt-5.6-luna")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "max" {
 		t.Fatalf("reasoning.effort = %q, want max; body=%s", got, result)
@@ -1062,7 +1070,10 @@ func TestApplyOpenAIWireReasoningEffortClampsLunaUltra(t *testing.T) {
 
 func TestApplyOpenAIWireReasoningEffortMapsGPT56UltraAtWireBoundary(t *testing.T) {
 	body := []byte(`{"reasoning":{"effort":"max"},"reasoning_effort":"ultra","output_config":{"effort":"maximum"}}`)
-	result := applyOpenAIWireReasoningEffort(body, "gpt-5.6-sol")
+	result, err := rewriteOpenAIReasoningEffort(body, "gpt-5.6-sol")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "max" {
 		t.Fatalf("reasoning.effort = %q, want max; body=%s", got, result)
@@ -1075,19 +1086,19 @@ func TestApplyOpenAIWireReasoningEffortMapsGPT56UltraAtWireBoundary(t *testing.T
 	}
 }
 
-func TestOpenAIWireReasoningSupportForModelRecognizesAliases(t *testing.T) {
+func TestOAuthReasoningRewriterForModelRecognizesAliases(t *testing.T) {
 	cases := []struct {
 		model string
-		want  openAIWireReasoningSupport
+		want  reasoning.OAuth
 	}{
-		{"gpt-5.6-sol", openAIWireReasoningSupport{Max: true}},
-		{"openai/gpt-5.6-terra", openAIWireReasoningSupport{Max: true}},
-		{"oai/gpt-5.6-luna-openai-compact", openAIWireReasoningSupport{Max: true}},
-		{"gpt-5.5", openAIWireReasoningSupport{}},
+		{"gpt-5.6-sol", reasoning.OAuth{Max: true}},
+		{"openai/gpt-5.6-terra", reasoning.OAuth{Max: true}},
+		{"oai/gpt-5.6-luna-openai-compact", reasoning.OAuth{Max: true}},
+		{"gpt-5.5", reasoning.OAuth{}},
 	}
 	for _, tc := range cases {
-		if got := openAIWireReasoningSupportForModel(tc.model); got != tc.want {
-			t.Fatalf("openAIWireReasoningSupportForModel(%q) = %+v, want %+v", tc.model, got, tc.want)
+		if got := oauthReasoningRewriterForModel(tc.model); got != tc.want {
+			t.Fatalf("oauthReasoningRewriterForModel(%q) = %+v, want %+v", tc.model, got, tc.want)
 		}
 	}
 }
@@ -1351,7 +1362,7 @@ func TestOpenAIReasoningEffortFromRequest_NormalizesAliases(t *testing.T) {
 		{"max → max", []byte(`{"reasoning_effort":"max"}`), "max"},
 		{"maximum → max", []byte(`{"reasoning_effort":"maximum"}`), "max"},
 		{"ultra → ultra", []byte(`{"reasoning_effort":"ultra"}`), "ultra"},
-		{"min → none", []byte(`{"reasoning":{"effort":"min"}}`), "none"},
+		{"min → minimal", []byte(`{"reasoning":{"effort":"min"}}`), "minimal"},
 		{"off → none", []byte(`{"reasoning":{"effort":"off"}}`), "none"},
 		{"disabled → none", []byte(`{"output_config":{"effort":"disabled"}}`), "none"},
 	}
@@ -1391,7 +1402,7 @@ func TestEnsureResponsesDefaultsNormalizesExistingReasoningEffortLowcaseAlias(t 
 	}{
 		{"reasoning.effort extrahigh → xhigh", []byte(`{"model":"gpt-5.5","input":"hi","reasoning":{"effort":"extrahigh"}}`), "xhigh"},
 		{"reasoning.effort veryhigh → xhigh", []byte(`{"model":"gpt-5.5","input":"hi","reasoning":{"effort":"veryhigh"}}`), "xhigh"},
-		{"reasoning.effort min → none", []byte(`{"model":"gpt-5.5","input":"hi","reasoning":{"effort":"min"}}`), "none"},
+		{"reasoning.effort min → minimal", []byte(`{"model":"gpt-5.5","input":"hi","reasoning":{"effort":"min"}}`), "minimal"},
 		{"reasoning.effort disabled → none", []byte(`{"model":"gpt-5.5","input":"hi","reasoning":{"effort":"disabled"}}`), "none"},
 	}
 	for _, tc := range tests {

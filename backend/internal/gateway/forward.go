@@ -190,7 +190,11 @@ func (g *OpenAIGateway) forwardOAuthCompact(ctx context.Context, req *sdk.Forwar
 		return sharedStateUnavailable(session.StateError)
 	}
 	updateSessionStateFromRequest(session, account.ID)
-	upstreamBody := normalizePromptCacheKeyForUpstream(applyOpenAIWireReasoningEffort(req.Body, req.Model))
+	upstreamBody, err := rewriteOpenAIReasoningEffort(req.Body, req.Model)
+	if err != nil {
+		return failureOutcome(http.StatusBadRequest, openAIErrorJSON("invalid_request_error", "invalid_reasoning_effort", err.Error()), nil, err.Error(), 0), nil
+	}
+	upstreamBody = normalizePromptCacheKeyForUpstream(upstreamBody)
 	fingerprintIDs := g.resolveCodexFingerprintIDs(account, req.Headers)
 	if fingerprintIDs != nil {
 		upstreamBody = applyCodexFingerprintBody(upstreamBody, fingerprintIDs)
@@ -646,8 +650,11 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 	logger := sdk.LoggerFromContext(ctx)
 
 	if !isImagesRequest(reqPath) {
-		body = applyOpenAIWireReasoningEffort(body, req.Model)
-		body = normalizePromptCacheKeyForUpstream(body)
+		rewritten, err := rewriteOpenAIReasoningEffort(body, req.Model)
+		if err != nil {
+			return failureOutcome(http.StatusBadRequest, openAIErrorJSON("invalid_request_error", "invalid_reasoning_effort", err.Error()), nil, err.Error(), 0), nil
+		}
+		body = normalizePromptCacheKeyForUpstream(rewritten)
 	}
 	chatUsagePolicy := prepareChatCompletionsStreamUsage(reqPath, req.Stream, body)
 	body = chatUsagePolicy.upstreamBody

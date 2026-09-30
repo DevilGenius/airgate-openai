@@ -44,6 +44,28 @@ FUNCTION_CODE / FUNCTION_CMD 参数拆分协议，不保留兼容分支，不将
 BPS 的 response ID 不写入普通 OAuth 续接缓存。失败分类、账号冷却和换号复用普通 OAuth 的机制。
 用量使用现有 token 计费，并记录 `oauth_transport=basispoints`。
 
+## 思考强度归并与记录
+
+`backend/internal/reasoning` 统一 effort 别名归一化、字段选择和上游映射。
+Responses、Chat、Anthropic 转换及 BAS 共用别名规则：`maximum` → `max`，
+`extra-high` / `very_high` → `xhigh`，`min` → `minimal`，`off` / `disabled` → `none`，
+`mid` / `normal` / `default` → `medium`；兼容大小写及首尾空白。
+
+兼容字段同时出现时，按 `reasoning.effort` > `reasoning_effort` > `output_config.effort`
+选择第一个非空白字符串。只有 summary 或空 effort 的 reasoning 对象不会遮蔽后续字段。
+未知的非空值不退回其他字段：原生上游继续自行校验，BAS 明确报错。
+
+| 请求强度 | 原生上游（当前模型能力配置） | BAS |
+| --- | --- | --- |
+| `none` / `minimal` | `none` | `low` |
+| `low` / `medium` / `high` / `xhigh` | 原档位 | 原档位 |
+| `max` / `ultra` | GPT-5.6 Sol/Terra/Luna 为 `max`，其余已配置模型为 `xhigh` | `xhigh` |
+
+BAS 未传 effort 时使用 `medium`。原生映射仅改写已提供的字段，保留既有入口默认规则。
+HTTP、WebSocket、compact 和 Anthropic 转换在发送上游前应用对应映射，不修改原请求字节。
+Core 的普通转发及 Host 转发记录客户端请求的归一化档位；`max` / `ultra` 不被上游降档、
+插件 usage 或续接恢复覆盖。未提供或无法识别的请求档位留空，不从 thinking budget 推定为 high。
+
 ## 缓存用量与计费口径
 
 BPS Responses 的 `input_tokens` 按包含缓存读取和创建的总输入处理。插件先拆成互斥的三部分，

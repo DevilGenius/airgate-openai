@@ -542,7 +542,10 @@ func (g *OpenAIGateway) buildWSRequest(req *sdk.ForwardRequest, session openAISe
 	if err != nil {
 		return nil, err
 	}
-	body = applyOpenAIWireReasoningEffort(body, req.Model)
+	body, err = rewriteOpenAIReasoningEffort(body, req.Model)
+	if err != nil {
+		return nil, err
+	}
 	return applyOpenAIWireServiceTier(body, req.Headers), nil
 }
 

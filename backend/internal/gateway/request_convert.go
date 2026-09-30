@@ -8,6 +8,8 @@ import (
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+
+	"github.com/DevilGenius/airgate-openai/backend/internal/reasoning"
 )
 
 var (
@@ -70,125 +72,26 @@ func firstNonEmptyTier(tiers ...string) string {
 	return ""
 }
 
-func normalizeOpenAIReasoningEffort(effort string) string {
-	trimmed := strings.TrimSpace(effort)
-	if trimmed == "" {
-		return ""
+// rewriteOpenAIReasoningEffort applies the native upstream implementation of the
+// same Rewriter contract used by BAS. Request recording stays in Core.
+func rewriteOpenAIReasoningEffort(body []byte, modelID string) ([]byte, error) {
+	if len(body) == 0 || !hasOpenAIReasoningEffortHint(body) {
+		return body, nil
 	}
-
-	switch trimmed {
-	case "none":
-		return "none"
-	case "minimal", "min", "off", "disabled":
-		return "none"
-	case "low":
-		return "low"
-	case "medium":
-		return "medium"
-	case "high":
-		return "high"
-	case "max":
-		return "max"
-	case "maximum":
-		return "max"
-	case "ultra":
-		return "ultra"
-	case "xhigh", "extrahigh", "veryhigh":
-		return "xhigh"
+	if strings.TrimSpace(modelID) == "" {
+		modelID = gjson.GetBytes(body, "model").String()
 	}
-
-	normalized := strings.ToLower(trimmed)
-	normalized = strings.ReplaceAll(normalized, "-", "")
-	normalized = strings.ReplaceAll(normalized, "_", "")
-	normalized = strings.ReplaceAll(normalized, " ", "")
-
-	switch normalized {
-	case "none":
-		return "none"
-	case "minimal", "min", "off", "disabled":
-		return "none"
-	case "low":
-		return "low"
-	case "medium":
-		return "medium"
-	case "high":
-		return "high"
-	case "max":
-		return "max"
-	case "maximum":
-		return "max"
-	case "ultra":
-		return "ultra"
-	case "xhigh", "extrahigh", "veryhigh":
-		return "xhigh"
-	default:
-		return trimmed
-	}
+	return reasoning.RewriteFields(body, oauthReasoningRewriterForModel(modelID),
+		"reasoning.effort", "reasoning_effort", "output_config.effort")
 }
 
-type openAIWireReasoningSupport struct {
-	Max   bool
-	Ultra bool
-}
-
-func openAIWireReasoningEffort(effort string, support openAIWireReasoningSupport) string {
-	switch normalized := normalizeOpenAIReasoningEffort(effort); normalized {
-	case "max":
-		if support.Max {
-			return normalized
-		}
-		return "xhigh"
-	case "ultra":
-		if support.Ultra {
-			return normalized
-		}
-		if support.Max {
-			return "max"
-		}
-		return "xhigh"
-	default:
-		return normalized
-	}
-}
-
-func applyOpenAIWireReasoningEffort(body []byte, modelID string) []byte {
-	if len(body) == 0 {
-		return body
-	}
-	if !hasOpenAIReasoningEffortHint(body) {
-		return body
-	}
-
-	support := openAIWireReasoningSupportForModel(modelID)
-	if !support.Max && !support.Ultra && strings.TrimSpace(modelID) == "" {
-		support = openAIWireReasoningSupportForModel(gjson.GetBytes(body, "model").String())
-	}
-
-	result := body
-	for _, path := range []string{"reasoning.effort", "reasoning_effort", "output_config.effort"} {
-		node := gjson.GetBytes(result, path)
-		if !node.Exists() || node.Type != gjson.String {
-			continue
-		}
-		if effort := openAIWireReasoningEffort(node.String(), support); effort != "" {
-			if modified, err := sjson.SetBytes(result, path, effort); err == nil {
-				result = modified
-			}
-		}
-	}
-	return result
-}
-
-func openAIWireReasoningSupportForModel(modelID string) openAIWireReasoningSupport {
-	id := openAIWireReasoningModelID(modelID)
-	switch id {
+func oauthReasoningRewriterForModel(modelID string) reasoning.OAuth {
+	switch openAIWireReasoningModelID(modelID) {
 	case "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
-		// ultra 是 Codex 模型目录中的客户端级强度，但当前 Responses
-		// wire 的 ReasoningEffortParam 最高只接受 max。请求归一化阶段继续
-		// 保留 ultra，仅在最终发送上游前映射为该模型支持的最高 wire 档位。
-		return openAIWireReasoningSupport{Max: true}
+		// Preserve existing native wire support; this does not constrain BAS.
+		return reasoning.OAuth{Max: true}
 	default:
-		return openAIWireReasoningSupport{}
+		return reasoning.OAuth{}
 	}
 }
 
@@ -255,16 +158,7 @@ func hasOpenAIReasoningDefaultsHint(body []byte) bool {
 }
 
 func openAIReasoningEffortFromRequestAfterHint(body []byte) string {
-	if effort := normalizeOpenAIReasoningEffort(gjson.GetBytes(body, "reasoning.effort").String()); effort != "" {
-		return effort
-	}
-	if effort := normalizeOpenAIReasoningEffort(gjson.GetBytes(body, "reasoning_effort").String()); effort != "" {
-		return effort
-	}
-	if effort := normalizeOpenAIReasoningEffort(gjson.GetBytes(body, "output_config.effort").String()); effort != "" {
-		return effort
-	}
-	return ""
+	return reasoning.Normalize(reasoning.Requested(body))
 }
 
 func openAIReasoningEffortFromRequest(body []byte) string {
@@ -357,13 +251,13 @@ func ensureResponsesDefaultsWithTier(body []byte, reqServiceTierOverride string)
 		result, _ = sjson.SetBytes(result, "parallel_tool_calls", true)
 	}
 	if hasOpenAIReasoningDefaultsHint(result) {
-		if reasoning := gjson.GetBytes(result, "reasoning"); reasoning.Exists() {
-			if effort := normalizeOpenAIReasoningEffort(reasoning.Get("effort").String()); effort != "" {
+		if reasoningNode := gjson.GetBytes(result, "reasoning"); reasoningNode.Exists() {
+			if effort := reasoning.Normalize(reasoning.Requested(result)); effort != "" {
 				if modified, err := sjson.SetBytes(result, "reasoning.effort", effort); err == nil {
 					result = modified
 				}
 			}
-			if !reasoning.Get("summary").Exists() {
+			if !reasoningNode.Get("summary").Exists() {
 				if modified, err := sjson.SetBytes(result, "reasoning.summary", "auto"); err == nil {
 					result = modified
 				}
