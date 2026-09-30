@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react';
 import type { AccountSurfaceProps } from '@devilgenius/airgate-theme/plugin';
 import { accountPlanLabel, planUsesSubscriptionExpiry } from './accountPlan';
+import { AccountTypeIcon } from './AccountTypeIcon';
 
 type AccountLike = {
   type?: string;
@@ -47,20 +48,6 @@ const rowStyle: CSSProperties = {
   gap: '0.25rem',
 };
 
-const typeBadgeStyle: CSSProperties = {
-  maxWidth: '100%',
-  overflow: 'hidden',
-  border: '1px solid var(--ag-glass-border)',
-  borderRadius: '0.25rem',
-  background: 'var(--ag-bg-surface)',
-  padding: '0 0.25rem',
-  color: 'var(--ag-text-secondary)',
-  fontSize: '0.625rem',
-  lineHeight: 1,
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-};
-
 const planBadgeStyle: CSSProperties = {
   maxWidth: '100%',
   overflow: 'hidden',
@@ -102,7 +89,7 @@ export function AccountIdentity({ accountType, context }: AccountSurfaceProps) {
 
   return (
     <div style={rowStyle}>
-      {type && <span style={typeBadgeStyle}>{displayType}</span>}
+      {type && <AccountTypeIcon type={displayType === 'Identity' ? 'identity' : type} label={displayType} />}
       {displayPlan && (
         <span style={planBadgeStyle} title={planTitle}>
           {accountPlanLabel(displayPlan)}

@@ -3,13 +3,25 @@ import { describe, expect, it } from 'vitest';
 import { AccountIdentity } from './AccountIdentity';
 
 describe('OpenAI AccountIdentity', () => {
+  it('keeps agent identity distinguishable from ordinary OAuth', () => {
+    render(<AccountIdentity accountType="oauth" context={{ credentials: { auth_mode: 'agent_identity', plan_type: 'pro' } }} />);
+    expect(screen.getByRole('img', { name: 'Identity' })).toHaveAttribute('title', 'Identity');
+    expect(screen.getByText('Pro')).toBeInTheDocument();
+  });
+
+  it('renders API key authentication as an accessible icon', () => {
+    render(<AccountIdentity accountType="apikey" context={{ credentials: {} }} />);
+    expect(screen.getByRole('img', { name: 'API Key' })).toBeInTheDocument();
+    expect(screen.queryByText('API Key')).not.toBeInTheDocument();
+  });
+
   it('renders the real OAuth plan by default', () => {
     render(<AccountIdentity
       accountType="oauth"
       context={{ credentials: { plan_type: 'plus' } }}
     />);
 
-    expect(screen.getByText('OAuth')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'OAuth' })).toBeInTheDocument();
     expect(screen.getByText('Plus')).toBeInTheDocument();
   });
 
@@ -22,7 +34,7 @@ describe('OpenAI AccountIdentity', () => {
       }}
     />);
 
-    expect(screen.getByText('OAuth')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'OAuth' })).toBeInTheDocument();
     expect(screen.getByText('Pro')).toBeInTheDocument();
     expect(screen.queryByText('Plus')).not.toBeInTheDocument();
   });
@@ -38,7 +50,7 @@ describe('OpenAI AccountIdentity', () => {
       }}
     />);
 
-    expect(screen.getByText('OAuth')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'OAuth' })).toBeInTheDocument();
     expect(screen.getByText('ProLite')).toBeInTheDocument();
     expect(screen.queryByText('Self_serve_business_prolite')).not.toBeInTheDocument();
     expect(screen.queryByText('Free')).not.toBeInTheDocument();
