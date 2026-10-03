@@ -9,6 +9,22 @@ type: gateway
 min_core_version: 1.0.0
 dependencies: []
 config:
+  - key: cognition_test_enabled
+    label: 账号降智检测
+    type: bool
+    default: "false"
+    description: 账号测试使用下方 prompt 和正则判定；关闭后使用普通测试，不修改已有降智标记。
+    required: false
+  - key: cognition_test_prompt
+    label: 降智检测 Prompt
+    type: string
+    description: 开启检测时发送的提示词，不得为空。
+    required: false
+  - key: cognition_test_regexp
+    label: 正常回复正则
+    type: string
+    description: Go RE2 正则，匹配完整回复正文则正常，否则标记降智；不匹配推理内容或协议字段。
+    required: false
   - key: stream_response_limit_mib
     label: 流式响应累计上限（MiB）
     type: int

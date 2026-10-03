@@ -46,6 +46,9 @@ func (g *OpenAIGateway) Init(ctx sdk.PluginContext) error {
 	if ctx != nil {
 		config = ctx.Config()
 	}
+	if err := validateCognitionTestConfig(config); err != nil {
+		return err
+	}
 	g.configMu.Lock()
 	g.config = config
 	g.configMu.Unlock()
@@ -92,6 +95,9 @@ func (g *OpenAIGateway) Init(ctx sdk.PluginContext) error {
 
 // OnConfigUpdate applies plugin configuration without restarting the process.
 func (g *OpenAIGateway) OnConfigUpdate(config sdk.PluginConfig) error {
+	if err := validateCognitionTestConfig(config); err != nil {
+		return err
+	}
 	g.configMu.Lock()
 	g.config = config
 	g.configMu.Unlock()
@@ -806,6 +812,20 @@ func buildCodexUsageWindows(snapshot *CodexUsageSnapshot, limitName string, now 
 // HandleRequest 处理 Core 透传的自定义请求（实现 sdk.RequestHandler 接口）
 func (g *OpenAIGateway) HandleRequest(ctx context.Context, method, path, _ string, _ http.Header, body []byte) (int, http.Header, []byte, error) {
 	switch path {
+	case "accounts/cognition-test-policy":
+		if method != http.MethodGet {
+			return http.StatusMethodNotAllowed, nil, jsonError("method not allowed"), nil
+		}
+		config := g.pluginConfig()
+		if err := validateCognitionTestConfig(config); err != nil {
+			return http.StatusBadRequest, nil, jsonError(err.Error()), nil
+		}
+		if config == nil || !config.GetBool("cognition_test_enabled") {
+			return http.StatusOK, nil, jsonMarshal(map[string]any{"enabled": false}), nil
+		}
+		return http.StatusOK, nil, jsonMarshal(map[string]any{
+			"enabled": true, "prompt": config.GetString("cognition_test_prompt"), "regexp": config.GetString("cognition_test_regexp"),
+		}), nil
 	case "accounts/import/compat":
 		return g.handleCompatibleAccountImport(ctx, method, body)
 

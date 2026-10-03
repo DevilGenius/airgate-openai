@@ -39,6 +39,9 @@ func BuildPluginInfo() sdk.PluginInfo {
 		Author:      PluginAuthor,
 		Type:        sdk.PluginTypeGateway,
 		ConfigSchema: []sdk.ConfigField{
+			{Key: "cognition_test_enabled", Label: "账号降智检测", Type: "bool", Default: "false", Description: "账号测试使用下方 prompt 和正则判定；关闭后使用普通测试，不修改已有降智标记。"},
+			{Key: "cognition_test_prompt", Label: "降智检测 Prompt", Type: "string", Description: "开启检测时发送的提示词，不得为空。"},
+			{Key: "cognition_test_regexp", Label: "正常回复正则", Type: "string", Description: "Go RE2 正则，匹配完整回复正文则正常，否则标记降智；不匹配推理内容或协议字段。"},
 			{
 				Key:         streamResponseLimitConfigKey,
 				Label:       "流式响应累计上限（MiB）",
