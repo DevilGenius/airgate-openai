@@ -3,8 +3,9 @@ package gateway
 import (
 	"context"
 	"encoding/json"
-	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 	"testing"
+
+	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
 func TestCognitionPolicyEndpoint(t *testing.T) {

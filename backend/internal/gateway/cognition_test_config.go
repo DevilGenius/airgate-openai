@@ -2,9 +2,10 @@ package gateway
 
 import (
 	"fmt"
-	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 	"regexp"
 	"strings"
+
+	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
 func validateCognitionTestConfig(config sdk.PluginConfig) error {
