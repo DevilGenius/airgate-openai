@@ -11,16 +11,15 @@ const EFFORT_LOW_COLOR = 'rgb(34,197,94)';
 const EFFORT_MEDIUM_COLOR = 'rgb(59,130,246)';
 const EFFORT_HIGH_COLOR = 'rgb(249,115,22)';
 const EFFORT_XHIGH_COLOR = 'rgb(239,68,68)';
-const EFFORT_MAX_COLOR = 'rgb(148,163,184)';
 const EFFORT_ULTRA_COLOR = 'var(--ag-text)';
-const EFFORT_FALLBACK_COLOR = 'var(--ag-text-secondary)';
+const EFFORT_FALLBACK_COLOR = 'rgb(148,163,184)';
 
 const EFFORT_COLORS: Record<string, string> = {
   low: EFFORT_LOW_COLOR,
   medium: EFFORT_MEDIUM_COLOR,
   high: EFFORT_HIGH_COLOR,
   xhigh: EFFORT_XHIGH_COLOR,
-  max: EFFORT_MAX_COLOR,
+  max: EFFORT_ULTRA_COLOR,
   ultra: EFFORT_ULTRA_COLOR,
 };
 const IMAGE_SIZE_COLOR = 'rgb(148,163,184)';
