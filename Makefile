@@ -64,7 +64,7 @@ pre-commit: ensure-webdist lint test vet ## pre-commit hook 调用
 
 lint: ## 代码检查（需要安装 golangci-lint）
 	@if ! command -v golangci-lint > /dev/null 2>&1; then \
-		echo "错误: 未安装 golangci-lint，请执行: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest"; \
+		echo "错误: 未安装 golangci-lint，请执行: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2"; \
 		exit 1; \
 	fi
 	@cd backend && golangci-lint run ./...
