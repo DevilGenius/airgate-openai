@@ -207,7 +207,7 @@ Anthropic JSON 请求
   → anthropic_convert.go    一步直转为 Responses API JSON（保留工具、reasoning、system）
   → anthropic_forward.go    转发到上游（含模型降级重试）
   → anthropic_response.go   Responses SSE → Anthropic SSE 回译
-  → anthropic_model_map.go  Claude ↔ OpenAI 模型映射表
+  → model_policy.go  平台模型 DSL、别名和回退策略声明
   → anthropic_util.go       工具名缩短、stop_reason 转换
 ```
 
@@ -231,7 +231,7 @@ airgate-openai/
 │       │   ├── anthropic_convert.go      # Anthropic → Responses 请求一步直转
 │       │   ├── anthropic_response.go     # Responses → Anthropic 响应回译
 │       │   ├── anthropic_forward.go      # Anthropic 转发入口、模型降级重试
-│       │   ├── anthropic_model_map.go    # Claude ↔ OpenAI 模型映射
+│       │   ├── model_policy.go    # 平台模型 DSL、别名和回退策略
 │       │   ├── anthropic_count_tokens.go # count_tokens 兼容回退
 │       │   ├── anthropic_context_guard.go# Anthropic 历史裁剪
 │       │   ├── request.go                # 请求检测、URL 构建、预处理

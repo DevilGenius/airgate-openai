@@ -81,7 +81,7 @@ func TestPromptUsagePolicyCachesPromptAndEncryptedContent(t *testing.T) {
 	hash := &enabledTextHash{}
 	req := promptPolicyTestRequest("apikey", first, second, "")
 
-	begin := hash.Begin(req, http.MethodPost, "/v1/responses", "")
+	begin := hash.Begin(req, http.MethodPost, "/v1/responses")
 	if begin.outcome != nil || begin.event != textHashBeginContinue {
 		t.Fatalf("first request begin = %+v", begin)
 	}
@@ -121,7 +121,7 @@ func TestPromptUsagePolicyCachesPromptAndEncryptedContent(t *testing.T) {
 	}
 
 	retry := promptPolicyTestRequest("apikey", validGPTReasoningEncryptedContentForTestMarker(0x33), validGPTReasoningEncryptedContentForTestMarker(0x34), "")
-	retryBegin := hash.Begin(retry, http.MethodPost, "/v1/responses", "")
+	retryBegin := hash.Begin(retry, http.MethodPost, "/v1/responses")
 	if retryBegin.outcome == nil || retryBegin.event != textHashBeginPromptSafetyCacheHit {
 		t.Fatalf("complete retry begin = %+v, want prompt policy cache hit", retryBegin)
 	}
@@ -138,12 +138,12 @@ func TestPromptUsagePolicyRemovesRejectedEncryptedContent(t *testing.T) {
 	hash := &enabledTextHash{}
 
 	firstReq := promptPolicyTestRequest("oauth", rejectedFirst, rejectedSecond, "")
-	firstBegin := hash.Begin(firstReq, http.MethodPost, "/v1/responses", "")
+	firstBegin := hash.Begin(firstReq, http.MethodPost, "/v1/responses")
 	preprocessPromptPolicyTestRequest(firstBegin, firstReq)
 	firstBegin.request.Finish(promptUsagePolicyFailureOutcomeForTest(), nil)
 
 	changedReq := promptPolicyTestRequest("oauth", rejectedFirst, fresh, " with changed visible input")
-	changedBegin := hash.Begin(changedReq, http.MethodPost, "/v1/responses", "")
+	changedBegin := hash.Begin(changedReq, http.MethodPost, "/v1/responses")
 	if changedBegin.outcome != nil {
 		t.Fatalf("changed request unexpectedly hit complete request cache: %+v", changedBegin.outcome)
 	}
@@ -165,7 +165,7 @@ func TestPromptUsagePolicyRemovesRejectedEncryptedContent(t *testing.T) {
 	}
 
 	freshReq := promptPolicyTestRequest("oauth", fresh, otherFresh, " with wholly fresh ciphertexts")
-	freshBegin := hash.Begin(freshReq, http.MethodPost, "/v1/responses", "")
+	freshBegin := hash.Begin(freshReq, http.MethodPost, "/v1/responses")
 	freshSession := preprocessPromptPolicyTestRequest(freshBegin, freshReq)
 	if freshSession.Sanitized() {
 		t.Fatal("request with only fresh ciphertexts must remain unchanged")
@@ -185,18 +185,18 @@ func TestPromptUsagePolicyCacheIsScopedByAccountType(t *testing.T) {
 	hash := &enabledTextHash{}
 
 	oauthReq := promptPolicyTestRequest("oauth", rejected, second, "")
-	oauthBegin := hash.Begin(oauthReq, http.MethodPost, "/v1/responses", "")
+	oauthBegin := hash.Begin(oauthReq, http.MethodPost, "/v1/responses")
 	preprocessPromptPolicyTestRequest(oauthBegin, oauthReq)
 	oauthBegin.request.Finish(promptUsagePolicyFailureOutcomeForTest(), nil)
 
 	apiKeyExactRetry := promptPolicyTestRequest("apikey", rejected, second, "")
-	apiKeyExactRetryBegin := hash.Begin(apiKeyExactRetry, http.MethodPost, "/v1/responses", "")
+	apiKeyExactRetryBegin := hash.Begin(apiKeyExactRetry, http.MethodPost, "/v1/responses")
 	if apiKeyExactRetryBegin.outcome != nil {
 		t.Fatalf("API Key request must not share OAuth prompt cache scope: %+v", apiKeyExactRetryBegin)
 	}
 
 	apiKeyChanged := promptPolicyTestRequest("apikey", rejected, fresh, " changed account type")
-	apiKeyChangedBegin := hash.Begin(apiKeyChanged, http.MethodPost, "/v1/responses", "")
+	apiKeyChangedBegin := hash.Begin(apiKeyChanged, http.MethodPost, "/v1/responses")
 	if apiKeyChangedBegin.outcome != nil {
 		t.Fatalf("changed API Key request unexpectedly hit full request cache: %+v", apiKeyChangedBegin.outcome)
 	}
@@ -219,7 +219,7 @@ func TestCybersecurityRiskCachesRequestAndEncryptedContent(t *testing.T) {
 	hash := &enabledTextHash{}
 
 	firstReq := promptPolicyTestRequest("apikey", rejectedFirst, rejectedSecond, " cybersecurity")
-	firstBegin := hash.Begin(firstReq, http.MethodPost, "/v1/responses", "")
+	firstBegin := hash.Begin(firstReq, http.MethodPost, "/v1/responses")
 	preprocessPromptPolicyTestRequest(firstBegin, firstReq)
 	finish := firstBegin.request.Finish(cybersecurityRiskFailureOutcomeForTest(), nil)
 	if !finish.encryptedContentCached || !finish.textSafetyCached {
@@ -249,7 +249,7 @@ func TestCybersecurityRiskCachesRequestAndEncryptedContent(t *testing.T) {
 	}
 
 	exactRetry := promptPolicyTestRequest("apikey", rejectedFirst, rejectedSecond, " cybersecurity")
-	exactRetryBegin := hash.Begin(exactRetry, http.MethodPost, "/v1/responses", "")
+	exactRetryBegin := hash.Begin(exactRetry, http.MethodPost, "/v1/responses")
 	if exactRetryBegin.outcome == nil || exactRetryBegin.event != textHashBeginSafetyCacheHit {
 		t.Fatalf("cybersecurity exact retry = %+v, want safety cache hit", exactRetryBegin)
 	}
@@ -264,13 +264,13 @@ func TestCybersecurityRiskCachesRequestAndEncryptedContent(t *testing.T) {
 		" cybersecurity",
 	)
 	carrierChanged.Stream = true
-	carrierChangedBegin := hash.Begin(carrierChanged, http.MethodPost, "/v1/responses", "")
+	carrierChangedBegin := hash.Begin(carrierChanged, http.MethodPost, "/v1/responses")
 	if carrierChangedBegin.outcome == nil || carrierChangedBegin.event != textHashBeginCyberSafetyCacheHit {
 		t.Fatalf("cybersecurity carrier-changed retry = %+v, want cyber cache hit", carrierChangedBegin)
 	}
 
 	changedReq := promptPolicyTestRequest("apikey", rejectedFirst, fresh, " changed cybersecurity request")
-	changedBegin := hash.Begin(changedReq, http.MethodPost, "/v1/responses", "")
+	changedBegin := hash.Begin(changedReq, http.MethodPost, "/v1/responses")
 	if changedBegin.outcome != nil {
 		t.Fatalf("changed cybersecurity request unexpectedly hit full request cache: %+v", changedBegin.outcome)
 	}
@@ -293,7 +293,7 @@ func TestInvalidEncryptedContentPreservesExplicitlyIdentifiedCiphertext(t *testi
 	hash := &enabledTextHash{}
 
 	invalidReq := promptPolicyTestRequest("apikey", rejected, secondRejected, " invalid encrypted")
-	invalidBegin := hash.Begin(invalidReq, http.MethodPost, "/v1/responses", "")
+	invalidBegin := hash.Begin(invalidReq, http.MethodPost, "/v1/responses")
 	preprocessPromptPolicyTestRequest(invalidBegin, invalidReq)
 	invalidFinish := invalidBegin.request.Finish(invalidEncryptedContentFailureOutcomeForTest(rejected), nil)
 	if invalidFinish.encryptedContentCached {
@@ -308,7 +308,7 @@ func TestInvalidEncryptedContentPreservesExplicitlyIdentifiedCiphertext(t *testi
 	}
 
 	safetyReq := promptPolicyTestRequest("apikey", rejected, fresh, " shared cache")
-	safetyBegin := hash.Begin(safetyReq, http.MethodPost, "/v1/responses", "")
+	safetyBegin := hash.Begin(safetyReq, http.MethodPost, "/v1/responses")
 	safetySession := preprocessPromptPolicyTestRequest(safetyBegin, safetyReq)
 	if safetySession.Sanitized() {
 		t.Fatal("invalid_encrypted_content must not sanitize the next request")
@@ -330,7 +330,7 @@ func TestInvalidEncryptedContentWithoutUniqueMarkerDoesNotCacheCandidates(t *tes
 	second := validGPTReasoningEncryptedContentForTestMarker(0x82)
 	hash := &enabledTextHash{}
 	req := promptPolicyTestRequest("apikey", first, second, " ambiguous encrypted content")
-	begin := hash.Begin(req, http.MethodPost, "/v1/responses", "")
+	begin := hash.Begin(req, http.MethodPost, "/v1/responses")
 	preprocessPromptPolicyTestRequest(begin, req)
 	outcome := sdk.ForwardOutcome{
 		Kind: sdk.OutcomeClientError,
@@ -371,7 +371,7 @@ func TestEncryptedContentRemovalRequiresExplicitSafetyRejection(t *testing.T) {
 			hash := &enabledTextHash{}
 			// Opaque strings deliberately do not resemble any assumed envelope.
 			req := promptPolicyTestRequest("apikey", "opaque-first", "opaque-second", "")
-			begin := hash.Begin(req, http.MethodPost, "/v1/responses", "")
+			begin := hash.Begin(req, http.MethodPost, "/v1/responses")
 			preprocessPromptPolicyTestRequest(begin, req)
 			finish := begin.request.Finish(sdk.ForwardOutcome{
 				Kind: tc.kind,
@@ -384,7 +384,7 @@ func TestEncryptedContentRemovalRequiresExplicitSafetyRejection(t *testing.T) {
 				t.Fatalf("encrypted content cached = %v, want %v", finish.encryptedContentCached, tc.wantRemoval)
 			}
 			retry := promptPolicyTestRequest("apikey", "opaque-first", "fresh", " changed visible prompt")
-			retryBegin := hash.Begin(retry, http.MethodPost, "/v1/responses", "")
+			retryBegin := hash.Begin(retry, http.MethodPost, "/v1/responses")
 			if retryBegin.outcome != nil {
 				t.Fatalf("changed request unexpectedly blocked: %+v", retryBegin)
 			}
@@ -404,7 +404,7 @@ func TestInvalidEncryptedContentParamDoesNotCacheCiphertext(t *testing.T) {
 	second := validGPTReasoningEncryptedContentForTestMarker(0x92)
 	hash := &enabledTextHash{}
 	req := promptPolicyTestRequest("apikey", first, second, " parameter-selected encrypted content")
-	begin := hash.Begin(req, http.MethodPost, "/v1/responses", "")
+	begin := hash.Begin(req, http.MethodPost, "/v1/responses")
 	preprocessPromptPolicyTestRequest(begin, req)
 	outcome := sdk.ForwardOutcome{
 		Kind: sdk.OutcomeClientError,

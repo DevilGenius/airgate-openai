@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -73,61 +72,6 @@ func requestRetryCacheForTest(g *OpenAIGateway) *safetyRequestCache {
 func encryptedContentCacheForTest(g *OpenAIGateway) *safetyRequestCache {
 	g.runtimeHash.initialize()
 	return &g.runtimeHash.text.encryptedContent
-}
-
-type contextWindowRerouteState struct {
-	hash                uint64
-	hashReady           bool
-	cached              bool
-	dispatchClientModel string
-	longContextModel    string
-}
-
-func (g *OpenAIGateway) checkContextWindowReroute(
-	ctx context.Context,
-	req *sdk.ForwardRequest,
-	path string,
-) (contextWindowRerouteState, *sdk.ForwardOutcome) {
-	state := contextWindowRerouteState{}
-	if g == nil || req == nil {
-		return state, nil
-	}
-	hash, ok := textRequestHashFromContext(ctx)
-	if !ok {
-		return state, nil
-	}
-	g.runtimeHash.initialize()
-	state.hash = hash
-	state.hashReady = true
-	state.dispatchClientModel = strings.TrimSpace(req.DispatchPlan.ClientModel)
-	if state.dispatchClientModel == "" {
-		state.dispatchClientModel = strings.TrimSpace(req.Model)
-	}
-	state.longContextModel = strings.TrimSpace(effectiveLongContextModel())
-	if state.longContextModel == "" {
-		return state, nil
-	}
-	state.cached = g.runtimeHash.text.requestRetry.contains(hash, time.Now())
-	if !state.cached || modelIDsEqual(state.dispatchClientModel, state.longContextModel) {
-		return state, nil
-	}
-	outcome := contextWindowRerouteOutcome(isAnthropicTextRequest(req, path), state.longContextModel)
-	return state, &outcome
-}
-
-func (g *OpenAIGateway) cacheContextWindowExceeded(state contextWindowRerouteState) bool {
-	if g == nil || !state.hashReady || state.cached || state.longContextModel == "" ||
-		modelIDsEqual(state.dispatchClientModel, state.longContextModel) {
-		return false
-	}
-	g.runtimeHash.initialize()
-	g.runtimeHash.text.requestRetry.addHashesWithLimits(
-		[]uint64{state.hash},
-		time.Now(),
-		requestRetryCacheTTL,
-		requestRetryCacheMaxEntries,
-	)
-	return true
 }
 
 type encryptedContentRetryRequestState = enabledEncryptedContentHashSession

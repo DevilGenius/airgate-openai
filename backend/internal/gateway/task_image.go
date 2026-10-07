@@ -64,18 +64,27 @@ func buildImageTaskInput(req *sdk.ForwardRequest, reqPath string, isEdit bool) (
 		return nil, nil, fmt.Errorf("解析图片请求失败: %w", err)
 	}
 
-	model := parsed.Model
+	model := req.DispatchPlan.UpstreamModel()
 	if model == "" {
 		model = req.Model
 	}
-	// 图片模型重路由：任务 input / attributes 与随后构建的请求体统一用实际上游模型名。
-	model = canonicalImageModel(model)
-
-	// input 只含纯业务参数
+	if model == "" {
+		return nil, nil, fmt.Errorf("image wire model is required")
+	}
+	clientModel := req.DispatchPlan.ClientModel
+	if clientModel == "" {
+		clientModel = req.Model
+	}
+	if clientModel == "" {
+		return nil, nil, fmt.Errorf("image client model is required")
+	}
+	// Preserve the routing input across the async boundary; Core resolves it again.
+	// model remains the chosen wire model for display and task metadata.
 	input := map[string]any{
-		"prompt": parsed.Prompt,
-		"model":  model,
-		"n":      parsed.N,
+		"prompt":       parsed.Prompt,
+		"model":        model,
+		"client_model": clientModel,
+		"n":            parsed.N,
 	}
 	if parsed.Size != "" {
 		input["size"] = parsed.Size
@@ -127,7 +136,10 @@ func buildImageTaskInput(req *sdk.ForwardRequest, reqPath string, isEdit bool) (
 func executeImageTask(ctx context.Context, g *OpenAIGateway, task sdk.HostTask, rt *TaskRuntime, defaultPath string) error {
 	groupID, _ := intFromInput(task.Input, "group_id")
 	apiKeyID, _ := intFromInput(task.Input, "api_key_id")
-	model, _ := task.Input["model"].(string)
+	model, ok := task.Input["client_model"].(string)
+	if !ok || strings.TrimSpace(model) == "" {
+		return rt.Fail(ctx, &TaskError{Type: "invalid_request", Message: "任务缺少 client_model，请重新创建任务"})
+	}
 
 	isRedispatch := task.Attempts > 1
 	hasUpstreamID := false
@@ -165,7 +177,7 @@ func executeImageTask(ctx context.Context, g *OpenAIGateway, task sdk.HostTask, 
 		})
 	}
 
-	reqBody, err := buildImageRequestBody(task.Input)
+	reqBody, err := buildImageTaskDispatchBody(task.Input)
 	if err != nil {
 		return rt.Fail(ctx, &TaskError{
 			Type:    "invalid_request",
@@ -581,4 +593,19 @@ func resizeMaskDataURLToImageSize(ref string, width, height int) (string, error)
 		return "", fmt.Errorf("缩放后的 mask PNG 无效: %w", err)
 	}
 	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(data), nil
+}
+
+// buildImageTaskDispatchBody restores the original routing model without mutating
+// stored task metadata. Legacy tasks without client_model are not reinterpreted.
+func buildImageTaskDispatchBody(input map[string]any) ([]byte, error) {
+	clientModel, ok := input["client_model"].(string)
+	if !ok || strings.TrimSpace(clientModel) == "" {
+		return nil, fmt.Errorf("image task client_model is required")
+	}
+	dispatchInput := make(map[string]any, len(input))
+	for key, value := range input {
+		dispatchInput[key] = value
+	}
+	dispatchInput["model"] = clientModel
+	return buildImageRequestBody(dispatchInput)
 }

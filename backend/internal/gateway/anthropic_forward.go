@@ -77,10 +77,7 @@ func (g *OpenAIGateway) forwardAnthropicMessage(ctx context.Context, req *sdk.Fo
 
 	// 3. 使用 Core 选中的上游模型；Claude -> OpenAI 的映射由 DispatchDSL 在 Core 内执行。
 	originalModel := gjson.GetBytes(body, "model").String()
-	var mappingEffort string
-	if mapping := resolveAnthropicModelMapping(originalModel); mapping != nil {
-		mappingEffort = mapping.ReasoningEffort
-	}
+	mappingEffort := defaultAnthropicReasoningEffort
 	modelName := strings.TrimSpace(req.DispatchPlan.UpstreamModel())
 	if modelName == "" {
 		body := openAIErrorJSON("invalid_request_error", "invalid_request", "dispatch_plan is required")

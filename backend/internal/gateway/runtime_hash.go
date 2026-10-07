@@ -31,7 +31,7 @@ type runtimeHashStats struct {
 }
 
 type textHash interface {
-	Begin(req *sdk.ForwardRequest, method, path, longContextModel string) textHashBegin
+	Begin(req *sdk.ForwardRequest, method, path string) textHashBegin
 }
 
 type textHashRequest interface {
@@ -69,44 +69,34 @@ const (
 )
 
 type textHashBegin struct {
-	request             textHashRequest
-	outcome             *sdk.ForwardOutcome
-	event               textHashBeginEvent
-	dispatchClientModel string
-	longContextModel    string
+	request textHashRequest
+	outcome *sdk.ForwardOutcome
+	event   textHashBeginEvent
 }
 
 type textHashFinish struct {
-	contextWindowCached          bool
-	contextWindowLongModelFailed bool
-	encryptedContentSanitized    bool
-	encryptedContentCached       bool
-	textSafetyCached             bool
-	cyberSafetyCached            bool
-	promptSafetyCached           bool
-	dispatchClientModel          string
-	longContextModel             string
+	contextWindowCached       bool
+	encryptedContentSanitized bool
+	encryptedContentCached    bool
+	textSafetyCached          bool
+	cyberSafetyCached         bool
+	promptSafetyCached        bool
 }
 
 type runtimeHashBegin struct {
-	Context             context.Context
-	Outcome             *sdk.ForwardOutcome
-	Event               textHashBeginEvent
-	DispatchClientModel string
-	LongContextModel    string
+	Context context.Context
+	Outcome *sdk.ForwardOutcome
+	Event   textHashBeginEvent
 }
 
 type runtimeHashFinish struct {
-	ContextWindowCached          bool
-	ContextWindowLongModelFailed bool
-	EncryptedContentSanitized    bool
-	EncryptedContentCached       bool
-	TextSafetyCached             bool
-	CyberSafetyCached            bool
-	PromptSafetyCached           bool
-	ImageSafetyCached            bool
-	DispatchClientModel          string
-	LongContextModel             string
+	ContextWindowCached       bool
+	EncryptedContentSanitized bool
+	EncryptedContentCached    bool
+	TextSafetyCached          bool
+	CyberSafetyCached         bool
+	PromptSafetyCached        bool
+	ImageSafetyCached         bool
 }
 
 type runtimeHashSnapshot struct {
@@ -200,10 +190,10 @@ func (h *runtimeHash) SetState(state runtimeHashState) runtimeHashState {
 func (h *runtimeHash) BeginRequest(
 	ctx context.Context,
 	req *sdk.ForwardRequest,
-	method, path, longContextModel string,
+	method, path string,
 ) (*runtimeHashRequest, runtimeHashBegin) {
 	selected := h.snapshot()
-	textBegin := selected.text.Begin(req, method, path, longContextModel)
+	textBegin := selected.text.Begin(req, method, path)
 	if textBegin.request == nil {
 		textBegin.request = disabledTextRequest
 	}
@@ -217,11 +207,9 @@ func (h *runtimeHash) BeginRequest(
 	}
 	ctx = context.WithValue(ctx, runtimeHashRequestContextKey{}, request)
 	return request, runtimeHashBegin{
-		Context:             ctx,
-		Outcome:             textBegin.outcome,
-		Event:               textBegin.event,
-		DispatchClientModel: textBegin.dispatchClientModel,
-		LongContextModel:    textBegin.longContextModel,
+		Context: ctx,
+		Outcome: textBegin.outcome,
+		Event:   textBegin.event,
 	}
 }
 
@@ -328,22 +316,19 @@ func (r *runtimeHashRequest) Finish(outcome sdk.ForwardOutcome, err error) runti
 		imageCached = r.image.Finish(outcome)
 	}
 	return runtimeHashFinish{
-		ContextWindowCached:          textFinish.contextWindowCached,
-		ContextWindowLongModelFailed: textFinish.contextWindowLongModelFailed,
-		EncryptedContentSanitized:    textFinish.encryptedContentSanitized,
-		EncryptedContentCached:       textFinish.encryptedContentCached,
-		TextSafetyCached:             textFinish.textSafetyCached,
-		CyberSafetyCached:            textFinish.cyberSafetyCached,
-		PromptSafetyCached:           textFinish.promptSafetyCached,
-		ImageSafetyCached:            imageCached,
-		DispatchClientModel:          textFinish.dispatchClientModel,
-		LongContextModel:             textFinish.longContextModel,
+		ContextWindowCached:       textFinish.contextWindowCached,
+		EncryptedContentSanitized: textFinish.encryptedContentSanitized,
+		EncryptedContentCached:    textFinish.encryptedContentCached,
+		TextSafetyCached:          textFinish.textSafetyCached,
+		CyberSafetyCached:         textFinish.cyberSafetyCached,
+		PromptSafetyCached:        textFinish.promptSafetyCached,
+		ImageSafetyCached:         imageCached,
 	}
 }
 
 type disabledTextHash struct{}
 
-func (disabledTextHash) Begin(*sdk.ForwardRequest, string, string, string) textHashBegin {
+func (disabledTextHash) Begin(*sdk.ForwardRequest, string, string) textHashBegin {
 	return textHashBegin{request: disabledTextRequest}
 }
 

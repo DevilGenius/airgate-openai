@@ -49,14 +49,12 @@ type enabledTextHashRequest struct {
 	promptValue         uint64
 	promptReady         bool
 	contextWindowCached bool
-	dispatchClientModel string
-	longContextModel    string
 	encryptedContent    encryptedContentHashSession
 }
 
 func (h *enabledTextHash) Begin(
 	req *sdk.ForwardRequest,
-	method, path, longContextModel string,
+	method, path string,
 ) textHashBegin {
 	request := &enabledTextHashRequest{
 		hash:             h,
@@ -67,7 +65,6 @@ func (h *enabledTextHash) Begin(
 	if !ok {
 		return begin
 	}
-	request.contextValue = hash
 	request.value = textSafetyRequestHash(req, hash)
 	request.ready = true
 	if h.textSafety.contains(request.value, time.Now()) {
@@ -92,26 +89,14 @@ func (h *enabledTextHash) Begin(
 			return begin
 		}
 	}
-	request.dispatchClientModel = strings.TrimSpace(req.DispatchPlan.ClientModel)
-	if request.dispatchClientModel == "" {
-		request.dispatchClientModel = strings.TrimSpace(req.Model)
+	request.contextValue = contextWindowRequestHash(req, hash)
+	request.contextWindowCached = h.requestRetry.contains(request.contextValue, time.Now())
+	if request.contextWindowCached {
+		outcome := contextWindowRerouteOutcome(isAnthropicTextRequest(req, path))
+		begin.outcome = &outcome
+		begin.event = textHashBeginContextWindowReroute
+		return begin
 	}
-	request.longContextModel = strings.TrimSpace(longContextModel)
-	begin.dispatchClientModel = request.dispatchClientModel
-	begin.longContextModel = request.longContextModel
-	if request.longContextModel != "" {
-		request.contextWindowCached = h.requestRetry.contains(request.contextValue, time.Now())
-		if request.contextWindowCached && !modelIDsEqual(request.dispatchClientModel, request.longContextModel) {
-			outcome := contextWindowRerouteOutcome(
-				isAnthropicTextRequest(req, path),
-				request.longContextModel,
-			)
-			begin.outcome = &outcome
-			begin.event = textHashBeginContextWindowReroute
-			return begin
-		}
-	}
-
 	if isResponsesRequestPath(path) && bytes.Contains(req.Body, []byte(`"encrypted_content"`)) {
 		request.encryptedContent = newEncryptedContentHashSession(
 			&h.encryptedContent,
@@ -133,16 +118,9 @@ func (r *enabledTextHashRequest) Finish(outcome sdk.ForwardOutcome, err error) t
 	if r == nil || r.hash == nil {
 		return result
 	}
-	result.dispatchClientModel = r.dispatchClientModel
-	result.longContextModel = r.longContextModel
 	if isContextWindowExceededForwardResult(outcome, err) {
-		if r.contextWindowCached {
-			result.contextWindowLongModelFailed = true
-		} else if r.cacheContextWindowExceeded() {
-			result.contextWindowCached = true
-		}
+		result.contextWindowCached = r.cacheContextWindowExceeded()
 	}
-
 	encrypted := r.EncryptedContent()
 	result.encryptedContentSanitized = encrypted.Sanitized()
 	rejection, rejected := explicitTextHashRejectionFromOutcome(outcome, err)
@@ -175,8 +153,7 @@ func (r *enabledTextHashRequest) Finish(outcome sdk.ForwardOutcome, err error) t
 }
 
 func (r *enabledTextHashRequest) cacheContextWindowExceeded() bool {
-	if r == nil || r.hash == nil || !r.ready || r.contextWindowCached || r.longContextModel == "" ||
-		modelIDsEqual(r.dispatchClientModel, r.longContextModel) {
+	if r == nil || r.hash == nil || !r.ready || r.contextWindowCached {
 		return false
 	}
 	r.hash.requestRetry.addHashesWithLimits(
@@ -381,10 +358,6 @@ func isAnthropicTextRequest(req *sdk.ForwardRequest, path string) bool {
 	}
 }
 
-func effectiveLongContextModel() string {
-	return configuredLongContextModel()
-}
-
 func textSafetyCacheHitOutcome(anthropic bool) sdk.ForwardOutcome {
 	body := openAIErrorJSON("rate_limit_error", textSafetyRateLimitCode, textSafetyRateLimitMessage)
 	if anthropic {
@@ -407,15 +380,15 @@ func textSafetyCacheHitOutcome(anthropic bool) sdk.ForwardOutcome {
 	}
 }
 
-func contextWindowRerouteOutcome(anthropic bool, longContextModel string) sdk.ForwardOutcome {
+func contextWindowRerouteOutcome(anthropic bool) sdk.ForwardOutcome {
 	body := openAIErrorJSON("invalid_request_error", "context_too_large", contextTooLargeMessage)
 	if anthropic {
 		body = anthropicErrorJSONWithCode("invalid_request_error", "context_too_large", contextTooLargeMessage)
 	}
 	return sdk.ForwardOutcome{
-		Kind:               sdk.OutcomeClientError,
-		FailoverScope:      sdk.FailoverScopeModelReroute,
-		RerouteClientModel: longContextModel,
+		Kind:                sdk.OutcomeClientError,
+		FailoverScope:       sdk.FailoverScopeModelReroute,
+		ModelFallbackReason: sdk.ModelFallbackContextWindow,
 		Upstream: sdk.UpstreamResponse{
 			StatusCode: http.StatusBadRequest,
 			Headers: http.Header{
@@ -480,4 +453,19 @@ func isPromptUsagePolicyRejectionText(values ...string) bool {
 func isCybersecurityRiskRejectionText(values ...string) bool {
 	text := strings.ToLower(strings.Join(values, " "))
 	return strings.Contains(text, strings.ToLower(cybersecurityRiskMessage))
+}
+
+// Context limits belong to the actual upstream model. A failure from one wire
+// model must not prevent Core from trying a different mapped model.
+func contextWindowRequestHash(req *sdk.ForwardRequest, requestHash uint64) uint64 {
+	var hash xxh3.Hasher
+	writeXXH3HashStringPart(&hash, "airgate:context-window:v2")
+	writeXXH3HashUint64(&hash, requestHash)
+	writeXXH3HashUint64(&hash, textHashScope(req))
+	wire := req.DispatchPlan.UpstreamModel()
+	if wire == "" {
+		wire = req.Model
+	}
+	writeXXH3HashStringPart(&hash, wire)
+	return hash.Sum64()
 }

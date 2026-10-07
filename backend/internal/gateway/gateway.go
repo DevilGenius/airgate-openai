@@ -89,7 +89,7 @@ func (g *OpenAIGateway) Init(ctx sdk.PluginContext) error {
 			}
 		}
 	}
-	g.logger.Info("OpenAI 网关插件初始化", "long_context_model", effectiveLongContextModel())
+	g.logger.Info("OpenAI 网关插件初始化")
 	return nil
 }
 
@@ -180,7 +180,6 @@ func (g *OpenAIGateway) forwardWithinResponseLimit(ctx context.Context, req *sdk
 		req,
 		method,
 		path,
-		effectiveLongContextModel(),
 	)
 	ctx = hashBegin.Context
 	if hashBegin.Outcome != nil {
@@ -205,9 +204,8 @@ func (g *OpenAIGateway) forwardWithinResponseLimit(ctx context.Context, req *sdk
 			)
 		case textHashBeginContextWindowReroute:
 			logger.Info("context_window_reroute_requested",
-				sdk.LogFieldModel, hashBegin.DispatchClientModel,
+				sdk.LogFieldModel, req.Model,
 				sdk.LogFieldPath, path,
-				"long_context_model", hashBegin.LongContextModel,
 			)
 		}
 		return *hashBegin.Outcome, nil
@@ -232,17 +230,10 @@ func (g *OpenAIGateway) forwardWithinResponseLimit(ctx context.Context, req *sdk
 	outcome, err := g.forwardHTTP(ctx, req)
 	outcome = applyForwardOutcomePolicies(logger, req, outcome)
 	hashFinish := hashRequest.Finish(outcome, err)
-	if hashFinish.ContextWindowLongModelFailed {
-		logger.Warn("context_window_long_model_failed",
-			sdk.LogFieldModel, hashFinish.DispatchClientModel,
-			sdk.LogFieldPath, path,
-			"long_context_model", hashFinish.LongContextModel,
-		)
-	} else if hashFinish.ContextWindowCached {
+	if hashFinish.ContextWindowCached {
 		logger.Info("context_window_reroute_cached",
-			sdk.LogFieldModel, hashFinish.DispatchClientModel,
+			sdk.LogFieldModel, req.Model,
 			sdk.LogFieldPath, path,
-			"long_context_model", hashFinish.LongContextModel,
 		)
 	}
 	if hashFinish.EncryptedContentSanitized {

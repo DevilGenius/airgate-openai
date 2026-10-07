@@ -1284,8 +1284,10 @@ func TestClassifyUpstreamTaskErrorOverloadedIsUpstreamError(t *testing.T) {
 
 func TestImageTaskQualityEcho(t *testing.T) {
 	input, attrs, err := imageGenerateHandler{}.BuildInput(&sdk.ForwardRequest{
-		Body:    []byte(`{"model":"gpt-image-2","prompt":"a shiba","size":"1024x1024","quality":"high"}`),
-		Headers: http.Header{},
+		Model:        "gpt-image-2",
+		DispatchPlan: sdk.DispatchPlan{ClientModel: "gpt-image-2", SchedulingModel: "gpt-image-2", WireModel: "gpt-image-2"},
+		Body:         []byte(`{"model":"gpt-image-2","prompt":"a shiba","size":"1024x1024","quality":"high"}`),
+		Headers:      http.Header{},
 	}, "/v1/images/generations")
 	if err != nil {
 		t.Fatalf("BuildInput returned err: %v", err)
@@ -2536,7 +2538,9 @@ func TestForwardImagesViaResponsesTool_InvalidSize(t *testing.T) {
 	g := &OpenAIGateway{}
 	w := httptest.NewRecorder()
 	req := &sdk.ForwardRequest{
-		Account: &sdk.Account{ID: 1, Credentials: map[string]string{"access_token": "tok"}},
+		Model:        "gpt-image-2",
+		DispatchPlan: sdk.DispatchPlan{ClientModel: "gpt-image-2", SchedulingModel: "gpt-image-2", WireModel: "gpt-image-2"},
+		Account:      &sdk.Account{ID: 1, Credentials: map[string]string{"access_token": "tok"}},
 		// size 1000 不是 16 倍数
 		Body:    []byte(`{"prompt":"hi","n":1,"model":"gpt-image-2","size":"1000x1000"}`),
 		Headers: http.Header{},
@@ -2685,6 +2689,8 @@ func TestForwardImagesViaResponsesTool_Downgrades4KTo2KAfterFailure(t *testing.T
 
 	g := &OpenAIGateway{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	req := &sdk.ForwardRequest{
+		Model:        "gpt-image-2",
+		DispatchPlan: sdk.DispatchPlan{ClientModel: "gpt-image-2", SchedulingModel: "gpt-image-2", WireModel: "gpt-image-2"},
 		Account: &sdk.Account{ID: 1, Credentials: map[string]string{
 			"access_token":       "tok",
 			"chatgpt_account_id": "acct-123",
@@ -2801,6 +2807,8 @@ func TestForwardImagesViaResponsesTool_UsesWebSocketForLargeEditImage(t *testing
 
 	g := &OpenAIGateway{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	req := &sdk.ForwardRequest{
+		Model:        "gpt-image-2",
+		DispatchPlan: sdk.DispatchPlan{ClientModel: "gpt-image-2", SchedulingModel: "gpt-image-2", WireModel: "gpt-image-2"},
 		Account: &sdk.Account{ID: 1, Credentials: map[string]string{
 			"access_token":       "tok",
 			"chatgpt_account_id": "acct-123",

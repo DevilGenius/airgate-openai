@@ -28,34 +28,14 @@ func TestImageTwoPointFiveVariantsAreRegistered(t *testing.T) {
 	}
 }
 
-func TestBareImageTwoPointFiveReroutesToSunburst(t *testing.T) {
-	target, ok := RerouteTarget("  GPT-IMAGE-2.5  ")
-	if !ok || target != "gpt-image-2.5-sunburst" {
-		t.Fatalf("RerouteTarget(bare) = %q, %v", target, ok)
-	}
-	for _, untouched := range []string{"gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-2", ""} {
-		if got, ok := RerouteTarget(untouched); ok {
-			t.Fatalf("RerouteTarget(%q) = %q, want no reroute", untouched, got)
-		}
-	}
-
-	if got := CanonicalModel("gpt-image-2.5"); got != "gpt-image-2.5-sunburst" {
-		t.Fatalf("CanonicalModel(bare) = %q", got)
-	}
-	if got := CanonicalModel(" gpt-image-2.5-flare "); got != "gpt-image-2.5-flare" {
-		t.Fatalf("CanonicalModel(flare) = %q", got)
-	}
-
-	// 计价与已知性跟随重路由目标：裸名可用，且不会掉进 DefaultSpec 兜底价。
-	bare := Lookup("gpt-image-2.5")
-	sunburst := registry["gpt-image-2.5-sunburst"]
-	if bare.Name != sunburst.Name || bare.InputPrice != sunburst.InputPrice || bare.OutputPrice != sunburst.OutputPrice || bare.ImagePrice != sunburst.ImagePrice {
-		t.Fatalf("Lookup(gpt-image-2.5) = %#v, want sunburst spec", bare)
-	}
-	if !IsKnown("gpt-image-2.5") {
-		t.Fatal("bare gpt-image-2.5 should be known through the reroute")
+func TestPricingLookupDoesNotRegisterOrRouteUnknownModels(t *testing.T) {
+	if IsKnown("gpt-image-2.5") {
+		t.Fatal("pricing registry must not resolve routing aliases")
 	}
 	if !IsImageOnly("gpt-image-2.5") {
-		t.Fatal("bare gpt-image-2.5 should stay image-only")
+		t.Fatal("image family pricing must remain available")
+	}
+	if Lookup("codex-auto-review") != Lookup(DefaultModelID) {
+		t.Fatal("unknown model pricing fallback changed")
 	}
 }

@@ -1330,7 +1330,7 @@ func prepareAPIKeyImageRequest(ctx context.Context, req *sdk.ForwardRequest, req
 	if req == nil || !isImagesRequest(reqPath) {
 		return opts, nil
 	}
-	if err := applyImageRequestModelReroute(ctx, req); err != nil {
+	if err := applyImageWireModel(req); err != nil {
 		return opts, err
 	}
 	if len(req.Body) == 0 {
@@ -1873,10 +1873,10 @@ func (g *OpenAIGateway) generateImagesViaResponsesTool(ctx context.Context, req 
 	start := time.Now()
 	account := req.Account
 
-	// 图片模型重路由必须早于请求体解析：下面的 parseImagesRequest 结果决定计费模型
+	// 写入 Core 已决定的模型必须早于解析：下面的 parseImagesRequest 结果决定计费模型
 	// （imageGenerationBillingModel）与 prompt 里的 "Use requested image model X" 约束。
-	if err := applyImageRequestModelReroute(ctx, req); err != nil {
-		return imageModelRerouteFailureOutcome(err), nil
+	if err := applyImageWireModel(req); err != nil {
+		return imageModelWriteFailureOutcome(err), nil
 	}
 
 	session := resolveOpenAISession(req.Headers, req.Body, account.ID)

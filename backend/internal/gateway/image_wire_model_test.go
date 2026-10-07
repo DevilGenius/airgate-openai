@@ -29,15 +29,16 @@ func imageRerouteRequest(body []byte, contentType string) *sdk.ForwardRequest {
 	headers.Set("X-Airgate-Operation-Images-Generate", "true")
 	headers.Set("Content-Type", contentType)
 	return &sdk.ForwardRequest{
-		Account: &sdk.Account{ID: 1, Credentials: map[string]string{"api_key": "sk-test"}},
-		Model:   "gpt-image-2.5",
-		Body:    body,
-		Headers: headers,
+		Account:      &sdk.Account{ID: 1, Credentials: map[string]string{"api_key": "sk-test"}},
+		Model:        "gpt-image-2.5-sunburst",
+		DispatchPlan: sdk.DispatchPlan{ClientModel: "gpt-image-2.5", SchedulingModel: "gpt-image-2.5-sunburst", WireModel: "gpt-image-2.5-sunburst"},
+		Body:         body,
+		Headers:      headers,
 	}
 }
 
 // 客户端请求裸名 gpt-image-2.5 时，API Key 直通链路必须把上游模型、请求体与计费模型都改成 sunburst。
-func TestForwardHTTPReroutesBareImageModelForAPIKeyAccount(t *testing.T) {
+func TestForwardHTTPAppliesImageDispatchPlanForAPIKeyAccount(t *testing.T) {
 	var upstreamModels []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
@@ -72,13 +73,13 @@ func TestForwardHTTPReroutesBareImageModelForAPIKeyAccount(t *testing.T) {
 	}
 }
 
-func TestApplyImageRequestModelRerouteRewritesBodies(t *testing.T) {
+func TestApplyImageWireModelRewritesBodies(t *testing.T) {
 	t.Run("json body", func(t *testing.T) {
 		req := imageRerouteRequest([]byte(`{"model":"gpt-image-2.5","prompt":"a shiba"}`), "application/json")
 		req.Headers.Set("Content-Length", fmt.Sprint(len(req.Body)))
 
-		if err := applyImageRequestModelReroute(context.Background(), req); err != nil {
-			t.Fatalf("applyImageRequestModelReroute error = %v", err)
+		if err := applyImageWireModel(req); err != nil {
+			t.Fatalf("applyImageWireModel error = %v", err)
 		}
 		if req.Model != "gpt-image-2.5-sunburst" {
 			t.Fatalf("req.Model = %q", req.Model)
@@ -94,7 +95,7 @@ func TestApplyImageRequestModelRerouteRewritesBodies(t *testing.T) {
 		}
 		// 幂等：body 已是目标模型时再次调用不产生变化。
 		before := string(req.Body)
-		if err := applyImageRequestModelReroute(context.Background(), req); err != nil {
+		if err := applyImageWireModel(req); err != nil {
 			t.Fatalf("second apply error = %v", err)
 		}
 		if string(req.Body) != before {
@@ -116,8 +117,8 @@ func TestApplyImageRequestModelRerouteRewritesBodies(t *testing.T) {
 		}
 		req := imageRerouteRequest(buf.Bytes(), writer.FormDataContentType())
 
-		if err := applyImageRequestModelReroute(context.Background(), req); err != nil {
-			t.Fatalf("applyImageRequestModelReroute error = %v", err)
+		if err := applyImageWireModel(req); err != nil {
+			t.Fatalf("applyImageWireModel error = %v", err)
 		}
 		if req.Model != "gpt-image-2.5-sunburst" {
 			t.Fatalf("req.Model = %q", req.Model)
@@ -155,7 +156,7 @@ func readMultipartFields(t *testing.T, body []byte, contentType string) map[stri
 	return fields
 }
 
-func TestApplyImageRequestModelRerouteScopes(t *testing.T) {
+func TestApplyImageWireModelScopes(t *testing.T) {
 	cases := []struct {
 		name  string
 		model string
@@ -200,15 +201,22 @@ func TestApplyImageRequestModelRerouteScopes(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			req := imageRerouteRequest([]byte(`{"model":"gpt-image-2.5","prompt":"a shiba"}`), "application/json")
 			req.Model = test.model
+			req.DispatchPlan = sdk.DispatchPlan{WireModel: test.want}
 			before := string(req.Body)
+			if test.want == "" {
+				if err := applyImageWireModel(req); err == nil {
+					t.Fatal("missing model must fail")
+				}
+				return
+			}
 
-			if err := applyImageRequestModelReroute(context.Background(), req); err != nil {
-				t.Fatalf("applyImageRequestModelReroute error = %v", err)
+			if err := applyImageWireModel(req); err != nil {
+				t.Fatalf("applyImageWireModel error = %v", err)
 			}
 			if req.Model != test.want {
 				t.Fatalf("req.Model = %q, want %q", req.Model, test.want)
 			}
-			if test.want != "gpt-image-2.5-sunburst" && string(req.Body) != before {
+			if test.want == "" && string(req.Body) != before {
 				t.Fatalf("body must stay untouched, got %s", req.Body)
 			}
 		})
@@ -248,7 +256,7 @@ func TestForwardHTTPKeepsCoreWireModelPrecedence(t *testing.T) {
 }
 
 // 异步图片任务：任务元数据里记录的模型也必须是重路由后的名字。
-func TestBuildImageTaskInputReroutesBareImageModel(t *testing.T) {
+func TestBuildImageTaskInputUsesSelectedModel(t *testing.T) {
 	req := imageRerouteRequest([]byte(`{"model":"gpt-image-2.5","prompt":"a shiba","n":1,"size":"1024x1024"}`), "application/json")
 
 	input, attributes, err := buildImageTaskInput(req, "/v1/images/generations", false)
@@ -318,7 +326,31 @@ func TestPrepareAPIKeyImageRequestSkipsNonImagePaths(t *testing.T) {
 	if opts != (imagesResponseOptions{}) {
 		t.Fatalf("opts = %+v, want zero value", opts)
 	}
-	if req.Model != "gpt-image-2.5" || string(req.Body) != before {
+	if req.Model != "gpt-image-2.5-sunburst" || string(req.Body) != before {
 		t.Fatalf("non-image request must stay untouched: model=%q body=%s", req.Model, req.Body)
+	}
+}
+
+func TestAsyncImagePreservesClientModelForCoreDecision(t *testing.T) {
+	req := imageRerouteRequest([]byte(`{"model":"client-alias","prompt":"test"}`), "application/json")
+	req.Model = "selected-wire"
+	req.DispatchPlan = sdk.DispatchPlan{ClientModel: "client-alias", SchedulingModel: "image-pool", WireModel: "selected-wire"}
+	input, attributes, err := buildImageTaskInput(req, "/v1/images/generations", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input["model"] != "selected-wire" || input["client_model"] != "client-alias" || attributes["model"] != "selected-wire" {
+		t.Fatalf("incorrect task metadata: %v / %v", input, attributes)
+	}
+	body, err := buildImageTaskDispatchBody(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gjson.GetBytes(body, "model").String() != "client-alias" || input["model"] != "selected-wire" {
+		t.Fatalf("routing model lost or task mutated: %s / %v", body, input)
+	}
+	delete(input, "client_model")
+	if _, err := buildImageTaskDispatchBody(input); err == nil {
+		t.Fatal("legacy task must not silently route by wire model")
 	}
 }
