@@ -223,7 +223,6 @@ func preprocessRequestBodyWithEncryptedContentState(
 	}
 
 	result := body
-	isCompactRequest := isResponsesCompactRequestPath(reqPath)
 	isResponsesRequest := isResponsesRequestPath(reqPath)
 	targetModel := model
 	if targetModel != "" {
@@ -242,12 +241,6 @@ func preprocessRequestBodyWithEncryptedContentState(
 	}
 	result = applyAirgateContinuationRecovery(result, trustedHeaders)
 
-	if isCompactRequest {
-		if modified, err := sjson.DeleteBytes(result, "stream"); err == nil {
-			result = modified
-		}
-		return applyOpenAIWireServiceTier(result, trustedHeaders)
-	}
 	hasEncryptedContent := isResponsesRequest && bytes.Contains(result, []byte(`"encrypted_content"`))
 
 	result = normalizeResponsesInput(result, reqPath)
@@ -286,20 +279,6 @@ func normalizePromptCacheKeyForUpstream(body []byte) []byte {
 		return modified
 	}
 	return body
-}
-
-const openAICompactModelSuffix = "-openai-compact"
-
-func openAICompactBaseModel(modelID string) (string, bool) {
-	modelID = strings.TrimSpace(modelID)
-	if modelID == "" || !strings.HasSuffix(strings.ToLower(modelID), openAICompactModelSuffix) {
-		return "", false
-	}
-	base := strings.TrimSpace(modelID[:len(modelID)-len(openAICompactModelSuffix)])
-	if base == "" {
-		return "", false
-	}
-	return base, true
 }
 
 func preserveOpenAIConversationImages(body []byte) []byte {
@@ -468,11 +447,6 @@ func normalizeResponsesReasoningInputItem(item map[string]any) bool {
 func isResponsesRequestPath(reqPath string) bool {
 	path := normalizeGatewayRequestPath(reqPath)
 	return path == "/v1/responses" || path == "/responses"
-}
-
-func isResponsesCompactRequestPath(reqPath string) bool {
-	path := normalizeGatewayRequestPath(reqPath)
-	return path == "/v1/responses/compact" || path == "/responses/compact"
 }
 
 func normalizeGatewayRequestPath(reqPath string) string {

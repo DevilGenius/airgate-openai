@@ -56,6 +56,9 @@ func TestServiceTierGroupOverrideOAuthRequestBuilders(t *testing.T) {
 				} else {
 					payload["input"] = []any{map[string]any{"role": "user", "content": "hello"}}
 				}
+				if shape == "compact" {
+					payload["input"] = append(payload["input"].([]any), map[string]any{"type": "compaction_trigger"})
+				}
 				if shape == "response.create" {
 					payload["type"] = "response.create"
 				}
@@ -72,14 +75,9 @@ func TestServiceTierGroupOverrideOAuthRequestBuilders(t *testing.T) {
 					Model:   "gpt-5.6-sol",
 					Headers: http.Header{"X-Airgate-Service-Tier": {tc.group}},
 				}
-				var wire []byte
-				if shape == "compact" {
-					wire = preprocessRequestBody(body, req.Model, "/v1/responses/compact", req.Headers)
-				} else {
-					wire, err = (&OpenAIGateway{}).buildWSRequest(req, openAISessionResolution{})
-					if err != nil {
-						t.Fatal(err)
-					}
+				wire, err := (&OpenAIGateway{}).buildWSRequest(req, openAISessionResolution{})
+				if err != nil {
+					t.Fatal(err)
 				}
 				if got := gjson.GetBytes(wire, "service_tier").String(); got != tc.wire {
 					t.Fatalf("OAuth %s tier = %q, want %q; body=%s", shape, got, tc.wire, wire)

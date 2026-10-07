@@ -722,35 +722,6 @@ func TestPreprocessRequestBodyRejectsForgedDelegatedRecoveryMarker(t *testing.T)
 	}
 }
 
-func TestPreprocessRequestBodyCompactDeletesStreamOnly(t *testing.T) {
-	body := []byte(`{"model":"gpt-5.4","stream":false,"input":"hello"}`)
-
-	got := preprocessRequestBody(body, "gpt-5.4-openai-compact", "/v1/responses/compact")
-
-	if model := gjson.GetBytes(got, "model").String(); model != "gpt-5.4-openai-compact" {
-		t.Fatalf("compact model = %q, want gpt-5.4-openai-compact; body=%s", model, got)
-	}
-	if gjson.GetBytes(got, "stream").Exists() {
-		t.Fatalf("stream should be removed for compact request: %s", got)
-	}
-	if input := gjson.GetBytes(got, "input"); input.Type != gjson.String || input.String() != "hello" {
-		t.Fatalf("compact input should stay unchanged, got %s in %s", input.Raw, got)
-	}
-	if gjson.GetBytes(got, "store").Exists() {
-		t.Fatalf("store should not be injected for compact request: %s", got)
-	}
-}
-
-func TestPreprocessRequestBodyCompactUsesSelectedBaseModel(t *testing.T) {
-	body := []byte(`{"model":"gpt-5.5-openai-compact","stream":false,"input":"hello"}`)
-
-	got := preprocessRequestBody(body, "gpt-5.5", "/v1/responses/compact")
-
-	if model := gjson.GetBytes(got, "model").String(); model != "gpt-5.5" {
-		t.Fatalf("compact model = %q, want gpt-5.5; body=%s", model, got)
-	}
-}
-
 func TestNormalizePromptCacheKeyForUpstreamHashesLongKey(t *testing.T) {
 	key := strings.Repeat("k", maxUpstreamPromptCacheKeyLength+6)
 	body := []byte(fmt.Sprintf(`{"model":"gpt-5.5","input":"hi","prompt_cache_key":%q}`, key))
@@ -808,25 +779,6 @@ func TestInjectAnthropicPromptCacheKeyNormalizesExistingOAuthKey(t *testing.T) {
 
 	if normalized := gjson.GetBytes(got, "prompt_cache_key").String(); normalized != upstreamPromptCacheKey(key) {
 		t.Fatalf("prompt_cache_key = %q, want %q; body=%s", normalized, upstreamPromptCacheKey(key), got)
-	}
-}
-
-func TestPluginRouteDefinitionsIncludesResponsesCompact(t *testing.T) {
-	routes := PluginRouteDefinitions()
-	want := map[string]bool{
-		"POST /v1/responses/compact": false,
-		"POST /responses/compact":    false,
-	}
-	for _, route := range routes {
-		key := route.Method + " " + route.Path
-		if _, ok := want[key]; ok {
-			want[key] = true
-		}
-	}
-	for key, found := range want {
-		if !found {
-			t.Fatalf("route %s not registered", key)
-		}
 	}
 }
 
@@ -1093,22 +1045,16 @@ func TestOAuthReasoningRewriterForModelRecognizesAliases(t *testing.T) {
 	}{
 		{"gpt-5.6-sol", reasoning.OAuth{Max: true}},
 		{"openai/gpt-5.6-terra", reasoning.OAuth{Max: true}},
-		{"oai/gpt-5.6-luna-openai-compact", reasoning.OAuth{Max: true}},
 		{"gpt-6-astra", reasoning.OAuth{Max: true}},
 		{"openai/gpt-6-astra", reasoning.OAuth{Max: true}},
-		{"oai/gpt-6-astra-openai-compact", reasoning.OAuth{Max: true}},
 		{"gpt-6-sol", reasoning.OAuth{Max: true}},
 		{"openai/gpt-6-sol", reasoning.OAuth{Max: true}},
-		{"oai/gpt-6-sol-openai-compact", reasoning.OAuth{Max: true}},
 		{"gpt-6-luna", reasoning.OAuth{Max: true}},
 		{"openai/gpt-6-luna", reasoning.OAuth{Max: true}},
-		{"oai/gpt-6-luna-openai-compact", reasoning.OAuth{Max: true}},
 		{"gpt-6.1-sol", reasoning.OAuth{Max: true}},
 		{"openai/gpt-6.1-sol", reasoning.OAuth{Max: true}},
-		{"oai/gpt-6.1-sol-openai-compact", reasoning.OAuth{Max: true}},
 		{"gpt-5.5", reasoning.OAuth{}},
 		{"openai/gpt-5.5", reasoning.OAuth{}},
-		{"oai/gpt-5.5-openai-compact", reasoning.OAuth{}},
 		{"unlisted-model", reasoning.OAuth{Max: true}},
 		{"openai/unlisted-model", reasoning.OAuth{Max: true}},
 		{"", reasoning.OAuth{Max: true}},

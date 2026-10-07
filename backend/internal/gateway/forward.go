@@ -64,18 +64,6 @@ func (g *OpenAIGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest
 	if denied, ok := enforceOperationPolicies(req, reqPath); ok {
 		return denied, nil
 	}
-	if isResponsesCompactRequestPath(reqPath) && (req.Stream || gjson.GetBytes(req.Body, "stream").Bool()) {
-		body := openAIErrorJSON("invalid_request_error", "invalid_request", "streaming not supported for /responses/compact")
-		return sdk.ForwardOutcome{
-			Kind: sdk.OutcomeClientError,
-			Upstream: sdk.UpstreamResponse{
-				StatusCode: http.StatusBadRequest,
-				Headers:    http.Header{"Content-Type": []string{"application/json"}},
-				Body:       body,
-			},
-			Reason: "streaming not supported for /responses/compact",
-		}, nil
-	}
 	var reqServiceTier string
 	if !strings.HasPrefix(req.Headers.Get("Content-Type"), "multipart/") {
 		req.Body = preprocessRequestBodyWithEncryptedContentState(
@@ -164,9 +152,6 @@ func (g *OpenAIGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest
 			}
 			return g.forwardImagesViaResponsesTool(ctx, req)
 		}
-		if isResponsesCompactRequestPath(reqPath) {
-			return g.forwardOAuthCompact(ctx, req, reqServiceTier)
-		}
 		return g.forwardOAuth(ctx, req)
 	}
 	reason := "账号缺少 api_key 或 access_token"
@@ -176,197 +161,6 @@ func (g *OpenAIGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest
 		sdk.LogFieldError, reason,
 	)
 	return accountDeadOutcome(reason), fmt.Errorf("%s", reason)
-}
-
-func (g *OpenAIGateway) forwardOAuthCompact(ctx context.Context, req *sdk.ForwardRequest, reqServiceTier string) (sdk.ForwardOutcome, error) {
-	start := time.Now()
-	if basispointsEnabled(req) {
-		return basispointsHTTPFailure(basispointsInvalidRequestResponse(fmt.Errorf("standalone /responses/compact is not supported by this Basispoints adapter")), start), nil
-	}
-	account := req.Account
-	logger := sdk.LoggerFromContext(ctx)
-	session := resolveOpenAISession(req.Headers, req.Body, account.ID)
-	if session.StateError != nil {
-		return sharedStateUnavailable(session.StateError)
-	}
-	updateSessionStateFromRequest(session, account.ID)
-	upstreamBody, err := rewriteOpenAIReasoningEffort(req.Body, req.Model)
-	if err != nil {
-		return failureOutcome(http.StatusBadRequest, openAIErrorJSON("invalid_request_error", "invalid_reasoning_effort", err.Error()), nil, err.Error(), 0), nil
-	}
-	upstreamBody = normalizePromptCacheKeyForUpstream(upstreamBody)
-	fingerprintIDs := g.resolveCodexFingerprintIDs(account, req.Headers)
-	if fingerprintIDs != nil {
-		upstreamBody = applyCodexFingerprintBody(upstreamBody, fingerprintIDs)
-	}
-
-	targetURL := strings.TrimRight(ChatGPTSSEURL, "/") + "/compact"
-	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(upstreamBody))
-	if err != nil {
-		reason := fmt.Sprintf("构建上游请求失败: %v", err)
-		logger.Warn("upstream_request_build_failed",
-			sdk.LogFieldAccountID, account.ID,
-			sdk.LogFieldModel, req.Model,
-			"url", redactURL(targetURL),
-			sdk.LogFieldError, err,
-		)
-		return transientOutcome(reason), fmt.Errorf("%s", reason)
-	}
-
-	upstreamReq.Header.Set("Content-Type", "application/json")
-	upstreamReq.Header.Set("Accept", "application/json")
-	authHeaders, authErr := g.buildOpenAIAuthHeaders(ctx, account, false)
-	if authErr != nil {
-		reason := fmt.Sprintf("构建 OAuth 认证头失败: %v", authErr)
-		return accountDeadOutcome(reason), fmt.Errorf("%s", reason)
-	}
-	for key, values := range authHeaders {
-		for _, value := range values {
-			upstreamReq.Header.Add(key, value)
-		}
-	}
-	if aid := account.Credentials["chatgpt_account_id"]; aid != "" {
-		upstreamReq.Header.Set("ChatGPT-Account-ID", aid)
-	}
-	if session.SessionID != "" {
-		upstreamReq.Header.Set("session_id", isolateSessionID(session.wireValue("session_id", session.SessionID)))
-	}
-	if session.ConversationID != "" {
-		upstreamReq.Header.Set("conversation_id", isolateSessionID(session.wireValue("conversation_id", session.ConversationID)))
-	}
-	if session.LastTurnState != "" {
-		upstreamReq.Header.Set("x-codex-turn-state", session.LastTurnState)
-	}
-	upstreamReq.Header.Set("originator", resolveCodexOriginator(req.Headers.Get("originator")))
-	if ua := req.Headers.Get("User-Agent"); ua != "" {
-		upstreamReq.Header.Set("User-Agent", ua)
-	}
-	if fingerprintIDs != nil {
-		passCodexFingerprintCarrierHeaders(req.Headers, upstreamReq.Header)
-	}
-	applyCodexFingerprintHeaders(upstreamReq.Header, fingerprintIDs)
-
-	logger.Debug("upstream_request_start",
-		sdk.LogFieldAccountID, account.ID,
-		sdk.LogFieldModel, req.Model,
-		"url", redactURL(targetURL),
-		sdk.LogFieldMethod, http.MethodPost,
-		"stream", false,
-		"account_type", "oauth",
-	)
-
-	resp, err := g.buildForwardHTTPClient(account).Do(upstreamReq)
-	if err != nil {
-		dur := time.Since(start)
-		logger.Warn("upstream_request_failed",
-			sdk.LogFieldAccountID, account.ID,
-			sdk.LogFieldModel, req.Model,
-			sdk.LogFieldDurationMs, dur.Milliseconds(),
-			sdk.LogFieldError, err,
-		)
-		return transientOutcome(err.Error()), fmt.Errorf("请求上游失败: %w", err)
-	}
-	defer func() {
-		if resp != nil && resp.Body != nil {
-			_ = resp.Body.Close()
-		}
-	}()
-
-	if snapshot := parseCodexUsageFromHeaders(resp.Header); snapshot != nil {
-		StoreCodexUsage(account.ID, snapshot)
-	}
-	if turnState := decodeTurnStateHeader(resp.Header); turnState != "" {
-		updateSessionStateTurnState(session.SessionKey, turnState)
-	}
-
-	if resp.StatusCode >= 400 {
-		respBody, _ := readLimitedErrorBody(resp.Body)
-		if isOpenAIAgentIdentityAccount(account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
-			g.invalidateAgentIdentityTask(account, authHeaders)
-			refreshedHeaders, refreshErr := g.buildOpenAIAuthHeaders(ctx, account, true)
-			if refreshErr != nil {
-				reason := fmt.Sprintf("Agent Identity task 恢复失败: %v", refreshErr)
-				return accountDeadOutcome(reason), fmt.Errorf("%s", reason)
-			}
-			_ = resp.Body.Close()
-			retryReq, buildErr := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(upstreamBody))
-			if buildErr != nil {
-				reason := fmt.Sprintf("构建 Agent Identity 重试请求失败: %v", buildErr)
-				return transientOutcome(reason), fmt.Errorf("%s", reason)
-			}
-			retryReq.Header.Set("Content-Type", "application/json")
-			retryReq.Header.Set("Accept", "application/json")
-			for key, values := range refreshedHeaders {
-				for _, value := range values {
-					retryReq.Header.Add(key, value)
-				}
-			}
-			if aid := account.Credentials["chatgpt_account_id"]; aid != "" {
-				retryReq.Header.Set("ChatGPT-Account-ID", aid)
-			}
-			if session.SessionID != "" {
-				retryReq.Header.Set("session_id", isolateSessionID(session.wireValue("session_id", session.SessionID)))
-			}
-			if session.ConversationID != "" {
-				retryReq.Header.Set("conversation_id", isolateSessionID(session.wireValue("conversation_id", session.ConversationID)))
-			}
-			if session.LastTurnState != "" {
-				retryReq.Header.Set("x-codex-turn-state", session.LastTurnState)
-			}
-			retryReq.Header.Set("originator", resolveCodexOriginator(req.Headers.Get("originator")))
-			if ua := req.Headers.Get("User-Agent"); ua != "" {
-				retryReq.Header.Set("User-Agent", ua)
-			}
-			applyCodexFingerprintHeaders(retryReq.Header, fingerprintIDs)
-			retryResp, retryErr := g.buildForwardHTTPClient(account).Do(retryReq)
-			if retryErr != nil {
-				reason := fmt.Sprintf("Agent Identity 重试请求失败: %v", retryErr)
-				return transientOutcome(reason), fmt.Errorf("%s", reason)
-			}
-			resp = retryResp
-			respBody = nil
-			if resp.StatusCode >= http.StatusBadRequest {
-				respBody, _ = readLimitedErrorBody(resp.Body)
-			}
-		}
-		if resp == nil {
-			reason := "上游未返回有效响应"
-			return transientOutcome(reason), fmt.Errorf("%s", reason)
-		}
-		if resp.StatusCode < http.StatusBadRequest {
-			if snapshot := parseCodexUsageFromHeaders(resp.Header); snapshot != nil {
-				StoreCodexUsage(account.ID, snapshot)
-			}
-			if turnState := decodeTurnStateHeader(resp.Header); turnState != "" {
-				updateSessionStateTurnState(session.SessionKey, turnState)
-			}
-			return handleNonStreamResponse(resp, req.Writer, start, reqServiceTier)
-		}
-		errDetail := gjson.GetBytes(respBody, "error.message").String()
-		if errDetail == "" {
-			errDetail = truncate(string(respBody), 200)
-		}
-		dur := time.Since(start)
-		logger.Warn("upstream_request_non_2xx",
-			sdk.LogFieldAccountID, account.ID,
-			sdk.LogFieldModel, req.Model,
-			sdk.LogFieldStatus, resp.StatusCode,
-			sdk.LogFieldDurationMs, dur.Milliseconds(),
-			sdk.LogFieldReason, errDetail,
-		)
-		outcome := failureOutcome(resp.StatusCode, respBody, resp.Header.Clone(), errDetail, extractRetryAfterHeader(resp.Header))
-		outcome.Duration = dur
-		return outcome, nil
-	}
-
-	logger.Debug("upstream_request_completed",
-		sdk.LogFieldAccountID, account.ID,
-		sdk.LogFieldModel, req.Model,
-		sdk.LogFieldStatus, resp.StatusCode,
-		sdk.LogFieldDurationMs, time.Since(start).Milliseconds(),
-		"stream", false,
-	)
-	return handleNonStreamResponse(resp, req.Writer, start, reqServiceTier)
 }
 
 // isImageTaskListRequest 判断是否为 GET /v1/images/tasks/list 历史列表查询。
@@ -688,6 +482,9 @@ func (g *OpenAIGateway) forwardAPIKeyAttempt(
 		}
 	}
 	passHeadersForAccount(headers, upstreamReq.Header, account)
+	if isResponsesCompactionRequest(reqPath, body) {
+		ensureRemoteCompactionV2Header(upstreamReq.Header)
+	}
 
 	streamable := req.Stream && req.Writer != nil && !isImagesRequest(reqPath)
 	resp, cancel, err := g.doStreamableUpstream(ctx, client, upstreamReq, streamable)

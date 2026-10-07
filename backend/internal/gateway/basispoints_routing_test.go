@@ -106,15 +106,3 @@ func TestBasispointsInvalidRequestDoesNotFallBack(t *testing.T) {
 		}
 	}
 }
-
-func TestBasispointsCompactDoesNotUseNativeOAuth(t *testing.T) {
-	req := bpsRequest()
-	g := bpsGateway(t, req, func(w http.ResponseWriter, r *http.Request) {
-		t.Error("unsupported compact request reached upstream")
-		w.WriteHeader(http.StatusInternalServerError)
-	})
-	outcome, err := g.forwardOAuthCompact(context.Background(), req, "default")
-	if err != nil || outcome.Kind != sdk.OutcomeClientError || outcome.Upstream.StatusCode != http.StatusBadRequest {
-		t.Fatalf("expected explicit BAS compact error: outcome=%+v err=%v", outcome, err)
-	}
-}

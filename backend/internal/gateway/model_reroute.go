@@ -23,7 +23,7 @@ func oauthModelRerouteOutcome(req *sdk.ForwardRequest, reqPath string) (sdk.Forw
 	if !isOpenAIOAuthCredentials(credentials) || strings.TrimSpace(credentials["api_key"]) != "" {
 		return sdk.ForwardOutcome{}, false
 	}
-	if isAnthropicRequest(req) || isModelsListingRequest(req) || isImagesRequest(reqPath) || isResponsesCompactRequestPath(reqPath) {
+	if isAnthropicRequest(req) || isModelsListingRequest(req) || isImagesRequest(reqPath) {
 		return sdk.ForwardOutcome{}, false
 	}
 	if !isResponsesRequestPath(reqPath) && !isChatCompletionsRequest(req) {

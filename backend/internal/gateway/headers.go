@@ -31,6 +31,10 @@ func (g *OpenAIGateway) buildOpenAIWebSocketHeaders(ctx context.Context, account
 		}
 	}
 	passResponsesProtocolHeaders(clientHeaders, headers)
+	if values := clientHeaders.Values(codexBetaFeaturesHeader); len(values) > 0 {
+		headers[codexBetaFeaturesHeader] = append([]string(nil), values...)
+	}
+	ensureRemoteCompactionV2Header(headers)
 	if fingerprintIDs != nil {
 		passCodexFingerprintCarrierHeaders(clientHeaders, headers)
 	}
@@ -99,9 +103,10 @@ var openaiAllowedHeaders = map[string]bool{
 	"accept-language": true,
 	"user-agent":      true,
 	// OpenAI 特定头
-	"openai-beta":         true,
-	"openai-organization": true,
-	"x-request-id":        true,
+	"openai-beta":           true,
+	"x-codex-beta-features": true,
+	"openai-organization":   true,
+	"x-request-id":          true,
 	// Codex 特定头
 	"x-codex-turn-state":                     true,
 	"x-codex-turn-metadata":                  true,

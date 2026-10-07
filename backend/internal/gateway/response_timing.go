@@ -125,6 +125,10 @@ func responseEventContainsCompletedOutput(data []byte) bool {
 
 func responseItemHasModelOutput(item gjson.Result) bool {
 	itemType := strings.TrimSpace(item.Get("type").String())
+	if itemType == "compaction" {
+		content := item.Get("encrypted_content")
+		return content.Type == gjson.String && strings.TrimSpace(content.String()) != ""
+	}
 	// 隐藏思考通常没有可见 delta；reasoning item 是能观察到的最早输出信号。
 	if itemType == "reasoning" || isResponseToolCallItem(itemType) {
 		return true

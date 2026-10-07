@@ -2,8 +2,6 @@ package gateway
 
 import sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 
-const compactModelSuffix = "-openai-compact"
-
 func openAIDispatchDSL() sdk.DispatchDSL {
 	rules := []sdk.DispatchRule{
 		{
@@ -39,18 +37,6 @@ func openAIDispatchDSL() sdk.DispatchDSL {
 				Message:           "Image generation is not enabled for this group",
 			},
 			Candidates: identityDispatchCandidates(),
-		},
-		{
-			ID:        "responses-compact",
-			Operation: "responses.compact",
-			When: sdk.DispatchWhen{
-				Methods: []string{"POST"},
-				Paths:   []string{"/v1/responses/compact", "/responses/compact"},
-			},
-			Model: sdk.DispatchModel{StripSuffix: compactModelSuffix},
-			Candidates: []sdk.DispatchCandidate{
-				{Scheduling: "${model.base}", Wire: "${model.base}"},
-			},
 		},
 	}
 

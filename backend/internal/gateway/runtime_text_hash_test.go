@@ -51,7 +51,8 @@ func TestTextRequestHashSeparatesRequests(t *testing.T) {
 	if _, ok := textRequestHash(req, http.MethodPost, "/v1/images/generations"); ok {
 		t.Fatal("image request should not produce a text safety hash")
 	}
-	if _, ok := textRequestHash(req, http.MethodPost, "/v1/responses/compact"); ok {
+	req.Body = []byte(`{"model":"gpt-5.6-sol","input":[{"role":"user","content":"hello"},{"type":"compaction_trigger"}]}`)
+	if _, ok := textRequestHash(req, http.MethodPost, "/v1/responses"); ok {
 		t.Fatal("compact request should not produce a text safety hash")
 	}
 }

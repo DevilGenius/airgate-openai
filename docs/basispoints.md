@@ -108,7 +108,8 @@ BPS 原始响应及账单核对证据。
 | 开关关闭、API Key、Agent Identity | 原有模式，零 BPS 请求 |
 | hosted tools（含搜索、生图）、内联图片、原生文件 ID、不支持的输入或工具协议 | 发请求前选择普通模式 |
 | `previous_response_id` / `item_reference` 增量历史、priority 服务档位、不支持的原生控制参数 | 发请求前选择普通模式 |
-| `/responses/compact`、Images API、入站 WebSocket 直通 | 保持原有模式 |
+| Responses 压缩 | `/responses` 的 `input` 末尾传入 `{"type":"compaction_trigger"}`，使用流式响应；不提供独立 compact 端点或模型后缀 |
+| Images API、入站 WebSocket 直通 | 保持原有模式 |
 | BPS HTTP 400/403/404 明确返回 `model_not_found`、`model_not_supported`、`unsupported_model`、`model_access_denied`、`basispoints_model_access_changed` | 尚未输出时，以未被 BPS 修改的请求走一次普通模式 |
 | 输出前的 401/403、429/usage_limit_reached、5xx、超时、网络异常、SSE 临时错误或断流 | 复用普通 OAuth 失败分类；由 Core 按现有预算、冷却和会话约束换号重试 |
 | 非重试性请求错误 | 保留客户端错误，不换号 |

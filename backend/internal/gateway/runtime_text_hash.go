@@ -226,7 +226,7 @@ func (h *enabledTextHash) stats(now time.Time) (
 }
 
 func textRequestHash(req *sdk.ForwardRequest, method, path string) (uint64, bool) {
-	if req == nil || len(req.Body) == 0 || !isTextGenerationRequestPath(path) {
+	if req == nil || len(req.Body) == 0 || !isTextGenerationRequestPath(path) || isResponsesCompactionRequest(path, req.Body) {
 		return 0, false
 	}
 	contentType := strings.ToLower(strings.TrimSpace(req.Headers.Get("Content-Type")))
@@ -254,7 +254,7 @@ func textSafetyRequestHash(req *sdk.ForwardRequest, requestHash uint64) uint64 {
 }
 
 func textPromptHash(req *sdk.ForwardRequest, method, path string) (uint64, bool) {
-	if req == nil || len(req.Body) == 0 || !isTextGenerationRequestPath(path) {
+	if req == nil || len(req.Body) == 0 || !isTextGenerationRequestPath(path) || isResponsesCompactionRequest(path, req.Body) {
 		return 0, false
 	}
 

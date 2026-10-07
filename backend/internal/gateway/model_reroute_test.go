@@ -81,7 +81,7 @@ func TestOAuthModelRerouteOutcome(t *testing.T) {
 			wantTarget: "gpt-5.6-sol",
 		},
 		{
-			name: "responses compact keeps its dedicated mapping",
+			name: "removed endpoint does not participate in model routing",
 			req:  oauthModelRerouteTestRequest("codex-auto-review", "codex-auto-review", "codex-auto-review"),
 			path: "/v1/responses/compact",
 		},

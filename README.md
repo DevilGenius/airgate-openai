@@ -100,6 +100,31 @@ AirGate OpenAI 不是又一个"OpenAI 转发服务"，而是 [airgate-core](http
 
 另外提供不带 `/v1` 前缀的别名路由（`POST /responses`、`POST /chat/completions`、`POST /messages`、`GET /models`、`WS /responses` 等），方便客户端直接填站点根地址。
 
+### 上下文压缩
+
+压缩统一使用 Responses 原生协议：`POST /v1/responses`（或 `/responses`），
+设置 `stream: true`、`store: false`，在完整 `input` 的末尾追加一个
+`{"type":"compaction_trigger"}`。模型使用原始名称，例如 `gpt-5.6-sol`。
+
+```json
+{
+  "model": "gpt-5.6-sol",
+  "stream": true,
+  "store": false,
+  "input": [
+    {"role": "user", "content": "保留这段会话的重要信息。"},
+    {"type": "compaction_trigger"}
+  ]
+}
+```
+
+网关为压缩请求补齐 `x-codex-beta-features: remote_compaction_v2`，OAuth
+WebSocket 会话也会协商此能力。客户端收集 `response.output_item.done` 中的
+`compaction` 项并等待 `response.completed`；将返回的完整输出窗口连同新用户消息
+作为下一轮 `input`，原样保留 `encrypted_content`。收到 HTTP 200 本身不表示压缩完成。
+
+不再注册独立 `/responses/compact` 端点，也不再识别 `-openai-compact` 模型后缀。
+
 ## 请求与响应限制
 
 - 多模态接口请求体、响应正文上限为 **96 MiB**，图片按 Base64 编码后的大小计入正文。

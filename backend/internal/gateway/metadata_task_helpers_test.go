@@ -95,26 +95,12 @@ func TestBuildPluginInfoAndRoutes(t *testing.T) {
 	if len(info.DispatchDSL.Rules) == 0 {
 		t.Fatal("expected dispatch rules")
 	}
-	var compactRule *sdk.DispatchRule
 	var responsesRule *sdk.DispatchRule
 	for i := range info.DispatchDSL.Rules {
 		switch info.DispatchDSL.Rules[i].ID {
-		case "responses-compact":
-			compactRule = &info.DispatchDSL.Rules[i]
 		case "responses-default":
 			responsesRule = &info.DispatchDSL.Rules[i]
 		}
-	}
-	if compactRule == nil {
-		t.Fatal("expected responses-compact dispatch rule")
-	}
-	if compactRule.Model.StripSuffix != compactModelSuffix {
-		t.Fatalf("compact StripSuffix = %q, want %q", compactRule.Model.StripSuffix, compactModelSuffix)
-	}
-	if len(compactRule.Candidates) != 1 ||
-		compactRule.Candidates[0].Scheduling != "${model.base}" ||
-		compactRule.Candidates[0].Wire != "${model.base}" {
-		t.Fatalf("compact candidates = %#v, want base scheduling and wire", compactRule.Candidates)
 	}
 	if responsesRule == nil {
 		t.Fatal("expected responses-default dispatch rule")

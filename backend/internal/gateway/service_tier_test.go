@@ -22,12 +22,13 @@ type serviceTierTestProtocol struct {
 	stream    bool
 	chat      bool
 	anthropic bool
+	compact   bool
 }
 
 var serviceTierTestProtocols = []serviceTierTestProtocol{
 	{name: "responses-json", path: "/v1/responses"},
 	{name: "responses-sse", path: "/v1/responses", stream: true},
-	{name: "compact-json", path: "/v1/responses/compact"},
+	{name: "compact-sse", path: "/v1/responses", stream: true, compact: true},
 	{name: "chat-json", path: "/v1/chat/completions", chat: true},
 	{name: "chat-sse", path: "/v1/chat/completions", chat: true, stream: true},
 	{name: "anthropic-json", path: "/v1/messages", anthropic: true},
@@ -312,6 +313,9 @@ func forwardServiceTierTest(t *testing.T, protocol serviceTierTestProtocol, requ
 		payload["messages"] = []any{map[string]any{"role": "user", "content": "hello"}}
 	} else {
 		payload["input"] = "hello"
+		if protocol.compact {
+			payload["input"] = []any{map[string]any{"role": "user", "content": "hello"}, map[string]any{"type": "compaction_trigger"}}
+		}
 	}
 	if protocol.anthropic {
 		payload["model"] = "claude-sonnet-4-6"
@@ -375,6 +379,9 @@ func serviceTierTestResponse(t *testing.T, protocol serviceTierTestProtocol, rep
 		"id": "resp_service_tier", "model": "gpt-5.6-sol", "status": "completed", "usage": usage,
 		"output": []any{map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "OK"}}}},
 	}
+	if protocol.compact {
+		response["output"] = []any{map[string]any{"type": "compaction", "encrypted_content": "opaque-test-content"}}
+	}
 	if reported != "" {
 		response["service_tier"] = reported
 	}
@@ -402,6 +409,9 @@ func serviceTierTestResponse(t *testing.T, protocol serviceTierTestProtocol, rep
 	case "response.incomplete":
 		response["status"] = "incomplete"
 		response["incomplete_details"] = map[string]any{"reason": "max_output_tokens"}
+	}
+	if protocol.compact {
+		return "data: " + encode(map[string]any{"type": terminal, "response": response}) + "\n\n"
 	}
 	// An early priority echo must never override the completed response tier.
 	return "data: " + encode(map[string]any{"type": "response.created", "response": map[string]any{"id": "resp_service_tier", "service_tier": "priority"}}) + "\n\n" +

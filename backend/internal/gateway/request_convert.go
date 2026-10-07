@@ -108,9 +108,6 @@ func openAIWireReasoningModelID(modelID string) string {
 	if id == "" {
 		return ""
 	}
-	if base, ok := openAICompactBaseModel(id); ok {
-		id = strings.ToLower(strings.TrimSpace(base))
-	}
 	if idx := strings.LastIndexByte(id, '/'); idx >= 0 && idx+1 < len(id) {
 		id = strings.TrimSpace(id[idx+1:])
 	}

@@ -24,7 +24,6 @@ const (
 	usageAttrServiceTier  = "service_tier"
 	usageAttrImageSize    = "openai.image.size"
 	usageAttrResponseID   = "openai.response_id"
-	usageAttrWireModel    = "openai.wire_model"
 	usageDefaultImageSize = "1024x1024"
 
 	usageMetricInputTokens           = "input_tokens"
@@ -139,26 +138,14 @@ func forwardErrForOutcome(outcome sdk.ForwardOutcome, err error) error {
 // authoritative; requestedTier is an optional fallback when upstream omits it.
 // All models/protocols use setUsageServiceTier and fillUsageCost for billing.
 func newTokenUsage(modelID, reportedTier string, inputTokens, outputTokens, cachedInputTokens, cacheCreationTokens, reasoningOutputTokens int, firstEventMs int64, requestedTier ...string) *sdk.Usage {
-	billingModel, wireModel := usageBillingModel(modelID)
 	usage := &sdk.Usage{
-		Model:        billingModel,
+		Model:        strings.TrimSpace(modelID),
 		Currency:     usageCurrencyUSD,
 		FirstEventMs: firstEventMs,
-	}
-	if wireModel != "" {
-		setUsageMetadata(usage, usageAttrWireModel, wireModel)
 	}
 	setUsageServiceTier(usage, reportedTier, requestedTier...)
 	setUsageTokens(usage, inputTokens, outputTokens, cachedInputTokens, cacheCreationTokens, reasoningOutputTokens)
 	return usage
-}
-
-func usageBillingModel(modelID string) (string, string) {
-	modelID = strings.TrimSpace(modelID)
-	if base, ok := openAICompactBaseModel(modelID); ok {
-		return base, modelID
-	}
-	return modelID, ""
 }
 
 func setUsageReasoningEffort(usage *sdk.Usage, effort string) {
