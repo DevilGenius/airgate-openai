@@ -529,6 +529,7 @@ func buildCodexWSRequest(body []byte, model string, session openAISessionResolut
 }
 
 func buildResponseCreateWSRequestWithHeaders(body []byte, model string, session openAISessionResolution, headers http.Header) ([]byte, error) {
+	model = resolveEffectiveModel(model, gjson.GetBytes(body, "model").Value())
 	normalizedBody, err := normalizeWSRequestBody(body, model, headers)
 	if err != nil {
 		return nil, err
@@ -578,19 +579,17 @@ func normalizeWSRequestBody(body []byte, model string, headers http.Header) ([]b
 	}), nil
 }
 
-// resolveEffectiveModel 决定最终送到上游的 model 字段。
-// 优先级：显式 reqModel > body 里已有的 model > Codex 兜底默认值。
-// 只要候选值不在 model.registry 里（包括空串、"None"、"null"、或者任何不认识的
-// 模型名），就直接换成 model.DefaultModelID —— 避免把"不支持的模型"推到上游账号，
-// 触发 "The 'None' model is not supported..." 这类错误。
+// resolveEffectiveModel preserves the selected upstream model, falling back only
+// to the model supplied in the body. The upstream validates model availability;
+// the local pricing registry is not a model allowlist.
 func resolveEffectiveModel(reqModel string, existing any) string {
-	if model.IsKnown(reqModel) {
-		return strings.TrimSpace(reqModel)
+	if reqModel != "" {
+		return reqModel
 	}
-	if s, ok := existing.(string); ok && model.IsKnown(s) {
-		return strings.TrimSpace(s)
+	if value, ok := existing.(string); ok {
+		return value
 	}
-	return model.DefaultModelID
+	return ""
 }
 
 // buildSimulatedWSRequest 模拟客户端模式

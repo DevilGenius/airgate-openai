@@ -1900,13 +1900,15 @@ func TestPreprocessRequestBodyPreservesPreviousResponseID(t *testing.T) {
 	}
 }
 
-func TestResolveEffectiveModelFallsBackToDefaultModel(t *testing.T) {
-	t.Parallel()
-
-	for _, requested := range []string{"", "None", "gpt-unknown", "gpt-5.4"} {
+func TestResolveEffectiveModelPreservesProvidedModel(t *testing.T) {
+	for _, requested := range []string{"", "None", "gpt-unknown", "gpt-5.4", "codex-auto-review", "vendor/custom-model", " Model-With-Case "} {
 		for _, existing := range []any{"", "None", "gpt-unknown", "gpt-5.4", nil} {
-			if got := resolveEffectiveModel(requested, existing); got != "gpt-5.6-sol" {
-				t.Fatalf("resolveEffectiveModel(%q, %#v) = %q, want gpt-5.6-sol", requested, existing, got)
+			want := requested
+			if requested == "" {
+				want, _ = existing.(string)
+			}
+			if got := resolveEffectiveModel(requested, existing); got != want {
+				t.Fatalf("resolveEffectiveModel(%q, %#v) = %q, want %q", requested, existing, got, want)
 			}
 		}
 	}
