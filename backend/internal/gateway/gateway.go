@@ -439,7 +439,7 @@ func (g *OpenAIGateway) RefreshToken(ctx context.Context, credentials map[string
 		return nil, fmt.Errorf("%srefresh_token 已失效，请重新授权 OAuth (原因: %s)", ReauthRequiredPrefix, err.Error())
 	}
 
-	info := g.enrichTokenInfo(ctx, parseTokenInfo(tokens.IDToken, tokens.AccessToken), tokens.AccessToken, credentials["proxy_url"])
+	info := parseRefreshTokenInfo(tokens.IDToken, tokens.AccessToken)
 
 	extra := map[string]string{
 		"plan_type":                 info.PlanType,
@@ -475,17 +475,14 @@ func (g *OpenAIGateway) tokenRefreshViaSession(ctx context.Context, sessionToken
 	if err != nil {
 		return nil, err
 	}
-	// 在 session 拿到的 AT 之上再做一次 enrichTokenInfo，把订阅有效期补全
-	// （session.expires 字段是 session 过期时间，不是订阅到期时间）。
-	info := g.enrichTokenInfo(ctx, parseTokenInfo("", sess.AccessToken), sess.AccessToken, proxyURL)
+	// Refresh metadata belongs to the returned JWT, not another workspace
+	// selected by accounts/check or the session's account metadata.
+	info := parseRefreshTokenInfo("", sess.AccessToken)
 	if info.Email == "" {
 		info.Email = sess.User.Email
 	}
 	if info.AccountID == "" {
 		info.AccountID = sess.Account.ID
-	}
-	if info.PlanType == "" {
-		info.PlanType = sess.Account.PlanType
 	}
 	if info.AccountName == "" {
 		if sess.User.Name != "" {
@@ -517,7 +514,7 @@ func (g *OpenAIGateway) tokenRefreshViaSession(ctx context.Context, sessionToken
 }
 
 func (g *OpenAIGateway) tokenRefreshFromAccessToken(ctx context.Context, access string, credentials map[string]string, warning string) (*tokenRefreshInfo, error) {
-	info := g.enrichTokenInfo(ctx, parseIDToken(access), access, credentials["proxy_url"])
+	info := parseRefreshTokenInfo("", access)
 	extra := map[string]string{
 		"plan_type":                 info.PlanType,
 		"subscription_active_until": info.SubscriptionActiveUntil,

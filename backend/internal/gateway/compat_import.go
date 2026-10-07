@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/DevilGenius/airgate-openai/backend/internal/authcompat"
 )
@@ -72,9 +71,49 @@ func (g *OpenAIGateway) handleCompatibleAccountImport(
 	if err != nil {
 		return http.StatusBadRequest, nil, jsonError(err.Error()), nil
 	}
-	result.Accounts = authcompat.Rename(result.Accounts, time.Now())
-	result.Renamed = true
+	if format != "refresh_token" && format != "rt" {
+		result = g.completeCompatibleCredentials(ctx, result)
+	}
+	result.Accounts = authcompat.Prepare(result.Accounts)
 	return http.StatusOK, nil, jsonMarshal(result), nil
+}
+
+// A JSON envelope may also contain only an RT. Exchange it before returning a
+// draft to Core, so naming always sees the resulting complete credentials.
+func (g *OpenAIGateway) completeCompatibleCredentials(ctx context.Context, result authcompat.Result) authcompat.Result {
+	accounts := make([]authcompat.Account, 0, len(result.Accounts))
+	for index, account := range result.Accounts {
+		credentials := account.Credentials
+		if strings.TrimSpace(credentials["access_token"]) == "" && strings.TrimSpace(credentials["refresh_token"]) != "" {
+			imported, err := compatibleImportFromRefreshToken(g, ctx, credentials["refresh_token"], "", credentials["client_id"])
+			if err != nil || imported == nil || strings.TrimSpace(imported.Credentials["access_token"]) == "" {
+				result.Issues = append(result.Issues, authcompat.Issue{Index: index, Level: "error", Message: "refresh_token 兑换完整凭证失败"})
+				continue
+			}
+			// RT input metadata may be stale; derive the plan from the exchanged credentials.
+			delete(credentials, "plan_type")
+			delete(credentials, "id_token")
+			for key, value := range imported.Credentials {
+				credentials[key] = value
+			}
+			if email := strings.TrimSpace(credentials["email"]); email != "" {
+				account.Email = &email
+			}
+		}
+		populateCompatiblePlan(credentials)
+		accounts = append(accounts, account)
+	}
+	result.Accounts = accounts
+	return result
+}
+
+func populateCompatiblePlan(credentials map[string]string) {
+	if credentials == nil {
+		return
+	}
+	info := parseRefreshTokenInfo(credentials["id_token"], credentials["access_token"])
+	credentials["plan_type"] = info.PlanType
+	credentials["subscription_active_until"] = info.SubscriptionActiveUntil
 }
 
 type compatibleRefreshTokenInput struct {
@@ -124,9 +163,9 @@ func (g *OpenAIGateway) parseCompatibleRefreshTokens(
 					}
 					continue
 				}
-				if imported == nil {
+				if imported == nil || strings.TrimSpace(imported.Credentials["access_token"]) == "" {
 					parsed[index].Issue = &authcompat.Issue{
-						File: input.File, Index: input.Index, Level: "warning", Message: "refresh_token 兑换结果为空",
+						File: input.File, Index: input.Index, Level: "warning", Message: "refresh_token 兑换结果缺少完整凭证",
 					}
 					continue
 				}
@@ -209,24 +248,15 @@ func compatibleRefreshTokenInputs(files []authcompat.InputFile) ([]compatibleRef
 }
 
 func compatibleRefreshTokenAccount(input compatibleRefreshTokenInput, imported *OAuthResult) authcompat.Account {
+	populateCompatiblePlan(imported.Credentials)
 	accountType := strings.TrimSpace(imported.AccountType)
 	if accountType == "" {
 		accountType = "oauth"
 	}
 	name := strings.TrimSpace(input.Name)
-	preserveName := name != ""
-	if name == "" {
-		name = strings.TrimSpace(imported.AccountName)
-	}
-	if name == "" {
-		name = strings.TrimSpace(imported.Credentials["email"])
-	}
-	if name == "" {
-		name = input.File
-	}
 	account := authcompat.Account{
 		Name: name, Type: accountType, Credentials: imported.Credentials,
-		Priority: 50, MaxConcurrency: 10, RateMultiplier: 1, PreserveName: preserveName,
+		Priority: 50, MaxConcurrency: 10, RateMultiplier: 1,
 	}
 	if email := strings.TrimSpace(imported.Credentials["email"]); email != "" {
 		account.Email = &email

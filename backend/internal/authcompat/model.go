@@ -27,7 +27,6 @@ type Account struct {
 	Priority       int               `json:"priority"`
 	MaxConcurrency int               `json:"max_concurrency"`
 	RateMultiplier float64           `json:"rate_multiplier"`
-	PreserveName   bool              `json:"-"`
 }
 
 // Issue 描述某个输入文件或账号未能完整导入的原因。
@@ -43,5 +42,4 @@ type Result struct {
 	Format   string    `json:"format"`
 	Accounts []Account `json:"accounts"`
 	Issues   []Issue   `json:"issues,omitempty"`
-	Renamed  bool      `json:"renamed"`
 }

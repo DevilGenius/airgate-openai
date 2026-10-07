@@ -210,7 +210,7 @@ func normalizeAccount(format Format, source map[string]any, fallback string) (Ac
 		if email != "" {
 			credentials["email"] = email
 		}
-		name := firstString(source["name"], credentials["account_name"], email, fallback)
+		name := firstString(source["name"], credentials["account_name"])
 		account := Account{
 			Name:           name,
 			Type:           "apikey",
@@ -263,7 +263,7 @@ func normalizeAccount(format Format, source map[string]any, fallback string) (Ac
 		credentials["email"] = email
 	}
 
-	name := firstString(source["name"], credentials["account_name"], email, fallback)
+	name := firstString(source["name"], credentials["account_name"])
 	account := Account{
 		Name:           name,
 		Type:           "oauth",
@@ -352,7 +352,7 @@ func normalizeAgentIdentity(source map[string]any, fallback string) (Account, bo
 	if email != "" {
 		credentials["email"] = email
 	}
-	name := firstString(source["name"], credentials["account_name"], email, fallback)
+	name := firstString(source["name"], credentials["account_name"])
 	account := Account{
 		Name:           name,
 		Type:           "oauth",

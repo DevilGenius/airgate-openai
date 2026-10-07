@@ -201,7 +201,7 @@ func (g *OpenAIGateway) ImportFromRefreshToken(ctx context.Context, refreshToken
 		return nil, fmt.Errorf("刷新响应缺少 access_token")
 	}
 
-	info := g.enrichTokenInfo(ctx, parseTokenInfo(tokens.IDToken, tokens.AccessToken), tokens.AccessToken, proxyURL)
+	info := parseRefreshTokenInfo(tokens.IDToken, tokens.AccessToken)
 
 	// 部分上游在 refresh_token 模式下不轮换 refresh_token（返回空串），此时沿用原值。
 	nextRefresh := tokens.RefreshToken
@@ -212,6 +212,11 @@ func (g *OpenAIGateway) ImportFromRefreshToken(ctx context.Context, refreshToken
 	credentials := map[string]string{
 		"access_token":  tokens.AccessToken,
 		"refresh_token": nextRefresh,
+	}
+	// Preserve the freshly exchanged ID token for the compatible import pass,
+	// which applies the same JWT-only authority rule again.
+	if tokens.IDToken != "" {
+		credentials["id_token"] = tokens.IDToken
 	}
 	if clientID != "" {
 		credentials["client_id"] = clientID

@@ -2,7 +2,6 @@ package authcompat
 
 import (
 	"testing"
-	"time"
 )
 
 func TestProLiteAccountsReceiveDistinctEmailAliases(t *testing.T) {
@@ -24,7 +23,7 @@ func TestProLiteAccountsReceiveDistinctEmailAliases(t *testing.T) {
 		},
 	}
 
-	got := NewRenamer().Rename(accounts, time.Date(2026, 9, 4, 0, 0, 0, 0, time.UTC))
+	got := NewImportPreparer().Prepare(accounts)
 	if got[0].Email == nil || *got[0].Email != email {
 		t.Fatalf("first ProLite email = %v, want %q", got[0].Email, email)
 	}
@@ -34,7 +33,7 @@ func TestProLiteAccountsReceiveDistinctEmailAliases(t *testing.T) {
 	if got[1].Credentials["email"] != "shared+1@example.com" {
 		t.Fatalf("second ProLite credential email = %q", got[1].Credentials["email"])
 	}
-	if got[0].Name != "0904-ProLite-1" || got[1].Name != "0904-ProLite-2" {
+	if got[0].Name != "" || got[1].Name != "" {
 		t.Fatalf("ProLite account names = %q, %q", got[0].Name, got[1].Name)
 	}
 }

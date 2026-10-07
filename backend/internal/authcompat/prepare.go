@@ -5,7 +5,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
 type aliasBucket struct {
@@ -13,66 +12,38 @@ type aliasBucket struct {
 	assignments map[string]string
 }
 
-// Renamer 保存进程内的每日命名游标和邮箱别名分配。插件重启后状态自然清空。
-type Renamer struct {
+// ImportPreparer retains provider-specific email alias assignment only.
+// Account names and their counters are owned by Core.
+type ImportPreparer struct {
 	mu           sync.Mutex
-	cursors      map[string]map[string]int
 	emailAliases map[string]*aliasBucket
 }
 
-var processRenamer = NewRenamer()
+var processPreparer = NewImportPreparer()
 
-func NewRenamer() *Renamer {
-	return &Renamer{
-		cursors:      map[string]map[string]int{},
+func NewImportPreparer() *ImportPreparer {
+	return &ImportPreparer{
 		emailAliases: map[string]*aliasBucket{},
 	}
 }
 
-// Rename 使用工具模块自己的进程级内存游标执行重命名。
-func Rename(accounts []Account, now time.Time) []Account {
-	return processRenamer.Rename(accounts, now)
+func Prepare(accounts []Account) []Account {
+	return processPreparer.Prepare(accounts)
 }
 
-// Rename 按 auths 工具的规则重命名账号，并默认应用其导入调度参数。
-func (r *Renamer) Rename(accounts []Account, now time.Time) []Account {
+// Prepare applies import defaults without allocating or suggesting names.
+func (r *ImportPreparer) Prepare(accounts []Account) []Account {
 	if len(accounts) == 0 {
 		return accounts
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	location := time.FixedZone("CST", 8*60*60)
-	current := now.In(location)
-	datePart := current.Format("0102")
-	dateKey := current.Format("20060102")
 	for index := range accounts {
 		account := &accounts[index]
 		plan := accountPlan(*account)
 		r.assignEmailAlias(account, plan, index)
-		if account.PreserveName && strings.TrimSpace(account.Name) != "" {
-			account.Name = strings.TrimSpace(account.Name)
-		} else {
-			cursorType := plan
-			if cursorType == "" {
-				cursorType = "default"
-			}
-			day := r.cursors[dateKey]
-			if day == nil {
-				day = map[string]int{}
-				r.cursors[dateKey] = day
-			}
-			day[cursorType]++
-			if plan == "" {
-				account.Name = fmt.Sprintf("%s-%d", datePart, day[cursorType])
-			} else {
-				account.Name = fmt.Sprintf("%s-%s-%d", datePart, plan, day[cursorType])
-			}
-		}
-		if account.Credentials == nil {
-			account.Credentials = map[string]string{}
-		}
-		account.Credentials["account_name"] = account.Name
+		account.Name = strings.TrimSpace(account.Name)
 		account.Priority = 1
 		account.MaxConcurrency = 15
 	}
@@ -101,7 +72,7 @@ func accountPlan(account Account) string {
 	return label
 }
 
-func (r *Renamer) assignEmailAlias(account *Account, plan string, index int) {
+func (r *ImportPreparer) assignEmailAlias(account *Account, plan string, index int) {
 	if account.Email == nil || !aliasPlanEligible(plan) {
 		return
 	}

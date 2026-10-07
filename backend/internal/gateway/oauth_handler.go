@@ -147,7 +147,10 @@ func (h *OAuthDevHandler) handleTokenRefresh(w http.ResponseWriter, r *http.Requ
 			account.Credentials["email"] = email
 			updated = true
 		}
-		if result.ExpiresAt != "" {
+		if until, present := result.Extra["subscription_active_until"]; present {
+			account.Credentials["subscription_active_until"] = until
+			updated = true
+		} else if result.ExpiresAt != "" {
 			account.Credentials["subscription_active_until"] = result.ExpiresAt
 			updated = true
 		}
