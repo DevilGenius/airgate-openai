@@ -9,8 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 	"github.com/tidwall/gjson"
+
+	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
 const compactV2TestBody = `{"model":"gpt-5.6-sol","stream":true,"input":[{"role":"user","content":"Remember release 42"},{"type":"compaction_trigger"}]}`
