@@ -5,8 +5,9 @@ import (
 	"net/http"
 	"strconv"
 
-	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 	"github.com/tidwall/sjson"
+
+	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
 // applyImageWireModel only serializes Core's decision. No aliases or defaults.

@@ -3,8 +3,6 @@ package gateway
 import (
 	"context"
 	"fmt"
-	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
-	"github.com/tidwall/gjson"
 	"io"
 	"log/slog"
 	"net/http"
@@ -12,6 +10,10 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/tidwall/gjson"
+
+	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
 func TestContextWindowCacheReportsConditionWithoutPolicy(t *testing.T) {

@@ -1,10 +1,11 @@
 package gateway
 
 import (
-	"github.com/DevilGenius/airgate-openai/backend/internal/model"
-	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 	"os"
 	"strings"
+
+	"github.com/DevilGenius/airgate-openai/backend/internal/model"
+	sdk "github.com/DevilGenius/airgate-sdk/sdkgo"
 )
 
 // Platform model decisions are declared here and executed by Core dispatchresolver.

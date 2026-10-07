@@ -19,11 +19,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/DevilGenius/airgate-openai/backend/internal/gateway"
 	"github.com/google/uuid"
 	_ "github.com/lib/pq"
 	"github.com/tidwall/gjson"
 	"gopkg.in/yaml.v3"
+
+	"github.com/DevilGenius/airgate-openai/backend/internal/gateway"
 )
 
 type config struct {
