@@ -77,14 +77,14 @@ func run() error {
 	if err != nil {
 		return errors.New("database open failed")
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return errors.New("read-only database connection failed")
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	sum := sha256.Sum256([]byte(key))
 	var credentialsJSON, proxyJSON []byte
 	var proxySlot sql.NullInt64
@@ -143,9 +143,9 @@ func run() error {
 		out.HandshakeStatus = response.StatusCode
 	}
 	if err != nil {
-		return errors.New("Codex WebSocket connection failed; credentials and proxy details omitted")
+		return errors.New("codex WebSocket connection failed; credentials and proxy details omitted")
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	// Deliberately do not call buildWSRequest, resolveEffectiveModel or Forward.
 	request := map[string]any{
 		"type": "response.create", "model": *model, "stream": true, "store": false,
@@ -156,7 +156,7 @@ func run() error {
 		return err
 	}
 	if err = conn.WriteJSON(request); err != nil {
-		return errors.New("Codex request write failed")
+		return errors.New("codex request write failed")
 	}
 	result := gateway.ReceiveWSResponse(ctx, conn, nil)
 	// Read model from the raw upstream terminal event, not a gateway model fallback.

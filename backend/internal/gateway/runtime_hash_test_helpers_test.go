@@ -22,14 +22,6 @@ func withTextSafetyHash(ctx context.Context, hash uint64) context.Context {
 	return context.WithValue(ctx, textSafetyHashContextKey{}, hash)
 }
 
-func textRequestHashFromContext(ctx context.Context) (uint64, bool) {
-	if ctx == nil {
-		return 0, false
-	}
-	hash, ok := ctx.Value(textRequestHashContextKey{}).(uint64)
-	return hash, ok
-}
-
 func textSafetyHashFromContext(ctx context.Context) (uint64, bool) {
 	if ctx == nil {
 		return 0, false
@@ -62,11 +54,6 @@ func (g *OpenAIGateway) cacheTextSafetyRejection(ctx context.Context) {
 	if hash, ok := textSafetyHashFromContext(ctx); ok {
 		g.runtimeHash.text.textSafety.add(hash, time.Now())
 	}
-}
-
-func requestRetryCacheForTest(g *OpenAIGateway) *safetyRequestCache {
-	g.runtimeHash.initialize()
-	return &g.runtimeHash.text.requestRetry
 }
 
 func encryptedContentCacheForTest(g *OpenAIGateway) *safetyRequestCache {
