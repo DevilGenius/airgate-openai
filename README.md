@@ -143,7 +143,7 @@ WebSocket 会话也会协商此能力。客户端收集 `response.output_item.do
 
 | 层 | 技术 |
 |---|---|
-| 后端 | Go 1.26.5 · gRPC · gjson/sjson（零 struct）· gorilla/websocket |
+| 后端 | Go 1.27.3 · gRPC · gjson/sjson（零 struct）· gorilla/websocket |
 | 前端 | React 19 · Vite · TypeScript（账号表单 Widget） |
 | 插件协议 | hashicorp/go-plugin (gRPC) |
 | 上游协议 | OpenAI Responses / Chat Completions · ChatGPT WebSocket · Anthropic Messages |
@@ -165,7 +165,7 @@ market 会**定时从 GitHub API 同步**最新 release（默认 6h，使用 ETa
 
 ### 方式 2：源码运行（开发）
 
-需要 Go 1.26.5+、Node 22+，以及兄弟目录 [`airgate-sdk`](https://github.com/DevilGenius/airgate-sdk) 与 [`airgate-core`](https://github.com/DevilGenius/airgate-core)：
+需要 Go 1.27.3+、Node 22+，以及兄弟目录 [`airgate-sdk`](https://github.com/DevilGenius/airgate-sdk) 与 [`airgate-core`](https://github.com/DevilGenius/airgate-core)：
 
 ```bash
 git clone https://github.com/DevilGenius/airgate-sdk.git

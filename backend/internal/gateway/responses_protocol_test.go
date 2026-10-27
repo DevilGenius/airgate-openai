@@ -161,9 +161,10 @@ func TestWebSocketBridgeUsesHandshakeLiteMarkerForEveryTurn(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			done := make(chan error, 1)
+			done := make(chan struct{})
 			go func() {
-				done <- bridgeWebSocket(ctx, &responsesProtocolClient{Conn: client, info: sdk.WebSocketConnectInfo{Headers: headers}}, upstream, nil, true)
+				_ = bridgeWebSocket(ctx, &responsesProtocolClient{Conn: client, info: sdk.WebSocketConnectInfo{Headers: headers}}, upstream, nil, true)
+				close(done)
 			}()
 			defer func() {
 				cancel()

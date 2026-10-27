@@ -3,6 +3,7 @@ package basispoints
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -103,7 +104,9 @@ func TestNativeReferencePaddingFailsBeforeUpstreamEOF(t *testing.T) {
 	if _, err := writer.Write([]byte("unread remainder")); err == nil {
 		t.Fatal("upstream was not closed")
 	}
-	<-sent
+	if err := <-sent; err != nil && !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("write upstream response: %v", err)
+	}
 }
 
 func BenchmarkNativeArgumentPadding(b *testing.B) {
