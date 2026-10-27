@@ -28,6 +28,8 @@ func TestReasoningRewriteAtOAuthAndBASBoundaries(t *testing.T) {
 		{"gpt-6-luna", "ultra", "max", "xhigh"},
 		{"gpt-6.1-sol", "max", "max", "xhigh"},
 		{"gpt-6.1-sol", "ultra", "max", "xhigh"},
+		{"gpt-6.1-terra", "max", "max", "xhigh"},
+		{"gpt-6.1-terra", "ultra", "max", "xhigh"},
 		{"gpt-5.5", "max", "xhigh", "xhigh"},
 		{"gpt-5.5", "ultra", "xhigh", "xhigh"},
 		{"unlisted-model", "ultra", "max", "xhigh"},

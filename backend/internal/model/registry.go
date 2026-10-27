@@ -122,7 +122,8 @@ func withLongCtx(s Spec) Spec {
 // ─── 新增模型只需在此处加一行 ───
 var registry = map[string]Spec{
 	// ── GPT-6.1 ──
-	"gpt-6.1-sol": withLongCtx(withCacheCreationPrice(std("GPT-6.1-Sol", 1050000, 128000, 2.0, 0.1, 10.0), 2.5)),
+	"gpt-6.1-sol":   withLongCtx(withCacheCreationPrice(std("GPT-6.1-Sol", 1050000, 128000, 2.0, 0.1, 10.0), 2.5)),
+	"gpt-6.1-terra": withLongCtx(withCacheCreationPrice(std("GPT-6.1-Terra", 1050000, 128000, 1.0, 0.05, 5.0), 1.25)),
 
 	// ── GPT-6 ──
 	GPT6Astra:    withLongCtx(withCacheCreationPrice(std("GPT-6-Astra", 1050000, 128000, 10.0, 1.0, 50.0), 12.5)),
