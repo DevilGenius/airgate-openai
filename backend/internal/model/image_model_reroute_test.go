@@ -39,3 +39,18 @@ func TestPricingLookupDoesNotRegisterOrRouteUnknownModels(t *testing.T) {
 		t.Fatal("unknown model pricing fallback changed")
 	}
 }
+
+func TestImageTwoPointSixVariantsAreRegistered(t *testing.T) {
+	for id, name := range map[string]string{
+		"gpt-image-2.6-sunburst": "GPT Image 2.6 Sunburst",
+		"gpt-image-2.6-flare":    "GPT Image 2.6 Flare",
+	} {
+		spec, ok := registry[id]
+		if !ok || spec.Name != name || !IsKnown(id) || !IsImageOnly(id) {
+			t.Fatalf("%s image registration incorrect: %+v", id, spec)
+		}
+		if spec.InputPrice != 8 || spec.CachedPrice != 2 || spec.OutputPrice != 30 || spec.ImagePrice != 0.20 {
+			t.Fatalf("%s image token pricing incorrect: %+v", id, spec)
+		}
+	}
+}

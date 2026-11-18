@@ -45,6 +45,8 @@ func TestConvertModelsIncludesGPT6FullPricing(t *testing.T) {
 		output        float64
 	}{
 		{"gpt-6-astra", 1050000, 10, 1, 12.5, 50},
+		{"gpt-6.2-astra", 1050000, 8, 0.4, 10, 40},
+		{"gpt-6.2-sol", 1050000, 2, 0.1, 2.5, 10},
 		{"gpt-6-sol", 1050000, 2, 0.2, 2.5, 10},
 		{"gpt-6.1-sol", 1050000, 2, 0.1, 2.5, 10},
 		{"gpt-6.1-terra", 1050000, 1, 0.05, 1.25, 5},

@@ -121,6 +121,10 @@ func withLongCtx(s Spec) Spec {
 // registry 全局模型注册表（按模型 ID 索引）
 // ─── 新增模型只需在此处加一行 ───
 var registry = map[string]Spec{
+	// ── GPT-6.2 ──
+	"gpt-6.2-astra": withLongCtx(withCacheCreationPrice(std("GPT-6.2-Astra", 1050000, 128000, 8.0, 0.4, 40.0), 10.0)),
+	"gpt-6.2-sol":   withLongCtx(withCacheCreationPrice(std("GPT-6.2-Sol", 1050000, 128000, 2.0, 0.1, 10.0), 2.5)),
+
 	// ── GPT-6.1 ──
 	"gpt-6.1-sol":   withLongCtx(withCacheCreationPrice(std("GPT-6.1-Sol", 1050000, 128000, 2.0, 0.1, 10.0), 2.5)),
 	"gpt-6.1-terra": withLongCtx(withCacheCreationPrice(std("GPT-6.1-Terra", 1050000, 128000, 1.0, 0.05, 5.0), 1.25)),
@@ -154,6 +158,9 @@ var registry = map[string]Spec{
 	"gpt-image-2":            imgSpec("GPT Image 2", 5.0, 0.5, 30.0, 0.20),
 	"gpt-image-2.5-sunburst": imgSpec("GPT Image 2.5 Sunburst", 5.0, 0.5, 30.0, 0.20),
 	"gpt-image-2.5-flare":    imgSpec("GPT Image 2.5 Flare", 5.0, 0.5, 30.0, 0.20),
+	// GPT-Image-2.6 使用官方 image token 标准价，沿用现有单组 token 计费结构。
+	"gpt-image-2.6-sunburst": imgSpec("GPT Image 2.6 Sunburst", 8.0, 2.0, 30.0, 0.20),
+	"gpt-image-2.6-flare":    imgSpec("GPT Image 2.6 Flare", 8.0, 2.0, 30.0, 0.20),
 }
 
 // Lookup resolves registered specifications, then family defaults, then DefaultModelID.

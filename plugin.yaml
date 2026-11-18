@@ -353,6 +353,54 @@ gateway:
       long_context_output_multiplier: 1.5
       long_context_cached_multiplier: 2
       long_context_cache_creation_multiplier: 2
+    - id: gpt-6.2-astra
+      name: GPT-6.2-Astra
+      context_window: 1050000
+      max_output_tokens: 128000
+      capabilities:
+        - chat
+        - reasoning
+      input_price: 8
+      output_price: 40
+      cached_input_price: 0.4
+      cache_creation_price: 10
+      input_price_priority: 16
+      output_price_priority: 80
+      cached_input_price_priority: 0.8
+      cache_creation_price_priority: 20
+      input_price_flex: 4
+      output_price_flex: 20
+      cached_input_price_flex: 0.2
+      cache_creation_price_flex: 5
+      long_context_threshold: 272000
+      long_context_input_multiplier: 2
+      long_context_output_multiplier: 1.5
+      long_context_cached_multiplier: 2
+      long_context_cache_creation_multiplier: 2
+    - id: gpt-6.2-sol
+      name: GPT-6.2-Sol
+      context_window: 1050000
+      max_output_tokens: 128000
+      capabilities:
+        - chat
+        - reasoning
+      input_price: 2
+      output_price: 10
+      cached_input_price: 0.1
+      cache_creation_price: 2.5
+      input_price_priority: 4
+      output_price_priority: 20
+      cached_input_price_priority: 0.2
+      cache_creation_price_priority: 5
+      input_price_flex: 1
+      output_price_flex: 5
+      cached_input_price_flex: 0.05
+      cache_creation_price_flex: 1.25
+      long_context_threshold: 272000
+      long_context_input_multiplier: 2
+      long_context_output_multiplier: 1.5
+      long_context_cached_multiplier: 2
+      long_context_cache_creation_multiplier: 2
     - id: gpt-image-2
       name: GPT Image 2
       context_window: 32000
@@ -398,6 +446,36 @@ gateway:
       input_price_flex: 2.5
       output_price_flex: 15
       cached_input_price_flex: 0.25
+    - id: gpt-image-2.6-flare
+      name: GPT Image 2.6 Flare
+      context_window: 32000
+      max_output_tokens: 0
+      capabilities:
+        - image_generation
+      input_price: 8
+      output_price: 30
+      cached_input_price: 2
+      input_price_priority: 16
+      output_price_priority: 60
+      cached_input_price_priority: 4
+      input_price_flex: 4
+      output_price_flex: 15
+      cached_input_price_flex: 1
+    - id: gpt-image-2.6-sunburst
+      name: GPT Image 2.6 Sunburst
+      context_window: 32000
+      max_output_tokens: 0
+      capabilities:
+        - image_generation
+      input_price: 8
+      output_price: 30
+      cached_input_price: 2
+      input_price_priority: 16
+      output_price_priority: 60
+      cached_input_price_priority: 4
+      input_price_flex: 4
+      output_price_flex: 15
+      cached_input_price_flex: 1
   account_types:
     - key: apikey
       label: API Key
